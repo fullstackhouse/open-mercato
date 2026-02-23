@@ -3,6 +3,7 @@ import 'reflect-metadata'
 import { MikroORM } from '@mikro-orm/core'
 import { PostgreSqlDriver } from '@mikro-orm/postgresql'
 import { getSslConfig } from './ssl'
+import { getSchemaOrUndefined } from './schema'
 
 let ormInstance: MikroORM<PostgreSqlDriver> | null = null
 
@@ -30,6 +31,7 @@ export async function getOrm() {
   const entities = getOrmEntities()
   const clientUrl = process.env.DATABASE_URL
   if (!clientUrl) throw new Error('DATABASE_URL is not set')
+  const schema = getSchemaOrUndefined(clientUrl)
   
   // Parse connection pool settings from environment
   const poolMin = parseInt(process.env.DB_POOL_MIN || '2')
@@ -58,6 +60,7 @@ export async function getOrm() {
   ormInstance = await MikroORM.init<PostgreSqlDriver>({
     driver: PostgreSqlDriver,
     clientUrl,
+    schema,
     entities,
     debug: false,
     // Connection pooling configuration

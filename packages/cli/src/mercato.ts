@@ -9,6 +9,7 @@ import { getCliModules, hasCliModules, registerCliModules } from './registry'
 export { getCliModules, hasCliModules, registerCliModules }
 import { parseBooleanToken } from '@open-mercato/shared/lib/boolean'
 import { getSslConfig } from '@open-mercato/shared/lib/db/ssl'
+import { getSchemaFromUrl } from '@open-mercato/shared/lib/db/schema'
 import { getRedisUrl } from '@open-mercato/shared/lib/redis/connection'
 import { resolveInitDerivedSecrets } from './lib/init-secrets'
 // Lazy-imported to avoid pulling in `testcontainers` (devDependency) at startup
@@ -182,13 +183,14 @@ export async function run(argv = process.argv) {
         const client = new Client({ connectionString: dbUrl, ssl: getSslConfig() })
         try {
           await client.connect()
-          // Collect all user tables in public schema
-          const res = await client.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`)
+          // Collect all user tables in target schema
+          const targetSchema = getSchemaFromUrl(dbUrl)
+          const res = await client.query(`SELECT tablename FROM pg_tables WHERE schemaname = $1`, [targetSchema])
           const dropTargets = new Set<string>((res.rows || []).map((r: any) => String(r.tablename)))
           for (const forced of ['vector_search', 'vector_search_migrations']) {
             const exists = await client.query(
               `SELECT to_regclass($1) AS regclass`,
-              [`public.${forced}`],
+              [`${targetSchema}.${forced}`],
             )
             const regclass = (exists as { rows?: Array<{ regclass: string | null }> }).rows?.[0]?.regclass ?? null
             if (regclass) {
@@ -196,7 +198,7 @@ export async function run(argv = process.argv) {
             }
           }
           if (dropTargets.size === 0) {
-            console.log('   No tables found in public schema.')
+            console.log(`   No tables found in ${targetSchema} schema.`)
           } else {
             let dropped = 0
             await client.query('BEGIN')
@@ -238,8 +240,10 @@ export async function run(argv = process.argv) {
         const client = new Client({ connectionString: dbUrl, ssl: getSslConfig() })
         try {
           await client.connect()
+          const targetSchema = getSchemaFromUrl(dbUrl)
           const tableCheck = await client.query<{ regclass: string | null }>(
-            `SELECT to_regclass('public.users') AS regclass`,
+            `SELECT to_regclass($1) AS regclass`,
+            [`${targetSchema}.users`],
           )
           const hasUsersTable = Boolean(tableCheck.rows?.[0]?.regclass)
           if (hasUsersTable) {
