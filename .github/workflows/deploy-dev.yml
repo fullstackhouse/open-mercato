@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - develop
+      - develop-gcp
   workflow_dispatch:
 
 concurrency:
