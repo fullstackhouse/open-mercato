@@ -7,6 +7,7 @@ module "infrastructure" {
   service_name_prefix = "om-dev"
   github_org          = var.github_org
   github_repo         = var.github_repo
+  github_extra_repos  = ["fullstackhouse/open-mercato"]
 }
 
 module "mercato" {

@@ -36,6 +36,12 @@ variable "github_repo" {
   default     = "open-mercato"
 }
 
+variable "github_extra_repos" {
+  type        = list(string)
+  description = "Additional GitHub repos (org/repo format) allowed to authenticate via OIDC"
+  default     = []
+}
+
 variable "vpc_network" {
   type        = string
   default     = "default"
