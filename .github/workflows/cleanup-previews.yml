@@ -19,8 +19,8 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER || 'projects/781921027912/locations/global/workloadIdentityPools/om-dev-github-pool/providers/om-dev-github-provider' }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT || 'om-dev-github-actions@open-mercato-493008.iam.gserviceaccount.com' }}
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
@@ -41,7 +41,7 @@ jobs:
 
       - name: Cleanup Cloud Run services
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID || 'open-mercato-493008' }}
           REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
         run: |
           OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
@@ -70,7 +70,7 @@ jobs:
 
       - name: Cleanup Cloud Run jobs
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID || 'open-mercato-493008' }}
           REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
         run: |
           OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
@@ -98,7 +98,7 @@ jobs:
 
       - name: Cleanup Docker images
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID || 'open-mercato-493008' }}
           REGISTRY: ${{ vars.GCP_REGISTRY_REGION || vars.GCP_REGION || 'europe-west1' }}-docker.pkg.dev
         run: |
           OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
@@ -129,9 +129,9 @@ jobs:
 
       - name: Cleanup orphaned preview databases
         env:
-          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID || 'open-mercato-493008' }}
           REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
-          CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE }}
+          CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE || 'open-mercato-493008:europe-west1:om-dev' }}
         run: |
           OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
 

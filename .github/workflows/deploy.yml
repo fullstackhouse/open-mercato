@@ -36,12 +36,12 @@ jobs:
       id-token: write
 
     env:
-      GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      GCP_PROJECT: ${{ vars.GCP_PROJECT_ID || 'open-mercato-493008' }}
       REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
       REGISTRY: ${{ vars.GCP_REGISTRY_REGION || vars.GCP_REGION || 'europe-west1' }}-docker.pkg.dev
-      CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE }}
-      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-      SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE || 'open-mercato-493008:europe-west1:om-dev' }}
+      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER || 'projects/781921027912/locations/global/workloadIdentityPools/om-dev-github-pool/providers/om-dev-github-provider' }}
+      SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT || 'om-dev-github-actions@open-mercato-493008.iam.gserviceaccount.com' }}
 
     steps:
       - name: Checkout

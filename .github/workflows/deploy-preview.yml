@@ -40,8 +40,8 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER || 'projects/781921027912/locations/global/workloadIdentityPools/om-dev-github-pool/providers/om-dev-github-provider' }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT || 'om-dev-github-actions@open-mercato-493008.iam.gserviceaccount.com' }}
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
@@ -51,7 +51,7 @@ jobs:
         run: |
           SERVICE_URL=$(gcloud run services describe om-pr-${{ github.event.pull_request.number }} \
             --region ${{ vars.GCP_REGION || 'europe-west1' }} \
-            --project ${{ vars.GCP_PROJECT_ID }} \
+            --project ${{ vars.GCP_PROJECT_ID || 'open-mercato-493008' }} \
             --format 'value(status.url)')
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
