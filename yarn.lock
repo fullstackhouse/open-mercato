@@ -5735,6 +5735,7 @@ __metadata:
     tailwind-merge: "npm:^3.4.0"
     tailwindcss: "npm:^4.1.17"
     ts-jest: "npm:^29.4.6"
+    tsx: "npm:^4.21.0"
     tw-animate-css: "npm:^1.4.0"
     typescript: "npm:^5.9.3"
     zod: "npm:^4.1.13"
