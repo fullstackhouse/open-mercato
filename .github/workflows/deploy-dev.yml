@@ -1,0 +1,27 @@
+name: Deploy to Dev
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+    secrets: inherit
+
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    needs: ci
+    with:
+      environment: dev
+      service_prefix: om-dev
+      image_tag: ${{ github.sha }}
+    secrets: inherit

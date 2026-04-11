@@ -115,6 +115,14 @@ docker/opencode/opencode.jsonc
 .npmrc
 !.npmrc.local
 
+# Terraform / OpenTofu
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
 # MCPs
 .playwright-mcp
 .ai/qa/ephemeral-env.lock/owner.json

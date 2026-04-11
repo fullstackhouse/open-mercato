@@ -1,0 +1,261 @@
+name: Deploy (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      service_prefix:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      db_name:
+        required: false
+        type: string
+        default: open_mercato
+        description: "PostgreSQL database name (e.g., open_mercato_pr_123 for preview environments)"
+      secrets_prefix:
+        required: false
+        type: string
+        description: "Prefix for GCP secrets (defaults to service_prefix if not specified)"
+      no_cache:
+        required: false
+        type: boolean
+        default: false
+        description: "Skip Docker layer cache"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
+      REGISTRY: ${{ vars.GCP_REGISTRY_REGION || vars.GCP_REGION || 'europe-west1' }}-docker.pkg.dev
+      CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE }}
+      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+      SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build and push image
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.GCP_PROJECT }}/open-mercato/${{ inputs.service_prefix }}:${{ inputs.image_tag }}"
+          CACHE_IMAGE="${{ env.REGISTRY }}/${{ env.GCP_PROJECT }}/open-mercato/${{ inputs.service_prefix }}:latest"
+
+          CACHE_FLAGS=""
+          if [ "${{ inputs.no_cache }}" != "true" ]; then
+            docker pull $CACHE_IMAGE || true
+            CACHE_FLAGS="--cache-from $CACHE_IMAGE"
+          else
+            echo "Skipping Docker cache (no_cache=true)"
+            CACHE_FLAGS="--no-cache"
+          fi
+
+          docker build \
+            $CACHE_FLAGS \
+            --build-arg CONTAINER_PORT=3000 \
+            -t $IMAGE \
+            -t $CACHE_IMAGE \
+            -f Dockerfile \
+            .
+
+          docker push $IMAGE
+          docker push $CACHE_IMAGE
+
+      - name: Run database migrations
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.GCP_PROJECT }}/open-mercato/${{ inputs.service_prefix }}:${{ inputs.image_tag }}"
+          JOB_NAME="${{ inputs.service_prefix }}-migrations"
+          SECRETS_PREFIX="${{ inputs.secrets_prefix || inputs.service_prefix }}"
+          MIGRATE_CMD="${{ inputs.db_name != 'open_mercato' && 'db:migrate:preview' || 'db:migrate' }}"
+
+          if [ "${{ inputs.db_name }}" != "open_mercato" ]; then
+            BASE_DB_URL=$(gcloud secrets versions access latest --secret="${SECRETS_PREFIX}-database-url" --project=${{ env.GCP_PROJECT }})
+            ADMIN_DB_URL=$(gcloud secrets versions access latest --secret="${SECRETS_PREFIX}-database-admin-url" --project=${{ env.GCP_PROJECT }})
+            DATABASE_URL="${BASE_DB_URL%/open_mercato}/${{ inputs.db_name }}"
+
+            gcloud run jobs update $JOB_NAME \
+              --image $IMAGE \
+              --region ${{ env.REGION }} \
+              --project ${{ env.GCP_PROJECT }} \
+              --set-cloudsql-instances ${{ env.CLOUD_SQL_INSTANCE }} \
+              --set-env-vars "NODE_ENV=production,APP_ENV=preview,DATABASE_URL=${DATABASE_URL},DATABASE_ADMIN_URL=${ADMIN_DB_URL}" \
+              --args="yarn,${MIGRATE_CMD}" \
+              --max-retries 0 \
+              --task-timeout 20m \
+              || gcloud run jobs create $JOB_NAME \
+                --image $IMAGE \
+                --region ${{ env.REGION }} \
+                --project ${{ env.GCP_PROJECT }} \
+                --set-cloudsql-instances ${{ env.CLOUD_SQL_INSTANCE }} \
+                --set-env-vars "NODE_ENV=production,APP_ENV=preview,DATABASE_URL=${DATABASE_URL},DATABASE_ADMIN_URL=${ADMIN_DB_URL}" \
+                --args="yarn,${MIGRATE_CMD}" \
+                --max-retries 0 \
+                --task-timeout 20m
+          else
+            gcloud run jobs update $JOB_NAME \
+              --image $IMAGE \
+              --region ${{ env.REGION }} \
+              --project ${{ env.GCP_PROJECT }} \
+              --set-cloudsql-instances ${{ env.CLOUD_SQL_INSTANCE }} \
+              --set-env-vars "NODE_ENV=production,APP_ENV=${{ inputs.environment == 'prod' && 'production' || 'dev' }}" \
+              --set-secrets "DATABASE_URL=${SECRETS_PREFIX}-database-url:latest" \
+              --args="yarn,${MIGRATE_CMD}" \
+              --max-retries 0 \
+              --task-timeout 20m \
+              || gcloud run jobs create $JOB_NAME \
+                --image $IMAGE \
+                --region ${{ env.REGION }} \
+                --project ${{ env.GCP_PROJECT }} \
+                --set-cloudsql-instances ${{ env.CLOUD_SQL_INSTANCE }} \
+                --set-env-vars "NODE_ENV=production,APP_ENV=${{ inputs.environment == 'prod' && 'production' || 'dev' }}" \
+                --set-secrets "DATABASE_URL=${SECRETS_PREFIX}-database-url:latest" \
+                --args="yarn,${MIGRATE_CMD}" \
+                --max-retries 0 \
+                --task-timeout 20m
+          fi
+
+          gcloud run jobs execute $JOB_NAME \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --wait
+
+          echo "Fetching migration job logs..."
+          EXECUTION=$(gcloud run jobs executions list --job $JOB_NAME \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --limit 1 \
+            --format "value(name)" 2>/dev/null || echo "")
+          if [ -n "$EXECUTION" ]; then
+            gcloud run jobs executions describe "$EXECUTION" \
+              --region ${{ env.REGION }} \
+              --project ${{ env.GCP_PROJECT }} \
+              2>/dev/null || echo "Could not describe execution"
+          fi
+          gcloud run jobs executions logs read \
+            --job $JOB_NAME \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --limit 50 \
+            2>/dev/null || echo "Could not fetch migration logs"
+
+      - name: Deploy service
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.GCP_PROJECT }}/open-mercato/${{ inputs.service_prefix }}:${{ inputs.image_tag }}"
+          SERVICE_NAME="${{ inputs.service_prefix }}"
+          SECRETS_PREFIX="${{ inputs.secrets_prefix || inputs.service_prefix }}"
+
+          ENV_VARS="NODE_ENV=production"
+          ENV_VARS="${ENV_VARS},APP_ENV=${{ inputs.db_name != 'open_mercato' && 'preview' || (inputs.environment == 'prod' && 'production' || 'dev') }}"
+          ENV_VARS="${ENV_VARS},APP_URL="
+          ENV_VARS="${ENV_VARS},AUTO_SPAWN_WORKERS=true"
+          ENV_VARS="${ENV_VARS},AUTO_SPAWN_SCHEDULER=true"
+          ENV_VARS="${ENV_VARS},QUEUE_STRATEGY=local"
+          ENV_VARS="${ENV_VARS},CACHE_STRATEGY=memory"
+          ENV_VARS="${ENV_VARS},SELF_SERVICE_ONBOARDING_ENABLED=true"
+          ENV_VARS="${ENV_VARS},DEMO_MODE=true"
+
+          if [ "${{ inputs.db_name }}" != "open_mercato" ]; then
+            BASE_DB_URL=$(gcloud secrets versions access latest --secret="${SECRETS_PREFIX}-database-url" --project=${{ env.GCP_PROJECT }})
+            DATABASE_URL="${BASE_DB_URL%/open_mercato}/${{ inputs.db_name }}"
+            ENV_VARS="${ENV_VARS},DATABASE_URL=${DATABASE_URL}"
+
+            SECRETS="JWT_SECRET=${SECRETS_PREFIX}-jwt-secret:latest"
+            SECRETS="${SECRETS},AUTH_SECRET=${SECRETS_PREFIX}-auth-secret:latest"
+            SECRETS="${SECRETS},TENANT_DATA_ENCRYPTION_KEY=${SECRETS_PREFIX}-encryption-key:latest"
+          else
+            SECRETS="DATABASE_URL=${SECRETS_PREFIX}-database-url:latest"
+            SECRETS="${SECRETS},JWT_SECRET=${SECRETS_PREFIX}-jwt-secret:latest"
+            SECRETS="${SECRETS},AUTH_SECRET=${SECRETS_PREFIX}-auth-secret:latest"
+            SECRETS="${SECRETS},TENANT_DATA_ENCRYPTION_KEY=${SECRETS_PREFIX}-encryption-key:latest"
+          fi
+
+          gcloud run deploy $SERVICE_NAME \
+            --image $IMAGE \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --platform managed \
+            --port 3000 \
+            --set-cloudsql-instances ${{ env.CLOUD_SQL_INSTANCE }} \
+            --set-env-vars "$ENV_VARS" \
+            --set-secrets "$SECRETS" \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 5 \
+            --memory 2Gi \
+            --cpu 1 \
+            --cpu-boost \
+            --timeout 300
+
+      - name: Fetch service logs on failure
+        if: failure()
+        run: |
+          SERVICE_NAME="${{ inputs.service_prefix }}"
+          echo "Fetching recent Cloud Run logs for $SERVICE_NAME..."
+          gcloud run services logs read $SERVICE_NAME \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --limit 50 \
+            2>/dev/null || echo "Could not fetch logs via run API"
+          gcloud logging read \
+            "resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME" \
+            --project ${{ env.GCP_PROJECT }} \
+            --limit 50 \
+            --format "table(timestamp, severity, textPayload)" \
+            --freshness 10m \
+            2>/dev/null || echo "Could not fetch logs via logging API"
+
+      - name: Get service URL
+        id: service_url
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ inputs.service_prefix }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --format 'value(status.url)')
+          echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Health check
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ inputs.service_prefix }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.GCP_PROJECT }} \
+            --format 'value(status.url)')
+
+          echo "Checking service at ${SERVICE_URL}"
+
+          for i in $(seq 1 30); do
+            RESPONSE=$(curl -s -w "\n%{http_code}" "${SERVICE_URL}" || echo -e "\n000")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ] || [ "$HTTP_CODE" = "307" ]; then
+              echo "Health check passed (HTTP $HTTP_CODE)"
+              exit 0
+            fi
+            echo "Attempt $i failed (HTTP $HTTP_CODE), retrying in 5s..."
+            sleep 5
+          done
+
+          echo "Health check failed after 30 attempts"
+          exit 1

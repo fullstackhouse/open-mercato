@@ -1,0 +1,97 @@
+name: Deploy Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to deploy'
+        required: true
+        type: number
+      no_cache:
+        description: 'Skip Docker cache (clean build)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      service_prefix: om-pr-${{ github.event.pull_request.number || inputs.pr_number }}
+      secrets_prefix: om-dev
+      image_tag: pr-${{ github.event.pull_request.number || inputs.pr_number }}-${{ github.sha }}
+      db_name: open_mercato_pr_${{ github.event.pull_request.number || inputs.pr_number }}
+      no_cache: ${{ inputs.no_cache || false }}
+    secrets: inherit
+
+  comment:
+    needs: deploy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get service URL
+        id: url
+        run: |
+          SERVICE_URL=$(gcloud run services describe om-pr-${{ github.event.pull_request.number }} \
+            --region ${{ vars.GCP_REGION || 'europe-west1' }} \
+            --project ${{ vars.GCP_PROJECT_ID }} \
+            --format 'value(status.url)')
+          echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Preview Environment')
+            );
+
+            const body = `## Preview Environment
+
+            | Service | URL |
+            |---------|-----|
+            | App | ${{ steps.url.outputs.service_url }} |
+
+            **Database:** \`open_mercato_pr_${{ github.event.pull_request.number }}\`
+            **Image Tag:** \`pr-${{ github.event.pull_request.number }}-${{ github.sha }}\`
+            `;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }

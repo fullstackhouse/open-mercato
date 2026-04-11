@@ -1,0 +1,185 @@
+name: Cleanup Preview Environments
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get open PRs
+        id: open_prs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open'
+            });
+            const prNumbers = prs.map(pr => pr.number);
+            core.setOutput('pr_numbers', prNumbers.join(','));
+            return prNumbers;
+
+      - name: Cleanup Cloud Run services
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
+        run: |
+          OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
+          echo "Open PRs: $OPEN_PRS"
+
+          SERVICES=$(gcloud run services list \
+            --project $GCP_PROJECT \
+            --region $REGION \
+            --filter="metadata.name:om-pr-*" \
+            --format="value(metadata.name)")
+
+          for SERVICE in $SERVICES; do
+            if [[ $SERVICE =~ om-pr-([0-9]+) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              if [[ ",$OPEN_PRS," != *",$PR_NUM,"* ]]; then
+                echo "Deleting service $SERVICE (PR #$PR_NUM is closed)"
+                gcloud run services delete $SERVICE \
+                  --project $GCP_PROJECT \
+                  --region $REGION \
+                  --quiet
+              else
+                echo "Keeping service $SERVICE (PR #$PR_NUM is open)"
+              fi
+            fi
+          done
+
+      - name: Cleanup Cloud Run jobs
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
+        run: |
+          OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
+
+          JOBS=$(gcloud run jobs list \
+            --project $GCP_PROJECT \
+            --region $REGION \
+            --filter="metadata.name:om-pr-*" \
+            --format="value(metadata.name)")
+
+          for JOB in $JOBS; do
+            if [[ $JOB =~ om-pr-([0-9]+)-migrations ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              if [[ ",$OPEN_PRS," != *",$PR_NUM,"* ]]; then
+                echo "Deleting job $JOB (PR #$PR_NUM is closed)"
+                gcloud run jobs delete $JOB \
+                  --project $GCP_PROJECT \
+                  --region $REGION \
+                  --quiet
+              else
+                echo "Keeping job $JOB (PR #$PR_NUM is open)"
+              fi
+            fi
+          done
+
+      - name: Cleanup Docker images
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGISTRY: ${{ vars.GCP_REGISTRY_REGION || vars.GCP_REGION || 'europe-west1' }}-docker.pkg.dev
+        run: |
+          OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
+          REPOSITORY="open-mercato"
+
+          IMAGES=$(gcloud artifacts docker images list \
+            $REGISTRY/$GCP_PROJECT/$REPOSITORY \
+            --filter="package:om-pr-*" \
+            --format="value(package)" 2>/dev/null || echo "")
+
+          for IMAGE in $IMAGES; do
+            if [[ $IMAGE =~ om-pr-([0-9]+) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              if [[ ",$OPEN_PRS," != *",$PR_NUM,"* ]]; then
+                echo "Deleting images for $IMAGE (PR #$PR_NUM is closed)"
+                TAGS=$(gcloud artifacts docker tags list \
+                  $REGISTRY/$GCP_PROJECT/$REPOSITORY/$IMAGE \
+                  --format="value(tag)" 2>/dev/null || echo "")
+                for TAG in $TAGS; do
+                  echo "  Deleting tag: $TAG"
+                  gcloud artifacts docker images delete \
+                    $REGISTRY/$GCP_PROJECT/$REPOSITORY/$IMAGE:$TAG \
+                    --quiet 2>/dev/null || true
+                done
+              fi
+            fi
+          done
+
+      - name: Cleanup orphaned preview databases
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
+          CLOUD_SQL_INSTANCE: ${{ vars.CLOUD_SQL_INSTANCE }}
+        run: |
+          OPEN_PRS="${{ steps.open_prs.outputs.pr_numbers }}"
+
+          IMAGE=$(gcloud run services describe om-dev \
+            --project $GCP_PROJECT \
+            --region $REGION \
+            --format="value(spec.template.spec.containers[0].image)" 2>/dev/null || echo "")
+
+          if [ -z "$IMAGE" ]; then
+            echo "No om-dev service found, skipping database cleanup"
+            exit 0
+          fi
+
+          echo "Using image: $IMAGE"
+
+          JOB_NAME="om-db-cleanup-$(date +%s)"
+
+          gcloud run jobs create $JOB_NAME \
+            --image="$IMAGE" \
+            --region $REGION \
+            --project $GCP_PROJECT \
+            --set-cloudsql-instances $CLOUD_SQL_INSTANCE \
+            --set-secrets "DATABASE_ADMIN_URL=om-dev-database-admin-url:latest" \
+            --set-env-vars "NODE_ENV=production" \
+            --set-env-vars "^@^OPEN_PR_NUMBERS=${OPEN_PRS}" \
+            --args="yarn,db:cleanup-orphaned" \
+            --max-retries 0 \
+            --task-timeout 20m
+
+          gcloud run jobs execute $JOB_NAME \
+            --project $GCP_PROJECT \
+            --region $REGION \
+            --wait || true
+
+          echo "Fetching cleanup job logs..."
+          gcloud run jobs executions logs read \
+            --job $JOB_NAME \
+            --project $GCP_PROJECT \
+            --region $REGION \
+            --limit 50 \
+            2>/dev/null || echo "Could not fetch logs"
+
+          gcloud run jobs delete $JOB_NAME \
+            --project $GCP_PROJECT \
+            --region $REGION \
+            --quiet || true
+
+      - name: Cleanup summary
+        run: |
+          echo "Cleanup completed successfully"
+          echo "Open PRs: ${{ steps.open_prs.outputs.pr_numbers }}"

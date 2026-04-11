@@ -15,6 +15,9 @@
     "generate": "mercato generate",
     "db:generate": "mercato db generate",
     "db:migrate": "mercato db migrate",
+    "db:clone": "tsx src/database/clone-database.ts",
+    "db:migrate:preview": "yarn db:clone && yarn db:migrate",
+    "db:cleanup-orphaned": "tsx src/database/cleanup-orphaned-databases.ts",
     "db:greenfield": "mercato db greenfield",
     "initialize": "mercato init",
     "reinstall": "mercato init --reinstall"
