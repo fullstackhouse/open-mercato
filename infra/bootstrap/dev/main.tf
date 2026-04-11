@@ -37,7 +37,7 @@ resource "google_storage_bucket" "terraform_state" {
   }
 
   soft_delete_policy {
-    retention_duration_seconds = 31536000 # 365 days
+    retention_duration_seconds = 604800 # 7 days
   }
 
   lifecycle_rule {

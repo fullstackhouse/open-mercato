@@ -14,7 +14,7 @@ resource "google_cloud_run_v2_service" "app" {
     }
 
     containers {
-      image = "${local.registry_region}-docker.pkg.dev/${var.project_id}/open-mercato/${var.service_name_prefix}:latest"
+      image = "us-docker.pkg.dev/cloudrun/container/hello"
 
       volume_mounts {
         name       = "cloudsql"
@@ -120,22 +120,24 @@ resource "google_cloud_run_v2_service" "app" {
       }
 
       startup_probe {
-        tcp_socket {
+        http_get {
+          path = "/"
           port = 3000
         }
         initial_delay_seconds = 10
-        timeout_seconds       = 3
+        timeout_seconds       = 5
         period_seconds        = 5
-        failure_threshold     = 20
+        failure_threshold     = 30
       }
 
       liveness_probe {
-        tcp_socket {
+        http_get {
+          path = "/"
           port = 3000
         }
         initial_delay_seconds = 0
-        timeout_seconds       = 3
-        period_seconds        = 10
+        timeout_seconds       = 5
+        period_seconds        = 30
         failure_threshold     = 3
       }
     }
@@ -178,7 +180,7 @@ resource "google_cloud_run_v2_job" "migrations" {
       }
 
       containers {
-        image = "${local.registry_region}-docker.pkg.dev/${var.project_id}/open-mercato/${var.service_name_prefix}:latest"
+        image = "us-docker.pkg.dev/cloudrun/container/hello"
         args  = ["yarn", "db:migrate"]
 
         volume_mounts {
