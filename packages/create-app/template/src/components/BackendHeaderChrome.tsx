@@ -2,7 +2,6 @@
 
 import dynamic from 'next/dynamic'
 import * as React from 'react'
-import { hasFeature } from '@open-mercato/shared/security/features'
 import { IntegrationsButton } from '@open-mercato/ui/backend/IntegrationsButton'
 import { ProfileDropdown } from '@open-mercato/ui/backend/ProfileDropdown'
 import { SettingsButton } from '@open-mercato/ui/backend/SettingsButton'
@@ -58,22 +57,33 @@ export function BackendHeaderChrome({
   organizationId,
 }: BackendHeaderChromeProps) {
   const { payload, isReady } = useBackendChrome()
-  const grantedFeatures = payload?.grantedFeatures ?? []
+  const navGroups = React.useMemo(
+    () => [...(payload?.groups ?? []), ...(payload?.settingsSections ?? [])],
+    [payload?.groups, payload?.settingsSections],
+  )
   const showIntegrationsButton = React.useMemo(
-    () => hasVisibleRoute(payload?.groups, '/backend/integrations'),
-    [payload?.groups],
+    () => hasVisibleRoute(navGroups, '/backend/integrations'),
+    [navGroups],
   )
   const showAiAssistant = React.useMemo(
-    () => hasFeature(grantedFeatures, 'ai_assistant.view'),
-    [grantedFeatures],
+    () => hasVisibleRoute(navGroups, '/backend/config/ai-assistant'),
+    [navGroups],
   )
   const showMessages = React.useMemo(
-    () => hasFeature(grantedFeatures, 'messages.view'),
-    [grantedFeatures],
+    () => hasVisibleRoute(navGroups, '/backend/messages'),
+    [navGroups],
   )
   const showSearch = React.useMemo(
-    () => hasFeature(grantedFeatures, 'search.global'),
-    [grantedFeatures],
+    () => hasVisibleRoute(navGroups, '/backend/config/search'),
+    [navGroups],
+  )
+  const showNotificationBell = React.useMemo(
+    () => hasVisibleRoute(navGroups, '/backend/config/notifications'),
+    [navGroups],
+  )
+  const showOrganizationSwitcher = React.useMemo(
+    () => hasVisibleRoute(navGroups, '/backend/directory/organizations'),
+    [navGroups],
   )
 
   return (
@@ -90,12 +100,12 @@ export function BackendHeaderChrome({
         />
       ) : null}
       <div className="hidden lg:contents">
-        {isReady ? <LazyOrganizationSwitcher /> : null}
+        {isReady && showOrganizationSwitcher ? <LazyOrganizationSwitcher /> : null}
       </div>
       {showIntegrationsButton ? <IntegrationsButton /> : null}
       <SettingsButton />
       <ProfileDropdown email={email} />
-      {isReady ? <LazyNotificationBellWrapper /> : null}
+      {isReady && showNotificationBell ? <LazyNotificationBellWrapper /> : null}
       {isReady && showMessages ? <LazyMessagesIcon /> : null}
     </>
   )
