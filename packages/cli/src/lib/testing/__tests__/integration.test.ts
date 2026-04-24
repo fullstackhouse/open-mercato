@@ -42,7 +42,7 @@ const mockHealthyReadinessFetch = (
     }
     return { status: 401, ok: false, text: async () => '' } as unknown as Response
   }
-  if (url.includes('/api/customers/people?pageSize=1')) {
+  if (url.includes('/api/auth/profile') || url.includes('/api/customers/people?pageSize=1')) {
     return { status: 200, ok: true, text: async () => JSON.stringify({ items: [] }) } as unknown as Response
   }
   if (url.endsWith('/login')) {

@@ -1313,10 +1313,13 @@ async function probeBackendLoginEndpoint(baseUrl: string): Promise<BackendLoginP
 }
 
 async function probeAuthenticatedApi(baseUrl: string): Promise<AuthenticatedApiProbeResult> {
+  const email = process.env.OM_INTEGRATION_ADMIN_EMAIL ?? 'admin@acme.com'
+  const password = process.env.OM_INTEGRATION_ADMIN_PASSWORD ?? 'secret'
+  const probePath = process.env.OM_INTEGRATION_PROBE_PATH ?? '/api/auth/profile'
   try {
     const form = new URLSearchParams()
-    form.set('email', 'admin@acme.com')
-    form.set('password', 'secret')
+    form.set('email', email)
+    form.set('password', password)
     const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       redirect: 'manual',
@@ -1348,7 +1351,7 @@ async function probeAuthenticatedApi(baseUrl: string): Promise<AuthenticatedApiP
       }
     }
 
-    const apiResponse = await fetch(`${baseUrl}/api/customers/people?pageSize=1`, {
+    const apiResponse = await fetch(`${baseUrl}${probePath}`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -1360,8 +1363,8 @@ async function probeAuthenticatedApi(baseUrl: string): Promise<AuthenticatedApiP
       apiStatus: apiResponse.status,
       healthy,
       detail: healthy
-        ? 'Authenticated GET /api/customers/people returned 200'
-        : `Authenticated GET /api/customers/people returned ${apiResponse.status}`,
+        ? `Authenticated GET ${probePath} returned 200`
+        : `Authenticated GET ${probePath} returned ${apiResponse.status}`,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
