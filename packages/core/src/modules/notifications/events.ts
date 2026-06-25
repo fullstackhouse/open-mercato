@@ -8,7 +8,7 @@ import { NOTIFICATION_SSE_EVENTS } from './lib/events'
  */
 export const TYPE_REGISTRY_SYNC_EVENT = 'notifications.type_registry.sync'
 
-/** Emitted after a user's channel preferences change (for downstream cache busting). */
+/** Lifecycle event emitted after a user's channel preferences change (workflow-trigger / subscriber surface). */
 export const PREFERENCE_UPDATED_EVENT = 'notifications.preference.updated'
 
 const events = [
