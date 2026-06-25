@@ -67,6 +67,14 @@ export type NotificationTypeDefinition = {
   linkHref?: string
   Renderer?: ComponentType<NotificationRendererProps>
   expiresAfterHours?: number
+  /**
+   * Optional i18n key for the short type name shown in a per-channel
+   * preferences UI (e.g. "Order created"). Distinct from `titleKey`, which is
+   * the per-instance message title. Falls back to `titleKey` when omitted.
+   */
+  labelKey?: string
+  /** Optional i18n key for helper text shown beside the type in a preferences UI. */
+  descriptionKey?: string
 }
 
 export type NotificationDto = {

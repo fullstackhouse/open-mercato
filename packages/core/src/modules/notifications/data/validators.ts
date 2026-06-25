@@ -113,3 +113,33 @@ export type CreateFeatureNotificationInput = z.infer<typeof createFeatureNotific
 export type ListNotificationsInput = z.infer<typeof listNotificationsSchema>
 export type ExecuteActionInput = z.infer<typeof executeActionSchema>
 export type NotificationDeliveryConfigInput = z.infer<typeof notificationDeliveryConfigSchema>
+
+// Notification type catalogue (DB-mirrored read model)
+export const notificationTypeItemSchema = z.object({
+  id: z.string(),
+  labelKey: z.string(),
+  descriptionKey: z.string().nullable().optional(),
+})
+
+// Per-user channel preferences
+export const notificationPreferenceItemSchema = z.object({
+  notificationTypeId: z.string(),
+  channel: z.string(),
+  enabled: z.boolean(),
+})
+
+export const updatePreferencesSchema = z.object({
+  preferences: z
+    .array(
+      z.object({
+        notificationTypeId: z.string().trim().min(1).max(128),
+        channel: z.string().trim().min(1).max(32),
+        enabled: z.boolean(),
+      }),
+    )
+    .max(500),
+})
+
+export type NotificationTypeItem = z.infer<typeof notificationTypeItemSchema>
+export type NotificationPreferenceItem = z.infer<typeof notificationPreferenceItemSchema>
+export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>

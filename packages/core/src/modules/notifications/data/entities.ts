@@ -98,3 +98,77 @@ export class Notification {
   @Property({ name: 'organization_id', type: 'uuid', nullable: true })
   organizationId?: string | null
 }
+
+/**
+ * DB-backed mirror of the code-registered notification type catalogue
+ * (the in-memory `NotificationTypeDefinition` seam stays the source of truth).
+ * Lets remote clients (mobile apps) enumerate types over HTTP to render a
+ * preferences screen without shipping a copy of the catalogue.
+ *
+ * `tenant_id` is nullable: code-registered types are system-wide (`null`).
+ * The string `id` is the frozen notification-type id (e.g. `sales.order.created`).
+ */
+@Entity({ tableName: 'notification_types' })
+@Index({ name: 'notification_types_tenant_idx', properties: ['tenantId'] })
+export class NotificationType {
+  [OptionalProps]?: 'tenantId' | 'descriptionKey' | 'createdAt' | 'updatedAt'
+
+  @PrimaryKey({ name: 'id', type: 'text' })
+  id!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid', nullable: true })
+  tenantId?: string | null
+
+  @Property({ name: 'label_key', type: 'text' })
+  labelKey!: string
+
+  @Property({ name: 'description_key', type: 'text', nullable: true })
+  descriptionKey?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+/**
+ * Channel-agnostic per-user notification preference. Lazy-seeded: an absent row
+ * means the channel is enabled (default-on). Channels (in_app, push, future
+ * email/sms) are free-form strings; the `notification_type_id` is a soft string
+ * reference to a `notification_types.id` (no cross-module ORM relationship).
+ */
+@Entity({ tableName: 'notification_preferences' })
+@Index({ name: 'notification_preferences_tenant_user_idx', properties: ['tenantId', 'userId'] })
+@Index({
+  name: 'notification_preferences_unique',
+  expression:
+    'create unique index "notification_preferences_unique" on "notification_preferences" ("tenant_id", "user_id", "notification_type_id", "channel");',
+})
+export class NotificationPreference {
+  [OptionalProps]?: 'enabled' | 'createdAt' | 'updatedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'user_id', type: 'uuid' })
+  userId!: string
+
+  @Property({ name: 'notification_type_id', type: 'text' })
+  notificationTypeId!: string
+
+  @Property({ name: 'channel', type: 'text' })
+  channel!: string
+
+  @Property({ name: 'enabled', type: 'boolean', default: true })
+  enabled: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
