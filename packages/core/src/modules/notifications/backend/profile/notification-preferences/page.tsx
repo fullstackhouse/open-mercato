@@ -1,7 +1,7 @@
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { NotificationPreferencesPageClient } from '../../../frontend/NotificationPreferencesPageClient'
 
-export default async function NotificationPreferencesPage() {
+export default async function NotificationPreferencesProfilePage() {
   return (
     <Page>
       <PageBody>

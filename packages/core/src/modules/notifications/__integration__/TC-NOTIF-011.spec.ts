@@ -1,9 +1,11 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api'
-import { readJsonSafe } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures'
+import { readJsonSafe, getTokenScope } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures'
 import { login } from '@open-mercato/core/modules/core/__integration__/helpers/auth'
 
-const PREFERENCES_PAGE = '/backend/config/notification-preferences'
+const PREFERENCES_PAGE = '/backend/profile/notification-preferences'
+const ADMIN_PREFERENCES_PATH = '/api/notifications/admin/preferences'
+const ADMIN_PREFERENCES_PAGE = '/backend/notifications/user-preferences'
 
 type NotificationTypeItem = { id: string; labelKey: string; descriptionKey?: string | null }
 type TypesResponse = { items: NotificationTypeItem[] }
@@ -100,6 +102,71 @@ test.describe('TC-NOTIF-011: Notification type catalogue + channel preferences',
     })
     // No valid principal ⇒ rejected by the auth guard (401) or the feature gate (403).
     expect([401, 403]).toContain(res.status())
+  })
+
+  test('admin can read and edit another user\'s preferences, reflected in that user\'s self view', async ({ request }) => {
+    const adminToken = await getAuthToken(request, 'admin')
+    const employeeToken = await getAuthToken(request, 'employee')
+    const employeeUserId = getTokenScope(employeeToken).userId
+    const typeId = uniqueTypeId()
+
+    // Admin disables push for the employee for this type.
+    const putRes = await apiRequest(request, 'PUT', ADMIN_PREFERENCES_PATH, {
+      token: adminToken,
+      data: { userId: employeeUserId, preferences: [{ notificationTypeId: typeId, channel: 'push', enabled: false }] },
+    })
+    expect(putRes.status()).toBe(200)
+
+    // Admin reads it back for that user.
+    const adminGet = await apiRequest(request, 'GET', `${ADMIN_PREFERENCES_PATH}?userId=${employeeUserId}`, { token: adminToken })
+    expect(adminGet.status()).toBe(200)
+    const adminItems = (await readJsonSafe<PreferencesResponse>(adminGet))?.items ?? []
+    const adminRow = adminItems.find((p) => p.notificationTypeId === typeId && p.channel === 'push')
+    expect(adminRow?.enabled).toBe(false)
+
+    // The employee sees the admin-made change in their own self view.
+    const selfRows = await getPreferences(request, employeeToken)
+    const selfRow = selfRows.find((p) => p.notificationTypeId === typeId && p.channel === 'push')
+    expect(selfRow?.enabled).toBe(false)
+  })
+
+  test('admin preferences API enforces the admin feature and tenant membership', async ({ request }) => {
+    const employeeToken = await getAuthToken(request, 'employee')
+    const adminToken = await getAuthToken(request, 'admin')
+    const employeeUserId = getTokenScope(employeeToken).userId
+
+    // Employee lacks notifications.manage_user_preferences ⇒ blocked.
+    const blocked = await apiRequest(request, 'PUT', ADMIN_PREFERENCES_PATH, {
+      token: employeeToken,
+      data: { userId: employeeUserId, preferences: [{ notificationTypeId: uniqueTypeId(), channel: 'push', enabled: false }] },
+    })
+    expect([401, 403]).toContain(blocked.status())
+
+    // Unknown user (not in tenant) ⇒ 404.
+    const missing = await apiRequest(request, 'GET', `${ADMIN_PREFERENCES_PATH}?userId=00000000-0000-0000-0000-000000000000`, { token: adminToken })
+    expect(missing.status()).toBe(404)
+  })
+
+  test('admin user-preferences page searches a user and saves a toggle', async ({ page }) => {
+    await login(page, 'admin')
+    await page.goto(ADMIN_PREFERENCES_PAGE)
+    await expect(page.getByRole('heading', { name: /User Notification Preferences/i })).toBeVisible()
+
+    // The initial (empty-search) load lists users; pick the first.
+    const firstUser = page.locator('ul li button').first()
+    await expect(firstUser).toBeVisible()
+    await firstUser.click()
+
+    const firstSwitch = page.getByRole('switch').first()
+    await expect(firstSwitch).toBeVisible()
+    await firstSwitch.click()
+
+    const savePromise = page.waitForResponse(
+      (res) => res.url().includes('/api/notifications/admin/preferences') && res.request().method() === 'PUT',
+    )
+    await page.getByRole('button', { name: /Save preferences/i }).click()
+    const saveRes = await savePromise
+    expect(saveRes.status()).toBe(200)
   })
 
   test('preferences settings page renders and persists a toggle', async ({ page }) => {

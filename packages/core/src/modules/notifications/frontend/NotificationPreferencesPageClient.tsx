@@ -6,40 +6,21 @@ import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/ap
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
+import {
+  NotificationPreferenceMatrix,
+  buildPreferenceMap,
+  preferenceKey,
+  toPreferenceItems,
+  type NotificationTypeItem,
+  type PreferenceItem,
+} from './NotificationPreferenceMatrix'
 
-type NotificationTypeItem = { id: string; labelKey: string; descriptionKey?: string | null }
 type TypesResponse = { items?: NotificationTypeItem[] }
-
-type PreferenceItem = { notificationTypeId: string; channel: string; enabled: boolean }
 type PreferencesResponse = { items?: PreferenceItem[] }
 type SaveResponse = { ok?: boolean; error?: string }
 
-type ChannelDef = { key: string; labelKey: string; labelFallback: string; hintKey: string; hintFallback: string }
-
-const CHANNELS: ChannelDef[] = [
-  {
-    key: 'in_app',
-    labelKey: 'notifications.preferences.channels.inApp',
-    labelFallback: 'In-app',
-    hintKey: 'notifications.preferences.channels.inAppHint',
-    hintFallback: 'Notification center and bell.',
-  },
-  {
-    key: 'push',
-    labelKey: 'notifications.preferences.channels.push',
-    labelFallback: 'Push',
-    hintKey: 'notifications.preferences.channels.pushHint',
-    hintFallback: 'Mobile push (active once a push channel is connected).',
-  },
-]
-
 const PREFERENCES_CONTEXT_ID = 'notifications-preferences'
-
-function prefKey(typeId: string, channel: string): string {
-  return `${typeId}::${channel}`
-}
 
 export function NotificationPreferencesPageClient() {
   const t = useT()
@@ -73,18 +54,8 @@ export function NotificationPreferencesPageClient() {
         }),
       ])
       const typeItems = typesBody?.items ?? []
-      const stored = new Map(
-        (prefsBody?.items ?? []).map((item) => [prefKey(item.notificationTypeId, item.channel), item.enabled]),
-      )
-      const nextPrefs: Record<string, boolean> = {}
-      for (const type of typeItems) {
-        for (const channel of CHANNELS) {
-          const key = prefKey(type.id, channel.key)
-          nextPrefs[key] = stored.get(key) ?? true
-        }
-      }
       setTypes(typeItems)
-      setPrefs(nextPrefs)
+      setPrefs(buildPreferenceMap(typeItems, prefsBody?.items ?? []))
     } catch (err) {
       const message = err instanceof Error ? err.message : t('notifications.preferences.loadError', 'Failed to load notification preferences')
       setError(message)
@@ -99,23 +70,14 @@ export function NotificationPreferencesPageClient() {
   }, [fetchData])
 
   const togglePref = (typeId: string, channel: string, enabled: boolean) => {
-    setPrefs((prev) => ({ ...prev, [prefKey(typeId, channel)]: enabled }))
+    setPrefs((prev) => ({ ...prev, [preferenceKey(typeId, channel)]: enabled }))
   }
 
   const handleSave = async () => {
     if (!types) return
     setSaving(true)
     try {
-      const preferences: PreferenceItem[] = []
-      for (const type of types) {
-        for (const channel of CHANNELS) {
-          preferences.push({
-            notificationTypeId: type.id,
-            channel: channel.key,
-            enabled: prefs[prefKey(type.id, channel.key)] ?? true,
-          })
-        }
-      }
+      const preferences = toPreferenceItems(types, prefs)
       const response = await runMutation({
         operation: () =>
           apiCall<SaveResponse>('/api/notifications/preferences', {
@@ -157,48 +119,7 @@ export function NotificationPreferencesPageClient() {
         </p>
       </div>
 
-      {types.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t('notifications.preferences.empty', 'No notification types are registered yet.')}
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/50 text-left">
-                <th className="px-4 py-3 font-medium">{t('notifications.preferences.columns.type', 'Notification type')}</th>
-                {CHANNELS.map((channel) => (
-                  <th key={channel.key} className="px-4 py-3 font-medium">
-                    <div>{t(channel.labelKey, channel.labelFallback)}</div>
-                    <div className="text-xs font-normal text-muted-foreground">{t(channel.hintKey, channel.hintFallback)}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {types.map((type) => (
-                <tr key={type.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{t(type.labelKey, type.id)}</div>
-                    {type.descriptionKey ? (
-                      <div className="text-xs text-muted-foreground">{t(type.descriptionKey, '')}</div>
-                    ) : null}
-                  </td>
-                  {CHANNELS.map((channel) => (
-                    <td key={channel.key} className="px-4 py-3">
-                      <Switch
-                        checked={prefs[prefKey(type.id, channel.key)] ?? true}
-                        onCheckedChange={(checked) => togglePref(type.id, channel.key, checked)}
-                        aria-label={`${t(type.labelKey, type.id)} – ${t(channel.labelKey, channel.labelFallback)}`}
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} />
 
       <div className="flex items-center gap-3">
         <Button type="button" onClick={handleSave} disabled={saving}>

@@ -19,12 +19,13 @@ export const metadata = {
   requireFeatures: ['notifications.manage_preferences'],
   pageTitle: 'Notification Preferences',
   pageTitleKey: 'notifications.preferences.pageTitle',
-  pageGroup: 'Module Configs',
-  pageGroupKey: 'settings.sections.moduleConfigs',
-  pageOrder: 8,
+  pageGroup: 'Profile',
+  pageGroupKey: 'notifications.preferences.profileGroup',
+  pageOrder: 30,
   icon: slidersIcon,
-  pageContext: 'settings' as const,
+  pageContext: 'profile' as const,
   breadcrumb: [
+    { label: 'Profile', labelKey: 'notifications.preferences.profileGroup' },
     { label: 'Notification Preferences', labelKey: 'notifications.preferences.pageTitle' },
   ],
 } as const

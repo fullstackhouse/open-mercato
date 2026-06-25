@@ -140,6 +140,16 @@ export const updatePreferencesSchema = z.object({
     .max(500),
 })
 
+// Admin-on-behalf preference management (target a specific user)
+export const adminPreferencesQuerySchema = z.object({
+  userId: z.string().uuid(),
+})
+
+export const adminUpdatePreferencesSchema = updatePreferencesSchema.extend({
+  userId: z.string().uuid(),
+})
+
 export type NotificationTypeItem = z.infer<typeof notificationTypeItemSchema>
 export type NotificationPreferenceItem = z.infer<typeof notificationPreferenceItemSchema>
 export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>
+export type AdminUpdatePreferencesInput = z.infer<typeof adminUpdatePreferencesSchema>
