@@ -1,6 +1,9 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api'
 import { readJsonSafe } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures'
+import { login } from '@open-mercato/core/modules/core/__integration__/helpers/auth'
+
+const PREFERENCES_PAGE = '/backend/config/notification-preferences'
 
 type NotificationTypeItem = { id: string; labelKey: string; descriptionKey?: string | null }
 type TypesResponse = { items: NotificationTypeItem[] }
@@ -92,9 +95,35 @@ test.describe('TC-NOTIF-011: Notification type catalogue + channel preferences',
 
   test('rejects unauthenticated preference writes', async ({ request }) => {
     const res = await apiRequest(request, 'PUT', PREFERENCES_PATH, {
+      token: '',
       data: { preferences: [{ notificationTypeId: uniqueTypeId(), channel: 'push', enabled: false }] },
     })
     // No valid principal ⇒ rejected by the auth guard (401) or the feature gate (403).
     expect([401, 403]).toContain(res.status())
+  })
+
+  test('preferences settings page renders and persists a toggle', async ({ page }) => {
+    await login(page, 'employee')
+    await page.goto(PREFERENCES_PAGE)
+
+    await expect(page.getByRole('heading', { name: /Notification Preferences/i })).toBeVisible()
+
+    const firstSwitch = page.getByRole('switch').first()
+    await expect(firstSwitch).toBeVisible()
+
+    const before = await firstSwitch.getAttribute('aria-checked')
+    await firstSwitch.click()
+
+    const savePromise = page.waitForResponse(
+      (res) => res.url().includes('/api/notifications/preferences') && res.request().method() === 'PUT',
+    )
+    await page.getByRole('button', { name: /Save preferences/i }).click()
+    const saveRes = await savePromise
+    expect(saveRes.status()).toBe(200)
+
+    await page.reload()
+    const reloaded = page.getByRole('switch').first()
+    await expect(reloaded).toBeVisible()
+    await expect(reloaded).toHaveAttribute('aria-checked', before === 'true' ? 'false' : 'true')
   })
 })
