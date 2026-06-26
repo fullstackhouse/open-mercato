@@ -25,18 +25,19 @@ const deviceRef = { __entity: 'UserDevice' }
 const channelRef = { __entity: 'CommunicationChannel' }
 
 function makeCtx(opts: {
-  channel?: Record<string, unknown> | null
+  channels?: Array<Record<string, unknown>>
   devices?: Array<Record<string, unknown>>
 }) {
   const fork = {
-    create: jest.fn((_entity: unknown, data: Record<string, unknown>) => ({ id: `del-${Math.round(data.userDeviceId ? 1 : 0)}`, ...data })),
+    create: jest.fn((_entity: unknown, data: Record<string, unknown>) => ({ id: `del-${data.userDeviceId}`, ...data })),
     persist: jest.fn(),
     flush: jest.fn(async () => undefined),
   }
   const em = {
     fork: jest.fn(() => fork),
-    findOne: jest.fn(async (entity: unknown) => (entity === channelRef ? (opts.channel ?? null) : null)),
-    find: jest.fn(async (entity: unknown) => (entity === deviceRef ? (opts.devices ?? []) : [])),
+    find: jest.fn(async (entity: unknown) =>
+      entity === channelRef ? (opts.channels ?? []) : entity === deviceRef ? (opts.devices ?? []) : [],
+    ),
   }
   const resolve = (<T,>(name: string): T => {
     const map: Record<string, unknown> = { em, UserDevice: deviceRef, CommunicationChannel: channelRef }
@@ -68,28 +69,31 @@ describe('mobilePushDeliveryStrategy', () => {
     getTypeMock.mockReturnValue(undefined)
     const { ctx, em } = makeCtx({})
     await mobilePushDeliveryStrategy.deliver(ctx)
-    expect(em.findOne).not.toHaveBeenCalled()
+    expect(em.find).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('skips when the recipient opted out of push for the type', async () => {
     resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => false) } as never)
-    const { ctx, em } = makeCtx({ channel: { providerKey: 'push_stub' }, devices: [{ id: 'dev-1', pushToken: 'tok' }] })
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }],
+    })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // The cheap per-tenant channel check runs first; on opt-out we never load devices or enqueue.
-    expect(em.find).not.toHaveBeenCalled()
+    // The cheap per-tenant channel check runs first; on opt-out we never create rows or enqueue.
+    expect(fork.create).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('skips when no push channel is configured for the tenant', async () => {
-    const { ctx, fork } = makeCtx({ channel: null, devices: [{ id: 'dev-1', pushToken: 'tok' }] })
+    const { ctx, fork } = makeCtx({ channels: [], devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }] })
     await mobilePushDeliveryStrategy.deliver(ctx)
     expect(fork.flush).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('skips when the recipient has no push-capable devices', async () => {
-    const { ctx, fork } = makeCtx({ channel: { providerKey: 'push_stub' }, devices: [] })
+    const { ctx, fork } = makeCtx({ channels: [{ providerKey: 'fcm' }], devices: [] })
     await mobilePushDeliveryStrategy.deliver(ctx)
     expect(fork.flush).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
@@ -97,10 +101,10 @@ describe('mobilePushDeliveryStrategy', () => {
 
   it('inserts a pending delivery row per device and enqueues each', async () => {
     const { ctx, fork } = makeCtx({
-      channel: { providerKey: 'push_stub' },
+      channels: [{ providerKey: 'fcm' }],
       devices: [
-        { id: 'dev-1', pushToken: 'token-aaaaaaaa' },
-        { id: 'dev-2', pushToken: 'token-bbbbbbbb' },
+        { id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' },
+        { id: 'dev-2', pushToken: 'token-bbbbbbbb', pushProvider: 'fcm' },
       ],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
@@ -110,8 +114,32 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(enqueueMock).toHaveBeenCalledTimes(2)
     // provider snapshotted, last-8 token snapshot, never the full token.
     const firstRow = fork.create.mock.calls[0][1] as Record<string, unknown>
-    expect(firstRow.provider).toBe('push_stub')
+    expect(firstRow.provider).toBe('fcm')
     expect(firstRow.tokenSnapshot).toBe('aaaaaaaa')
     expect(firstRow).not.toHaveProperty('pushToken')
+  })
+
+  it('routes each device to the push channel matching its provider', async () => {
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'apns' }, { providerKey: 'fcm' }],
+      devices: [
+        { id: 'ios-1', pushToken: 'ios-token-1', pushProvider: 'apns' },
+        { id: 'android-1', pushToken: 'android-token-1', pushProvider: 'fcm' },
+        // No expo channel configured ⇒ this device is skipped.
+        { id: 'expo-1', pushToken: 'expo-token-1', pushProvider: 'expo' },
+        // No provider on the device ⇒ skipped.
+        { id: 'unknown-1', pushToken: 'unknown-token-1', pushProvider: null },
+      ],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    expect(fork.create).toHaveBeenCalledTimes(2)
+    expect(enqueueMock).toHaveBeenCalledTimes(2)
+    const providersByDevice = Object.fromEntries(
+      fork.create.mock.calls.map((call) => {
+        const row = call[1] as Record<string, unknown>
+        return [row.userDeviceId, row.provider]
+      }),
+    )
+    expect(providersByDevice).toEqual({ 'ios-1': 'apns', 'android-1': 'fcm' })
   })
 })

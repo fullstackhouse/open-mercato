@@ -1,18 +1,12 @@
+import { z } from 'zod'
 import type {
-  ChannelAdapter,
-  ChannelCapabilities,
-  ChannelNativeContent,
-  ConvertOutboundInput,
-  GetMessageStatusInput,
-  InboundMessage,
-  MessageStatus,
-  NormalizedInboundMessage,
   SendMessageInput,
   SendMessageResult,
-  ValidateCredentialsInput,
-  ValidateCredentialsResult,
-  VerifyWebhookInput,
 } from '@open-mercato/core/modules/communication_channels/lib/adapter'
+import {
+  BasePushChannelAdapter,
+  deviceUnregisteredResult,
+} from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
 import {
   hasChannelAdapter,
   registerChannelAdapter,
@@ -41,45 +35,14 @@ export function isPushStubEnabled(): boolean {
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase())
 }
 
-const pushStubCapabilities: ChannelCapabilities = {
-  threading: false,
-  richText: false,
-  fileSharing: false,
-  readReceipts: false,
-  deliveryReceipts: false,
-  typingIndicators: false,
-  reactions: false,
-  multiReactionPerUser: false,
-  editMessage: false,
-  deleteMessage: false,
-  presence: false,
-  richBlocks: false,
-  interactiveComponents: false,
-  inlineImages: false,
-  conversationHistory: false,
-  contactCards: false,
-  locationSharing: false,
-  voiceNotes: false,
-  stickers: false,
-  supportedBodyFormats: ['text'],
-  // Push is real-time; no polling.
-  realtimePush: true,
-}
-
-class PushStubChannelAdapter implements ChannelAdapter {
+class PushStubChannelAdapter extends BasePushChannelAdapter {
   readonly providerKey = PUSH_STUB_PROVIDER_KEY
-  readonly channelType = 'push'
-  readonly capabilities = pushStubCapabilities
+  protected readonly credentialsSchema = z.object({}).passthrough()
 
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     const token = typeof input.metadata?.pushToken === 'string' ? input.metadata.pushToken : ''
     if (token.includes('unregistered')) {
-      return {
-        externalMessageId: '',
-        status: 'failed',
-        error: 'device_unregistered',
-        metadata: { unregistered: true, stub: true },
-      }
+      return deviceUnregisteredResult({ stub: true })
     }
     if (token.includes('fail')) {
       return { externalMessageId: '', status: 'failed', error: 'push_stub_forced_failure', metadata: { stub: true } }
@@ -89,26 +52,6 @@ class PushStubChannelAdapter implements ChannelAdapter {
       status: 'sent',
       metadata: { stub: true },
     }
-  }
-
-  async verifyWebhook(_input: VerifyWebhookInput): Promise<InboundMessage> {
-    return { raw: {}, eventType: 'other', metadata: { reason: 'push-stub-no-webhook' } }
-  }
-
-  async getStatus(_input: GetMessageStatusInput): Promise<MessageStatus> {
-    return { status: 'sent' }
-  }
-
-  async convertOutbound(input: ConvertOutboundInput): Promise<ChannelNativeContent> {
-    return { content: { text: input.body, bodyFormat: input.bodyFormat }, metadata: input.channelMetadata ?? {} }
-  }
-
-  async normalizeInbound(_raw: InboundMessage): Promise<NormalizedInboundMessage> {
-    throw new Error('[internal] PushStubChannelAdapter.normalizeInbound is not used')
-  }
-
-  async validateCredentials(_input: ValidateCredentialsInput): Promise<ValidateCredentialsResult> {
-    return { ok: true }
   }
 }
 

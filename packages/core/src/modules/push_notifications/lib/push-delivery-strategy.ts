@@ -44,18 +44,22 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
 
     const em = ctx.resolve('em') as EntityManager
 
-    // 2. Require an active push CommunicationChannel for the tenant (push not configured ⇒ skip).
+    // 2. Require at least one active push CommunicationChannel for the tenant (push not configured ⇒ skip).
     //    This is the cheapest, most selective short-circuit (most tenants have no push channel), so it
-    //    runs before the per-recipient preference lookup. Phase 3 uses the first active push channel;
-    //    per-platform provider routing (apns vs fcm) is refined when the real adapters land in Phase 4.
+    //    runs before the per-recipient preference lookup. Channels are indexed by providerKey so each
+    //    device can be routed to its matching provider in step 5 (ios→apns, android→fcm, expo→expo).
     const ChannelRef = ctx.resolve('CommunicationChannel') as EntityName<CommunicationChannel>
-    const channel = await em.findOne(ChannelRef, {
+    const channels = await em.find(ChannelRef, {
       tenantId,
       channelType: PUSH_CHANNEL,
       isActive: true,
       deletedAt: null,
     })
-    if (!channel) return
+    if (channels.length === 0) return
+    const channelsByProvider = new Map<string, CommunicationChannel>()
+    for (const channel of channels) {
+      if (!channelsByProvider.has(channel.providerKey)) channelsByProvider.set(channel.providerKey, channel)
+    }
 
     // 3. Respect the recipient's per-channel preference (default-on when unset).
     const preferences = resolveNotificationPreferenceService({ resolve: ctx.resolve })
@@ -80,23 +84,33 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
 
     const payload = { title: ctx.title, body: ctx.body, data }
 
-    // 5. Insert one pending delivery row per device, snapshotting provider + truncated token.
+    // 5. Insert one pending delivery row per device, routing each device to the push channel whose
+    //    providerKey matches the device's pushProvider. Devices with no provider, or no matching
+    //    configured channel, are skipped. Snapshot the matched provider + truncated token per row.
     const fork = em.fork()
-    const deliveries: PushNotificationDelivery[] = devices.map((device) =>
-      fork.create(PushNotificationDelivery, {
-        tenantId,
-        organizationId,
-        notificationId: notification.id,
-        notificationTypeId: notification.type,
-        userDeviceId: device.id,
-        userId,
-        provider: channel.providerKey,
-        tokenSnapshot: tokenSnapshot(device.pushToken as string),
-        status: 'pending',
-        attempts: 0,
-        payload,
-      }),
-    )
+    const deliveries: PushNotificationDelivery[] = []
+    for (const device of devices) {
+      const providerKey = device.pushProvider
+      if (!providerKey) continue
+      const channel = channelsByProvider.get(providerKey)
+      if (!channel) continue
+      deliveries.push(
+        fork.create(PushNotificationDelivery, {
+          tenantId,
+          organizationId,
+          notificationId: notification.id,
+          notificationTypeId: notification.type,
+          userDeviceId: device.id,
+          userId,
+          provider: channel.providerKey,
+          tokenSnapshot: tokenSnapshot(device.pushToken as string),
+          status: 'pending',
+          attempts: 0,
+          payload,
+        }),
+      )
+    }
+    if (deliveries.length === 0) return
     fork.persist(deliveries)
     await fork.flush()
 

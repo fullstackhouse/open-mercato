@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { EntityName } from '@mikro-orm/core'
 import type { CommandBus } from '@open-mercato/shared/lib/commands'
 import type { ChannelAdapter, SendMessageResult } from '@open-mercato/core/modules/communication_channels/lib/adapter'
+import { DEVICE_UNREGISTERED } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
 import { refreshCredentialsIfNeeded } from '@open-mercato/core/modules/communication_channels/lib/credential-refresh'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
@@ -29,10 +30,10 @@ type PushPayload = { title?: string; body?: string | null; data?: Record<string,
 
 type ProcessResult = { status: PushNotificationDelivery['status']; deliveryId: string } | null
 
-// The `unregistered` sentinel must be identical across the fcm/apns/expo adapters (Phase 4) so the
-// device soft-delete below fires uniformly regardless of provider.
+// The `unregistered` sentinel is shared (`deviceUnregisteredResult` / `DEVICE_UNREGISTERED`) across the
+// fcm/apns/expo adapters + the stub, so the device soft-delete below fires uniformly regardless of provider.
 function isUnregistered(result: SendMessageResult): boolean {
-  return result.metadata?.unregistered === true || result.error === 'device_unregistered'
+  return result.metadata?.unregistered === true || result.error === DEVICE_UNREGISTERED
 }
 
 async function finalize(
@@ -243,7 +244,7 @@ export async function processPushDeliveryJob(
 
     if (isUnregistered(result)) {
       delivery.status = 'failed'
-      delivery.lastError = 'device_unregistered'
+      delivery.lastError = DEVICE_UNREGISTERED
       delivery.providerResponse = result.metadata ?? null
       const outcome = await finalize(em, delivery, 'push_notifications.delivery.failed')
       await softDeleteUnregisteredDevice(resolve, {
