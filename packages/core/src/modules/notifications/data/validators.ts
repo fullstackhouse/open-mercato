@@ -139,6 +139,10 @@ export const notificationTypeItemSchema = z.object({
   id: z.string(),
   labelKey: z.string(),
   descriptionKey: z.string().nullable().optional(),
+  // Free-form grouping label so a client can list/group types under a heading.
+  category: z.string().nullable().optional(),
+  // When true the type is delivered as a silent / content-available push.
+  silent: z.boolean(),
   // When true the type cannot be opted out of; a preferences UI should lock it on.
   nonOptOut: z.boolean(),
 })

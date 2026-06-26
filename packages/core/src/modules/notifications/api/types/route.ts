@@ -34,6 +34,8 @@ export async function GET(req: Request) {
       id: row.id,
       labelKey: row.labelKey,
       descriptionKey: row.descriptionKey ?? null,
+      category: row.category ?? null,
+      silent: row.silent === true,
       nonOptOut: row.nonOptOut === true,
     }))
     return NextResponse.json({ items })

@@ -120,7 +120,7 @@ export class Notification {
 @Entity({ tableName: 'notification_types' })
 @Index({ name: 'notification_types_tenant_idx', properties: ['tenantId'] })
 export class NotificationType {
-  [OptionalProps]?: 'tenantId' | 'descriptionKey' | 'nonOptOut' | 'createdAt' | 'updatedAt'
+  [OptionalProps]?: 'tenantId' | 'descriptionKey' | 'category' | 'silent' | 'nonOptOut' | 'createdAt' | 'updatedAt'
 
   @PrimaryKey({ name: 'id', type: 'text' })
   id!: string
@@ -133,6 +133,12 @@ export class NotificationType {
 
   @Property({ name: 'description_key', type: 'text', nullable: true })
   descriptionKey?: string | null
+
+  @Property({ name: 'category', type: 'text', nullable: true })
+  category?: string | null
+
+  @Property({ name: 'silent', type: 'boolean', default: false })
+  silent: boolean = false
 
   @Property({ name: 'non_opt_out', type: 'boolean', default: false })
   nonOptOut: boolean = false
