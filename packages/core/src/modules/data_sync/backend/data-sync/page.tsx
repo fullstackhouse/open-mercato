@@ -7,6 +7,7 @@ import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import type { ColumnDef } from '@tanstack/react-table'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
+import { InjectionSpot } from '@open-mercato/ui/backend/injection/InjectionSpot'
 import { Badge, type BadgeProps } from '@open-mercato/ui/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@open-mercato/ui/primitives/card'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -40,6 +41,7 @@ import {
   Settings2,
   ShieldCheck,
 } from 'lucide-react'
+import { DATA_SYNC_RUN_PARAMS_SPOT_ID, type DataSyncRunParamsContext } from '../../lib/run-injection'
 
 type SyncRunRow = {
   id: string
@@ -274,6 +276,22 @@ export default function SyncRunsDashboardPage() {
     () => selectedIntegration?.supportedEntities ?? [],
     [selectedIntegration],
   )
+
+  const runParamsInjectionContext = React.useMemo<DataSyncRunParamsContext | null>(() => {
+    if (!selectedIntegration || !selectedEntityType) return null
+    const parsedBatchSize = Number.parseInt(batchSize, 10)
+    return {
+      integrationId: selectedIntegration.integrationId,
+      providerKey: selectedIntegration.providerKey ?? null,
+      entityType: selectedEntityType,
+      direction: selectedDirection,
+      fullSync,
+      batchSize: Number.isFinite(parsedBatchSize) ? parsedBatchSize : 100,
+      isEnabled: selectedIntegration.isEnabled,
+      hasCredentials: selectedIntegration.hasCredentials,
+      reloadRuns: () => setReloadToken((token) => token + 1),
+    }
+  }, [batchSize, fullSync, selectedDirection, selectedEntityType, selectedIntegration])
 
   React.useEffect(() => {
     if (!selectedIntegration) {
@@ -811,6 +829,15 @@ export default function SyncRunsDashboardPage() {
                     </div>
                   </div>
                 </div>
+
+                {runParamsInjectionContext ? (
+                  <div className="mt-4">
+                    <InjectionSpot
+                      spotId={DATA_SYNC_RUN_PARAMS_SPOT_ID}
+                      context={runParamsInjectionContext}
+                    />
+                  </div>
+                ) : null}
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
