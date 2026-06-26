@@ -75,6 +75,12 @@ export type NotificationTypeDefinition = {
   labelKey?: string
   /** Optional i18n key for helper text shown beside the type in a preferences UI. */
   descriptionKey?: string
+  /**
+   * When `true`, this type may be delivered as a silent / content-available push
+   * (a data-only wake-up that creates no in-app `Notification` row and bypasses
+   * per-channel preferences). Gates `pushNotificationService.sendSilentPush`.
+   */
+  silent?: boolean
 }
 
 export type NotificationDto = {
@@ -101,6 +107,8 @@ export type NotificationDto = {
   sourceEntityType?: string | null
   sourceEntityId?: string | null
   linkHref?: string | null
+  /** Arbitrary app-readable key/values attached at create time (also delivered with the push). */
+  data?: Record<string, string> | null
   createdAt: string
   readAt?: string | null
   actionTaken?: string | null

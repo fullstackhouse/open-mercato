@@ -21,6 +21,22 @@ export const notificationActionSchema = z.object({
   confirmMessage: z.string().optional(),
 })
 
+/**
+ * Flat per-provider push customization. Known keys are mapped onto each provider's native message
+ * by the push adapters; unknown keys are accepted (passthrough) for providers that understand them.
+ * See `communication_channels/lib/push-envelope.ts` (`PushOptions`).
+ */
+export const pushOptionsSchema = z
+  .object({
+    sound: z.string().optional(),
+    badge: z.number().int().nonnegative().optional(),
+    image: z.string().optional(),
+    priority: z.enum(['high', 'normal']).optional(),
+    channelId: z.string().optional(),
+    body: z.string().optional(),
+  })
+  .catchall(z.unknown())
+
 const baseNotificationFieldsSchema = z.object({
   type: z.string().min(1).max(100),
   titleKey: z.string().min(1).max(200).optional(),
@@ -39,6 +55,10 @@ const baseNotificationFieldsSchema = z.object({
   linkHref: safeRelativeHrefSchema.optional(),
   groupKey: z.string().optional(),
   expiresAt: z.string().datetime().optional(),
+  // Arbitrary app-readable key/values delivered with the push (and visible to in-app clients).
+  data: z.record(z.string(), z.string()).optional(),
+  // Per-provider push customization (sound, badge, image, priority, channelId, body override).
+  pushOptions: pushOptionsSchema.optional(),
 })
 
 const titleRequiredRefinement = {

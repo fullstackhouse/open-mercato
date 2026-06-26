@@ -77,6 +77,15 @@ export class Notification {
   @Property({ name: 'group_key', type: 'text', nullable: true })
   groupKey?: string | null
 
+  // Arbitrary app-readable key/values delivered with the push payload and exposed to in-app clients.
+  @Property({ name: 'data', type: 'json', nullable: true })
+  data?: Record<string, string> | null
+
+  // Per-provider push customization (sound/badge/image/priority/channelId/body); push-only.
+  // Typed loosely to keep notifications decoupled from communication_channels' PushOptions.
+  @Property({ name: 'push_options', type: 'json', nullable: true })
+  pushOptions?: Record<string, unknown> | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
