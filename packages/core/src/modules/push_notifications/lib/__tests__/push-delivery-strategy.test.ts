@@ -164,6 +164,24 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(row.silent).toBe(false)
   })
 
+  it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {
+    getTypeMock.mockReturnValue({ type: 'auth.account.locked', nonOptOut: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { type: 'auth.account.locked' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Forced types never consult the opt-out gate and always fan out.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(fork.create).toHaveBeenCalledTimes(1)
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    // A forced visible notification is not silent.
+    const row = fork.create.mock.calls[0][1] as { silent: boolean }
+    expect(row.silent).toBe(false)
+  })
+
   it('delivers a silent-typed notification without consulting preferences', async () => {
     getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
     const { ctx, fork } = makeCtx({

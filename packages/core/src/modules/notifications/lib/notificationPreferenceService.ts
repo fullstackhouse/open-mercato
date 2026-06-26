@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { NotificationPreference } from '../data/entities'
+import { getNotificationType } from './notification-type-registry'
 
 /**
  * Tenant + user scope for preference operations. Tenant scoping is mandatory,
@@ -59,7 +60,10 @@ export function createNotificationPreferenceService(
     },
 
     async setPreferences(scope, items) {
-      if (items.length === 0) return
+      // nonOptOut types ignore stored preferences at delivery time; refuse to persist an opt-out
+      // row for them so the stored state can never contradict enforcement.
+      const writable = items.filter((item) => getNotificationType(item.typeId)?.nonOptOut !== true)
+      if (writable.length === 0) return
       const em = rootEm.fork()
       const existing = await em.find(NotificationPreference, {
         tenantId: scope.tenantId,
@@ -73,7 +77,7 @@ export function createNotificationPreferenceService(
         em,
         [
           () => {
-            for (const item of items) {
+            for (const item of writable) {
               const row = byKey.get(`${item.typeId}::${item.channel}`)
               if (row) {
                 row.enabled = item.enabled

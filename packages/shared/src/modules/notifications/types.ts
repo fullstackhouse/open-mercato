@@ -81,6 +81,13 @@ export type NotificationTypeDefinition = {
    * per-channel preferences). Gates `pushNotificationService.sendSilentPush`.
    */
   silent?: boolean
+  /**
+   * When `true`, the recipient cannot opt out of this type: delivery ignores any
+   * stored per-channel preference (security/account alerts that must always be
+   * delivered). A preferences UI should render it as locked/forced-on, and
+   * `setPreferences` refuses to store an opt-out row for it.
+   */
+  nonOptOut?: boolean
 }
 
 export type NotificationDto = {

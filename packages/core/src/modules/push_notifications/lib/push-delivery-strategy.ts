@@ -42,8 +42,9 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     const silent = type.silent === true
 
     // Respect the recipient's per-channel preference for visible notifications (default-on when
-    // unset). Silent pushes are type-derived background wake-ups and are not gated by user opt-out.
-    if (!silent) {
+    // unset). Two type-level bypasses skip the opt-out check: silent pushes (background wake-ups,
+    // not user-facing) and nonOptOut types (security/account alerts the user cannot disable).
+    if (!silent && type.nonOptOut !== true) {
       const preferences = resolveNotificationPreferenceService({ resolve: ctx.resolve })
       const enabled = await preferences.isChannelEnabled({ tenantId, userId }, notification.type, PUSH_CHANNEL)
       if (!enabled) return

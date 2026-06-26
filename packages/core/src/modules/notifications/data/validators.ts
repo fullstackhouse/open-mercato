@@ -139,6 +139,8 @@ export const notificationTypeItemSchema = z.object({
   id: z.string(),
   labelKey: z.string(),
   descriptionKey: z.string().nullable().optional(),
+  // When true the type cannot be opted out of; a preferences UI should lock it on.
+  nonOptOut: z.boolean(),
 })
 
 // Per-user channel preferences
