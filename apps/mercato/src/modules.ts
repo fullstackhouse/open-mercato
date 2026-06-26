@@ -100,6 +100,9 @@ export const enabledModules: ModuleEntry[] = [
   // (Slack, WhatsApp, Email) to the unified Messages inbox. Provider packages
   // (channel-slack, channel-whatsapp, future email providers) register adapters here.
   { id: 'communication_channels', from: '@open-mercato/core' },
+  // Push notification rails — `push` delivery strategy + delivery log + send-push worker.
+  // Fans out to `devices` tokens and sends through the `communication_channels` hub.
+  { id: 'push_notifications', from: '@open-mercato/core' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
   { id: 'translations', from: '@open-mercato/core' },
   { id: 'scheduler', from: '@open-mercato/scheduler' },
