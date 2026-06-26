@@ -20,7 +20,7 @@ const RESOURCE_KIND = 'devices.user_device'
 
 // push_token is a secret. The mutation guard forwards mutationPayload into record-lock conflict
 // details that are returned to clients, so strip the token before it reaches the guard.
-function redactMutationPayload(
+export function redactMutationPayload(
   payload: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   if (!payload || !('pushToken' in payload)) return payload

@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { EntityName } from '@mikro-orm/core'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { CommandBus } from '@open-mercato/shared/lib/commands'
 import type { ChannelAdapter, SendMessageResult } from '@open-mercato/core/modules/communication_channels/lib/adapter'
 import { DEVICE_UNREGISTERED } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
@@ -152,8 +153,15 @@ export async function processPushDeliveryJob(
   if (delivery.status !== 'pending') return { status: delivery.status, deliveryId: delivery.id }
 
   // Resolve the device for its full (secret) push token. Soft via DI token to avoid coupling.
+  // `push_token` is encrypted at rest, so decrypt on read (no-op when encryption is disabled).
   const DeviceRef = resolve('UserDevice') as EntityName<UserDevice>
-  const device = await em.findOne(DeviceRef, { id: delivery.userDeviceId, tenantId: job.tenantId, deletedAt: null })
+  const device = await findOneWithDecryption(
+    em,
+    DeviceRef,
+    { id: delivery.userDeviceId, tenantId: job.tenantId, deletedAt: null },
+    undefined,
+    { tenantId: job.tenantId, organizationId: job.organizationId ?? null },
+  )
   if (!device || !device.pushToken) {
     delivery.status = 'skipped'
     delivery.lastError = 'device_unavailable'

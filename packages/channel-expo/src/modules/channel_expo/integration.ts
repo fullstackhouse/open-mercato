@@ -1,10 +1,7 @@
 import {
-  buildIntegrationDetailWidgetSpotId,
   type IntegrationBundle,
   type IntegrationDefinition,
 } from '@open-mercato/shared/modules/integrations/types'
-
-export const channelExpoDetailWidgetSpotId = buildIntegrationDetailWidgetSpotId('channel_expo')
 
 export const integration: IntegrationDefinition = {
   id: 'channel_expo',
@@ -31,9 +28,6 @@ export const integration: IntegrationDefinition = {
       changelog: 'Expo push service via expo-server-sdk (ExponentPushToken delivery).',
     },
   ],
-  detailPage: {
-    widgetSpotId: channelExpoDetailWidgetSpotId,
-  },
   credentials: {
     fields: [
       {

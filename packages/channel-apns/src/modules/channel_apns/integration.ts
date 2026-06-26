@@ -1,10 +1,7 @@
 import {
-  buildIntegrationDetailWidgetSpotId,
   type IntegrationBundle,
   type IntegrationDefinition,
 } from '@open-mercato/shared/modules/integrations/types'
-
-export const channelApnsDetailWidgetSpotId = buildIntegrationDetailWidgetSpotId('channel_apns')
 
 export const integration: IntegrationDefinition = {
   id: 'channel_apns',
@@ -31,9 +28,6 @@ export const integration: IntegrationDefinition = {
       changelog: 'Apple Push Notification service over HTTP/2 with token-based .p8 auth (@parse/node-apn).',
     },
   ],
-  detailPage: {
-    widgetSpotId: channelApnsDetailWidgetSpotId,
-  },
   credentials: {
     fields: [
       {

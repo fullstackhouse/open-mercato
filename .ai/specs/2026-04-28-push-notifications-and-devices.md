@@ -159,6 +159,9 @@ Channel modules consume this service via DI; they do not query the table directl
 
 **ACL:** `notifications.manage_preferences` (self-serve, granted by default to all roles).
 
+**Events (`events.ts`):**
+- `notifications.preference.updated` — emitted after a successful `PUT /api/notifications/preferences` write so other components (e.g. channel modules, real-time UI) can react to a user toggling a channel preference.
+
 ### Module 3 — `@open-mercato/core/modules/push_notifications` (new)
 
 > **Architecture revision (2026-06-25).** The original draft (below) put the provider seam (`PushProvider` interface + FCM/APNs implementations) inside this module. **Revised:** the actual provider send rides the existing **`communication_channels` hub**, per the maintainer's request on PR #2595 ("push notifications support via the `communication_channels` hub … so it will be end2end feature"). This was verified feasible with **no `ChannelAdapter` contract change**:
@@ -475,20 +478,22 @@ Each phase ends with passing integration tests + green build. One PR per phase. 
 - [x] `AGENTS.md` shipped with the `devices` module
 - [x] No hardcoded design-system colors or arbitrary text sizes *(admin pages)*
 - [x] BC contract honored (type IDs frozen, additive-only schema changes thereafter)
-- [x] `push_token` treated as a secret: excluded from list/detail responses, redacted from audit-log command snapshots + derived `changesJson`, and stripped from the mutation-guard payload; real token retained only in the non-exposed undo payload
+- [x] `push_token` treated as a secret: **encrypted at rest** (`devices/encryption.ts` `defaultEncryptionMaps` → `findWithDecryption`/`findOneWithDecryption` at every read site, no-op when tenant encryption is disabled), excluded from list/detail responses, redacted from audit-log command snapshots + derived `changesJson`, and stripped from the mutation-guard payload; real token retained only in the non-exposed undo payload. Redaction asserted by `devices/__tests__/push-token-redaction.test.ts`.
 
-Phases 2–6 (remaining):
+Phases 2–4 (complete):
 
-- [ ] All routes export `openApi`
-- [ ] Module entities follow snake_case table names with `<module>_` prefix
-- [ ] No direct ORM relationships across module boundaries (links declared via `data/extensions.ts`)
-- [ ] All write routes use the Command pattern OR `makeCrudRoute`
-- [ ] Provider implementations redact tokens and payloads from logs
-- [ ] Integration suites self-contained and stable
-- [ ] `AGENTS.md` shipped with each new module; existing `notifications/AGENTS.md` updated for new surfaces
-- [ ] No hardcoded design-system colors or arbitrary text sizes
-- [ ] `yarn lint` and `yarn build` green
-- [ ] BC contract honored (type IDs frozen, additive-only schema changes thereafter)
+- [x] All routes export `openApi` *(notifications types/preferences + push_notifications deliveries routes)*
+- [x] Module entities follow snake_case table names with `<module>_` prefix *(`notification_types`, `notification_preferences`, `push_notification_deliveries`)*
+- [x] No direct ORM relationships across module boundaries *(links declared via `data/extensions.ts`; cross-module reads resolved softly via DI tokens)*
+- [x] All write routes use the Command pattern OR `makeCrudRoute` *(preferences via mutation guard; deliveries append-only via command path)*
+- [x] Provider implementations redact tokens and payloads from logs *(adapters carry only `metadata.pushToken`; delivery rows store last-8 `token_snapshot` only — never the full token)*
+- [x] Integration suites self-contained and stable *(`TC-DEV-001`/`TC-DEV-002`, `TC-PUSH-001`; ORM-backed seeding + teardown)*
+- [x] `AGENTS.md` shipped with each new module *(devices + the three `channel-*` packages; `notifications/AGENTS.md` covers the new surfaces)*
+- [x] No hardcoded design-system colors or arbitrary text sizes *(preferences + delivery-log admin pages use status tokens)*
+- [x] BC contract honored (type IDs frozen, additive-only schema changes — `labelKey`/`descriptionKey` added additively to `NotificationTypeDefinition`)
+- [x] `yarn build` / `yarn typecheck` green across all packages. **`yarn lint` remains blocked by the pre-existing ESLint-10 toolchain crash (unrelated to this work).**
+
+Phases 5–6: dissolved / deferred — see "Downstream Parity Review → Deferred to a later spec" below.
 
 ## Downstream Parity Review (`user_notifications`)
 

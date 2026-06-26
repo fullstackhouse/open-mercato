@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { EntityName } from '@mikro-orm/core'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { NotificationDeliveryStrategy } from '@open-mercato/core/modules/notifications/lib/deliveryStrategies'
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
@@ -67,13 +68,21 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     if (!enabled) return
 
     // 4. Load the recipient's devices that can receive push (active + has a token).
+    //    `push_token` is encrypted at rest; decrypt on read (no-op when encryption is disabled) so
+    //    the per-row token snapshot below is taken from the plaintext value.
     const DeviceRef = ctx.resolve('UserDevice') as EntityName<UserDevice>
-    const devices = await em.find(DeviceRef, {
-      tenantId,
-      userId,
-      deletedAt: null,
-      pushToken: { $ne: null },
-    })
+    const devices = await findWithDecryption(
+      em,
+      DeviceRef,
+      {
+        tenantId,
+        userId,
+        deletedAt: null,
+        pushToken: { $ne: null },
+      },
+      undefined,
+      { tenantId, organizationId },
+    )
     if (devices.length === 0) return
 
     const data: Record<string, string> = {

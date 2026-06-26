@@ -1,10 +1,7 @@
 import {
-  buildIntegrationDetailWidgetSpotId,
   type IntegrationBundle,
   type IntegrationDefinition,
 } from '@open-mercato/shared/modules/integrations/types'
-
-export const channelFcmDetailWidgetSpotId = buildIntegrationDetailWidgetSpotId('channel_fcm')
 
 export const integration: IntegrationDefinition = {
   id: 'channel_fcm',
@@ -31,9 +28,6 @@ export const integration: IntegrationDefinition = {
       changelog: 'Firebase Cloud Messaging HTTP v1 via firebase-admin (service-account auth).',
     },
   ],
-  detailPage: {
-    widgetSpotId: channelFcmDetailWidgetSpotId,
-  },
   credentials: {
     fields: [
       {
