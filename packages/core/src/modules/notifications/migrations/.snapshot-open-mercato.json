@@ -254,6 +254,23 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "non_opt_out": {
+          "name": "non_opt_out",
+          "type": "boolean",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        },
         "tenant_id": {
           "name": "tenant_id",
           "type": "uuid",
@@ -456,6 +473,23 @@
           "enumItems": [],
           "mappedType": "datetime"
         },
+        "data": {
+          "name": "data",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
         "dismissed_at": {
           "name": "dismissed_at",
           "type": "timestamptz(6)",
@@ -574,6 +608,23 @@
           "collation": null,
           "enumItems": [],
           "mappedType": "uuid"
+        },
+        "push_options": {
+          "name": "push_options",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "json"
         },
         "read_at": {
           "name": "read_at",

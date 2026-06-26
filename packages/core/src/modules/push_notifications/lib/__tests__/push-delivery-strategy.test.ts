@@ -27,6 +27,7 @@ const channelRef = { __entity: 'CommunicationChannel' }
 function makeCtx(opts: {
   channels?: Array<Record<string, unknown>>
   devices?: Array<Record<string, unknown>>
+  notification?: Record<string, unknown>
 }) {
   const fork = {
     create: jest.fn((_entity: unknown, data: Record<string, unknown>) => ({ id: `del-${data.userDeviceId}`, ...data })),
@@ -50,18 +51,23 @@ function makeCtx(opts: {
     tenantId: TENANT,
     organizationId: null,
     linkHref: '/orders/1',
+    ...(opts.notification ?? {}),
   }
   const ctx = { notification, title: 'Shipped', body: 'Your order shipped', resolve } as never
   return { ctx, em, fork }
 }
 
+const isChannelEnabledMock = jest.fn(async () => true)
+
 beforeEach(() => {
   getTypeMock.mockReset()
   resolvePrefsMock.mockReset()
   enqueueMock.mockClear()
+  isChannelEnabledMock.mockClear()
+  isChannelEnabledMock.mockResolvedValue(true)
   // Default: known type, push enabled.
   getTypeMock.mockReturnValue({ type: 'orders.shipped' } as never)
-  resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => true) } as never)
+  resolvePrefsMock.mockReturnValue({ isChannelEnabled: isChannelEnabledMock } as never)
 })
 
 describe('mobilePushDeliveryStrategy', () => {
@@ -74,7 +80,7 @@ describe('mobilePushDeliveryStrategy', () => {
   })
 
   it('skips when the recipient opted out of push for the type', async () => {
-    resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => false) } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
     const { ctx, fork } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }],
@@ -141,5 +147,53 @@ describe('mobilePushDeliveryStrategy', () => {
       }),
     )
     expect(providersByDevice).toEqual({ 'ios-1': 'apns', 'android-1': 'fcm' })
+  })
+
+  it('threads caller data + pushOptions into the delivery payload', async () => {
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { data: { orderId: 'o-1' }, pushOptions: { sound: 'chime.caf', badge: 3 } },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    const row = fork.create.mock.calls[0][1] as { payload: Record<string, unknown>; silent: boolean }
+    const payload = row.payload as { data: Record<string, string>; options: Record<string, unknown>; silent: boolean }
+    expect(payload.data).toMatchObject({ orderId: 'o-1', notificationId: 'notif-1', type: 'orders.shipped' })
+    expect(payload.options).toEqual({ sound: 'chime.caf', badge: 3 })
+    expect(payload.silent).toBe(false)
+    expect(row.silent).toBe(false)
+  })
+
+  it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {
+    getTypeMock.mockReturnValue({ type: 'auth.account.locked', nonOptOut: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { type: 'auth.account.locked' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Forced types never consult the opt-out gate and always fan out.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(fork.create).toHaveBeenCalledTimes(1)
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    // A forced visible notification is not silent.
+    const row = fork.create.mock.calls[0][1] as { silent: boolean }
+    expect(row.silent).toBe(false)
+  })
+
+  it('delivers a silent-typed notification without consulting preferences', async () => {
+    getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Silent (background) pushes are type-derived and bypass the user opt-out gate.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    const row = fork.create.mock.calls[0][1] as { payload: { silent: boolean }; silent: boolean }
+    expect(row.silent).toBe(true)
+    expect(row.payload.silent).toBe(true)
   })
 })

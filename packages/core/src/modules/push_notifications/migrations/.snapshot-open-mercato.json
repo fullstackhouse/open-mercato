@@ -195,6 +195,23 @@
           "enumItems": [],
           "mappedType": "datetime"
         },
+        "silent": {
+          "name": "silent",
+          "type": "boolean",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        },
         "status": {
           "name": "status",
           "type": "text",

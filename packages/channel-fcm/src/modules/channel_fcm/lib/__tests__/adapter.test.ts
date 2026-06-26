@@ -40,6 +40,56 @@ describe('FcmChannelAdapter', () => {
     expect(message.data).toEqual({ type: 'orders.shipped', notificationId: 'n1' })
   })
 
+  it('sends a data-only content-available message when the envelope is silent', async () => {
+    const send = jest.fn().mockResolvedValue('projects/demo/messages/silent')
+    setFcmMessagingFactory(() => ({ send }))
+
+    const result = await getFcmChannelAdapter().sendMessage(
+      buildInput({
+        content: { raw: { title: '', body: '', data: { type: 'esim.installation_data' }, silent: true } },
+      }),
+    )
+
+    expect(result.status).toBe('sent')
+    const message = send.mock.calls[0][0]
+    expect(message.notification).toBeUndefined()
+    expect(message.data).toEqual({ type: 'esim.installation_data' })
+    expect(message.apns.payload.aps['content-available']).toBe(1)
+    expect(message.apns.headers['apns-push-type']).toBe('background')
+  })
+
+  it('applies push options (sound/badge/image/priority/channel/body) to the native message', async () => {
+    const send = jest.fn().mockResolvedValue('projects/demo/messages/opts')
+    setFcmMessagingFactory(() => ({ send }))
+
+    await getFcmChannelAdapter().sendMessage(
+      buildInput({
+        content: {
+          raw: {
+            title: 'Hello',
+            body: 'Body text',
+            data: {},
+            options: {
+              sound: 'chime.caf',
+              badge: 3,
+              image: 'https://cdn/x.png',
+              priority: 'normal',
+              channelId: 'orders',
+              body: 'override body',
+            },
+          },
+        },
+      }),
+    )
+
+    const message = send.mock.calls[0][0]
+    expect(message.notification).toEqual({ title: 'Hello', body: 'override body', imageUrl: 'https://cdn/x.png' })
+    expect(message.android.priority).toBe('normal')
+    expect(message.android.notification).toEqual({ sound: 'chime.caf', channelId: 'orders', imageUrl: 'https://cdn/x.png' })
+    expect(message.apns.headers['apns-priority']).toBe('5')
+    expect(message.apns.payload.aps).toEqual({ sound: 'chime.caf', badge: 3 })
+  })
+
   it('fails fast when the push token is missing', async () => {
     const result = await getFcmChannelAdapter().sendMessage(buildInput({ metadata: { platform: 'android' } }))
     expect(result.status).toBe('failed')

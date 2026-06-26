@@ -44,6 +44,8 @@ export function buildNotificationEntity(
     sourceEntityId: input.sourceEntityId,
     linkHref,
     groupKey: input.groupKey,
+    data: input.data ?? null,
+    pushOptions: input.pushOptions ?? null,
     expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
     tenantId: ctx.tenantId,
     organizationId: ctx.organizationId,

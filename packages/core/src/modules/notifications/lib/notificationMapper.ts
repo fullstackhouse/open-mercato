@@ -37,6 +37,7 @@ export function toNotificationDto(notification: Notification): NotificationDto {
     sourceEntityType: notification.sourceEntityType,
     sourceEntityId: notification.sourceEntityId,
     linkHref: notification.linkHref,
+    data: notification.data ?? null,
     createdAt: createdAt.toISOString(),
     readAt: notification.readAt?.toISOString() ?? null,
     actionTaken: notification.actionTaken,

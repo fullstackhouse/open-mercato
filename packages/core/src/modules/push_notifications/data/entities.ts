@@ -27,6 +27,7 @@ export class PushNotificationDelivery {
     | 'attempts'
     | 'lastError'
     | 'providerResponse'
+    | 'silent'
     | 'createdAt'
     | 'sentAt'
     | 'updatedAt'
@@ -61,6 +62,11 @@ export class PushNotificationDelivery {
   // Last 8 chars of the device push token only — never the full secret.
   @Property({ name: 'token_snapshot', type: 'text' })
   tokenSnapshot!: string
+
+  // Snapshot of whether this was a silent / content-available wake-up (derived from the
+  // notification type's `silent` flag at fan-out time) so the log distinguishes silent deliveries.
+  @Property({ name: 'silent', type: 'boolean', default: false })
+  silent: boolean = false
 
   @Property({ name: 'status', type: 'text', default: 'pending' })
   status: PushDeliveryStatus = 'pending'

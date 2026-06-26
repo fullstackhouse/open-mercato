@@ -2,6 +2,7 @@ import { asValue } from 'awilix'
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import { PushNotificationDelivery } from './data/entities'
 import { ensurePushStubAdapterRegistered } from './lib/push-stub-adapter'
+import { pushNotificationService } from './lib/send-silent-push'
 
 export function register(container: AppContainer) {
   // Test-only: register the network-free `push_stub` channel adapter when
@@ -12,5 +13,8 @@ export function register(container: AppContainer) {
 
   container.register({
     PushNotificationDelivery: asValue(PushNotificationDelivery),
+    // Stateless service so other modules' subscribers/commands can trigger a silent push
+    // (decoupled via DI). The caller passes its own scoped `resolve` in the call args.
+    pushNotificationService: asValue(pushNotificationService),
   })
 }

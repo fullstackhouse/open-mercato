@@ -73,6 +73,7 @@ export async function syncNotificationTypes(
         for (const def of definitions) {
           const labelKey = def.labelKey ?? def.titleKey
           const descriptionKey = def.descriptionKey ?? null
+          const nonOptOut = def.nonOptOut === true
           const row = byId.get(def.type)
           if (!row) {
             const next = em.create(NotificationType, {
@@ -80,14 +81,20 @@ export async function syncNotificationTypes(
               tenantId: null,
               labelKey,
               descriptionKey,
+              nonOptOut,
             })
             em.persist(next)
             created += 1
             continue
           }
-          if (row.labelKey !== labelKey || (row.descriptionKey ?? null) !== descriptionKey) {
+          if (
+            row.labelKey !== labelKey ||
+            (row.descriptionKey ?? null) !== descriptionKey ||
+            row.nonOptOut !== nonOptOut
+          ) {
             row.labelKey = labelKey
             row.descriptionKey = descriptionKey
+            row.nonOptOut = nonOptOut
             updated += 1
           }
         }

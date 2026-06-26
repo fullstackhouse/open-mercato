@@ -128,6 +128,30 @@ describe('processPushDeliveryJob', () => {
     expect(emitMock).toHaveBeenCalledWith('push_notifications.delivery.sent', expect.any(Object), expect.any(Object))
   })
 
+  it('packs data, options and the silent flag into the send envelope', async () => {
+    const delivery = makeDelivery({
+      payload: {
+        title: 'Hi',
+        body: 'There',
+        data: { orderId: 'o-1' },
+        options: { sound: 'chime.caf', badge: 2 },
+        silent: true,
+      },
+    })
+    const h = makeHarness({ delivery })
+
+    await processPushDeliveryJob(h.em as never, job, h.resolve)
+
+    const raw = (h.sendMessage.mock.calls[0][0] as { content: { raw: Record<string, unknown> } }).content.raw
+    expect(raw).toMatchObject({
+      title: 'Hi',
+      body: 'There',
+      data: { orderId: 'o-1' },
+      options: { sound: 'chime.caf', badge: 2 },
+      silent: true,
+    })
+  })
+
   it('is idempotent: a non-pending delivery is a no-op', async () => {
     const delivery = makeDelivery({ status: 'sent' })
     const h = makeHarness({ delivery })
