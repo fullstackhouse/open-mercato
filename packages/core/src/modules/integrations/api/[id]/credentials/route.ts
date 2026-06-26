@@ -3,6 +3,11 @@ import { z } from 'zod'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getIntegration } from '@open-mercato/shared/modules/integrations/types'
+import {
+  preserveUnchangedSecretCredentials,
+  redactSecretCredentials,
+  secretCredentialFieldKeys,
+} from '@open-mercato/shared/modules/integrations/secret-fields'
 import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/optimistic-lock-command'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { emitIntegrationsEvent } from '../../../events'
@@ -71,10 +76,19 @@ export async function GET(req: Request, ctx: { params?: Promise<{ id?: string }>
     throw error
   }
 
+  // Write-only secrets: never return `type:'secret'` VALUES on read. Instead
+  // report which secrets currently have a stored value (`secretsSet`) so the
+  // admin UI can render "•••••• set — type to replace". `resolve()` above still
+  // returns the real secret server-side for sync/health — only this response is
+  // redacted.
+  const schema = credentialsService.getSchema(integration.id)
+  const { credentials, secretsSet } = redactSecretCredentials(values ?? {}, schema)
+
   return NextResponse.json({
     integrationId: integration.id,
-    schema: credentialsService.getSchema(integration.id),
-    credentials: values ?? {},
+    schema,
+    credentials,
+    secretsSet,
     updatedAt: updatedAt?.toISOString() ?? null,
   })
 }
@@ -153,8 +167,9 @@ export async function PUT(req: Request, ctx: { params?: Promise<{ id?: string }>
     throw error
   }
 
+  const schema = credentialsService.getSchema(integration.id)
   const credentialFieldErrors = collectCredentialUrlValidationErrors(
-    credentialsService.getSchema(integration.id),
+    schema,
     payloadData.credentials,
   )
   if (Object.keys(credentialFieldErrors).length > 0) {
@@ -164,8 +179,28 @@ export async function PUT(req: Request, ctx: { params?: Promise<{ id?: string }>
     )
   }
 
+  // Write-only secrets: a blank/omitted `type:'secret'` value means "unchanged",
+  // not "clear". The admin form re-submits every field (with secret values
+  // redacted out by GET), so re-saving without retyping a secret would otherwise
+  // wipe it. Preserve the stored secret the operator currently sees as set
+  // (`resolve()` — same source the GET `secretsSet` came from). Skips the extra
+  // read entirely when the schema has no secret fields.
+  let credentialsToSave = payloadData.credentials
+  if (secretCredentialFieldKeys(schema).length > 0) {
+    let existingCredentials: Record<string, unknown> | null
+    try {
+      existingCredentials = await credentialsService.resolve(integration.id, scope)
+    } catch (error) {
+      if (isCredentialsEncryptionUnavailableError(error)) {
+        return NextResponse.json({ error: 'Integration credentials encryption is unavailable' }, { status: 503 })
+      }
+      throw error
+    }
+    credentialsToSave = preserveUnchangedSecretCredentials(payloadData.credentials, existingCredentials, schema)
+  }
+
   try {
-    await credentialsService.save(integration.id, payloadData.credentials, scope)
+    await credentialsService.save(integration.id, credentialsToSave, scope)
   } catch (error) {
     if (isCredentialsEncryptionUnavailableError(error)) {
       return NextResponse.json({ error: 'Integration credentials encryption is unavailable' }, { status: 503 })

@@ -290,7 +290,11 @@ function resolvePathnameId(pathname: string): string | undefined {
   return decodeURIComponent(integrationId)
 }
 
-function buildCredentialFields(credFields: CredentialField[]): CrudField[] {
+function buildCredentialFields(
+  credFields: CredentialField[],
+  secretsSet: ReadonlySet<string>,
+  t: ReturnType<typeof useT>,
+): CrudField[] {
   return credFields.map((field) => {
     const shared = {
       id: field.key,
@@ -307,13 +311,23 @@ function buildCredentialFields(credFields: CredentialField[]): CrudField[] {
     }
 
     if (field.type === 'secret') {
+      // Write-only secret: the GET response never returns the stored value, so
+      // the input renders empty. When the secret is already set, hint that it is
+      // saved and submitting a value replaces it; leaving it blank keeps it.
+      const isSet = secretsSet.has(field.key)
+      const secretPlaceholder = isSet
+        ? t('integrations.detail.credentials.secret.setPlaceholder', '•••••• Saved — type to replace')
+        : field.placeholder
       return {
         ...shared,
+        // A required secret that is already stored is satisfied server-side, so
+        // don't force the operator to retype it just to save other fields.
+        required: field.required && !isSet,
         type: 'custom' as const,
         component: ({ id, value, setValue, disabled }) => (
           <PasswordInput
             id={id}
-            placeholder={field.placeholder}
+            placeholder={secretPlaceholder}
             value={typeof value === 'string' ? value : ''}
             onChange={(event) => setValue(event.target.value)}
             disabled={disabled}
@@ -426,6 +440,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
   const [isNotFound, setIsNotFound] = React.useState(false)
 
   const [credValues, setCredValues] = React.useState<Record<string, unknown>>({})
+  const [credentialSecretsSet, setCredentialSecretsSet] = React.useState<string[]>([])
   const [credentialsUpdatedAt, setCredentialsUpdatedAt] = React.useState<string | null>(null)
   const [credentialsFormKey, setCredentialsFormKey] = React.useState(0)
   const [isSavingCredentials, setIsSavingCredentials] = React.useState(false)
@@ -490,7 +505,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
   const loadCredentials = React.useCallback(async () => {
     const currentIntegrationId = resolveCurrentIntegrationId()
     if (!currentIntegrationId) return
-    const call = await apiCall<{ credentials: Record<string, unknown>; updatedAt?: string | null }>(
+    const call = await apiCall<{ credentials: Record<string, unknown>; secretsSet?: string[]; updatedAt?: string | null }>(
       `/api/integrations/${encodeURIComponent(currentIntegrationId)}/credentials`,
       undefined,
       { fallback: null },
@@ -499,11 +514,15 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
       setCredentialsUpdatedAt(call.result.updatedAt ?? null)
     }
     if (call.ok && call.result?.credentials) {
+      // Write-only secrets are never returned in `credentials`; `secretsSet`
+      // lists the secret keys that currently have a stored value.
+      const secretsSet = Array.isArray(call.result.secretsSet) ? call.result.secretsSet : []
+      setCredentialSecretsSet(secretsSet)
       const next = { ...call.result.credentials }
       if (currentIntegrationId === 'storage_s3') {
         const authMode = next.authMode
         if (authMode !== 'access_keys' && authMode !== 'ambient') {
-          const hasKeys = Boolean(next.accessKeyId || next.secretAccessKey)
+          const hasKeys = Boolean(next.accessKeyId || secretsSet.includes('secretAccessKey'))
           next.authMode = hasKeys ? 'access_keys' : 'ambient'
         }
       }
@@ -714,10 +733,26 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
     setIsSavingCredentials(true)
     try {
       const sanitizedValues = { ...values }
+      // Write-only secrets: only submit a secret the operator actually retyped.
+      // A blank secret is dropped so the server preserves the stored value
+      // instead of receiving an empty string.
+      const secretFieldKeysForSave = (detail?.integration.credentials?.fields ?? detail?.bundle?.credentials?.fields ?? [])
+        .filter((field) => field.type === 'secret')
+        .map((field) => field.key)
+      for (const key of secretFieldKeysForSave) {
+        const value = sanitizedValues[key]
+        if (value == null || (typeof value === 'string' && value.length === 0)) {
+          delete sanitizedValues[key]
+        }
+      }
       if (currentIntegrationId === 'storage_s3') {
         const authMode = sanitizedValues.authMode
         if (authMode !== 'access_keys' && authMode !== 'ambient') {
-          const hasKeys = Boolean(sanitizedValues.accessKeyId || sanitizedValues.secretAccessKey)
+          const hasKeys = Boolean(
+            sanitizedValues.accessKeyId
+              || sanitizedValues.secretAccessKey
+              || credentialSecretsSet.includes('secretAccessKey'),
+          )
           sanitizedValues.authMode = hasKeys ? 'access_keys' : 'ambient'
         }
         if (sanitizedValues.authMode === 'ambient') {
@@ -760,7 +795,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
     } finally {
       setIsSavingCredentials(false)
     }
-  }, [credentialsUpdatedAt, loadCredentials, resolveCurrentIntegrationId, runMutationWithContext, t])
+  }, [credentialSecretsSet, credentialsUpdatedAt, detail, loadCredentials, resolveCurrentIntegrationId, runMutationWithContext, t])
 
   const handleVersionChange = React.useCallback(async (version: string) => {
     const currentIntegrationId = resolveCurrentIntegrationId()
@@ -837,9 +872,17 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
     () => (detail?.integration.credentials?.fields ?? detail?.bundle?.credentials?.fields ?? []).filter(isEditableCredentialField),
     [detail?.bundle?.credentials?.fields, detail?.integration.credentials?.fields],
   )
-  const credentialFormFields = React.useMemo(
-    () => buildCredentialFields(editableCredentialFields),
+  const secretCredentialFieldKeys = React.useMemo(
+    () => new Set(editableCredentialFields.filter((field) => field.type === 'secret').map((field) => field.key)),
     [editableCredentialFields],
+  )
+  const credentialSecretsSetLookup = React.useMemo(
+    () => new Set(credentialSecretsSet),
+    [credentialSecretsSet],
+  )
+  const credentialFormFields = React.useMemo(
+    () => buildCredentialFields(editableCredentialFields, credentialSecretsSetLookup, t),
+    [credentialSecretsSetLookup, editableCredentialFields, t],
   )
   const credentialSchema = React.useMemo(() => (
     z.object({}).passthrough().superRefine((rawValues, ctx) => {
@@ -881,7 +924,10 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
 
         const normalizedValue = typeof value === 'string' ? value : ''
 
-        if (field.required && normalizedValue.trim().length === 0) {
+        // A required write-only secret that is already stored is satisfied
+        // server-side (a blank submit preserves it), so don't flag it required.
+        const secretAlreadySet = field.type === 'secret' && credentialSecretsSetLookup.has(field.key)
+        if (field.required && !secretAlreadySet && normalizedValue.trim().length === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [field.key],
@@ -923,7 +969,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
         }
       })
     })
-  ) as z.ZodType<Record<string, unknown>>, [editableCredentialFields, t])
+  ) as z.ZodType<Record<string, unknown>>, [credentialSecretsSetLookup, editableCredentialFields, t])
   const latestHealthLog = React.useMemo(() => logs.find(isHealthLog) ?? null, [logs])
   const latestOperationalLog = React.useMemo(
     () => logs.find((log) => (

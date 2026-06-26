@@ -91,6 +91,7 @@
   "integrations.detail.credentials.save": "Zugangsdaten speichern",
   "integrations.detail.credentials.saveError": "Zugangsdaten konnten nicht gespeichert werden",
   "integrations.detail.credentials.saved": "Zugangsdaten gespeichert",
+  "integrations.detail.credentials.secret.setPlaceholder": "•••••• Gespeichert — zum Ersetzen eingeben",
   "integrations.detail.credentials.validation.boolean": "Select a valid value.",
   "integrations.detail.credentials.validation.option": "Select one of the available options.",
   "integrations.detail.credentials.validation.required": "{field} is required.",
