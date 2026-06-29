@@ -76,6 +76,13 @@ export type NotificationTypeDefinition = {
   /** Optional i18n key for helper text shown beside the type in a preferences UI. */
   descriptionKey?: string
   /**
+   * Optional free-form grouping label (e.g. `security`, `orders`, `marketing`) so a
+   * client — typically a mobile app — can list/group notification types under a heading.
+   * Plain string, not an enum; mirrored to the `notification_types` table and returned by
+   * `GET /api/notifications/types`.
+   */
+  category?: string
+  /**
    * When `true`, this type may be delivered as a silent / content-available push
    * (a data-only wake-up that creates no in-app `Notification` row and bypasses
    * per-channel preferences). Gates `pushNotificationService.sendSilentPush`.

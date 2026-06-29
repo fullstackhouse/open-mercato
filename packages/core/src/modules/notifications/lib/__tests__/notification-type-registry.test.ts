@@ -3,7 +3,14 @@ import {
   getNotificationType,
   getNotificationTypes,
   registerNotificationTypes,
+  syncNotificationTypes,
 } from '../notification-type-registry'
+
+jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
+  withAtomicFlush: jest.fn(async (_em: unknown, phases: Array<() => unknown>) => {
+    for (const phase of phases) await phase()
+  }),
+}))
 
 function def(type: string, extra: Partial<NotificationTypeDefinition> = {}): NotificationTypeDefinition {
   return {
@@ -40,5 +47,58 @@ describe('notification-type-registry', () => {
     registerNotificationTypes([def('a.one', { labelKey: 'second' })])
     expect(getNotificationTypes()).toHaveLength(1)
     expect(getNotificationType('a.one')?.labelKey).toBe('second')
+  })
+})
+
+describe('syncNotificationTypes', () => {
+  beforeEach(() => {
+    registerNotificationTypes([], { replace: true })
+  })
+
+  it('mirrors category/silent/nonOptOut onto a newly created row', async () => {
+    registerNotificationTypes([
+      def('a.secure', { category: 'security', silent: true, nonOptOut: true }),
+    ])
+    const created: Array<Record<string, unknown>> = []
+    const em = {
+      find: jest.fn(async () => [] as unknown[]),
+      create: jest.fn((_entity: unknown, data: Record<string, unknown>) => {
+        created.push(data)
+        return data
+      }),
+      persist: jest.fn(),
+    }
+    const result = await syncNotificationTypes(em as never, { force: true })
+    expect(result.created).toBe(1)
+    expect(created[0]).toMatchObject({
+      id: 'a.secure',
+      category: 'security',
+      silent: true,
+      nonOptOut: true,
+    })
+  })
+
+  it('updates an existing row when category/silent drift', async () => {
+    registerNotificationTypes([
+      def('a.secure', { category: 'security', silent: true }),
+    ])
+    const row = {
+      id: 'a.secure',
+      labelKey: 'a.secure.title',
+      descriptionKey: null as string | null,
+      category: null as string | null,
+      silent: false,
+      nonOptOut: false,
+    }
+    const em = {
+      find: jest.fn(async () => [row]),
+      create: jest.fn(),
+      persist: jest.fn(),
+    }
+    const result = await syncNotificationTypes(em as never, { force: true })
+    expect(result.updated).toBe(1)
+    expect(em.create).not.toHaveBeenCalled()
+    expect(row.category).toBe('security')
+    expect(row.silent).toBe(true)
   })
 })

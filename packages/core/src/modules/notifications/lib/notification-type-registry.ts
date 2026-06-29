@@ -47,8 +47,8 @@ export type SyncNotificationTypesResult = {
 /**
  * Reconcile the in-memory catalogue into the `notification_types` table.
  * Code-registered types are system-wide, so rows are written with
- * `tenant_id IS NULL`. Idempotent: updates `label_key`/`description_key` only on
- * drift. Guarded by a once-per-process flag on the lazy path; pass `force` to
+ * `tenant_id IS NULL`. Idempotent: updates the mirrored columns
+ * (`label_key`/`description_key`/`category`/`silent`/`non_opt_out`) only on drift. Guarded by a once-per-process flag on the lazy path; pass `force` to
  * bypass it (used by the explicit `notifications.type_registry.sync` subscriber).
  */
 export async function syncNotificationTypes(
@@ -73,6 +73,8 @@ export async function syncNotificationTypes(
         for (const def of definitions) {
           const labelKey = def.labelKey ?? def.titleKey
           const descriptionKey = def.descriptionKey ?? null
+          const category = def.category ?? null
+          const silent = def.silent === true
           const nonOptOut = def.nonOptOut === true
           const row = byId.get(def.type)
           if (!row) {
@@ -81,6 +83,8 @@ export async function syncNotificationTypes(
               tenantId: null,
               labelKey,
               descriptionKey,
+              category,
+              silent,
               nonOptOut,
             })
             em.persist(next)
@@ -90,10 +94,14 @@ export async function syncNotificationTypes(
           if (
             row.labelKey !== labelKey ||
             (row.descriptionKey ?? null) !== descriptionKey ||
+            (row.category ?? null) !== category ||
+            row.silent !== silent ||
             row.nonOptOut !== nonOptOut
           ) {
             row.labelKey = labelKey
             row.descriptionKey = descriptionKey
+            row.category = category
+            row.silent = silent
             row.nonOptOut = nonOptOut
             updated += 1
           }
