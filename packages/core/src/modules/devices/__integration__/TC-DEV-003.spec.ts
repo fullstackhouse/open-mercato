@@ -162,7 +162,7 @@ test.describe('TC-DEV-005: Admin cross-organization device access denial', () =>
     const employeeScope = getTokenScope(employeeToken)
 
     const stamp = `${Date.now()}-${deviceCounter}`
-    const password = 'secret-restricted-admin'
+    const password = 'Restricted1!Admin'
     const restrictedEmail = `tc-dev-005-restricted-${stamp}@acme.com`
 
     let orgAId: string | null = null
