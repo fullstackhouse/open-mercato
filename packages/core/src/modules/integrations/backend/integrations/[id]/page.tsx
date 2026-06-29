@@ -38,6 +38,7 @@ import {
 } from '@open-mercato/shared/modules/integrations/types'
 import {
   isEmptyCredentialValue,
+  isSecretCredentialField,
   secretCredentialFieldKeys,
 } from '@open-mercato/shared/modules/integrations/secret-fields'
 import { LoadingMessage, ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
@@ -314,7 +315,7 @@ function buildCredentialFields(
       visibleWhen: field.visibleWhen,
     }
 
-    if (field.type === 'secret') {
+    if (isSecretCredentialField(field)) {
       // Write-only secret: the GET response never returns the stored value, so
       // the input renders empty. When the secret is already set, hint that it is
       // saved and submitting a value replaces it; leaving it blank keeps it.
@@ -925,7 +926,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
 
         // A required write-only secret that is already stored is satisfied
         // server-side (a blank submit preserves it), so don't flag it required.
-        const secretAlreadySet = field.type === 'secret' && credentialSecretsSetLookup.has(field.key)
+        const secretAlreadySet = isSecretCredentialField(field) && credentialSecretsSetLookup.has(field.key)
         if (field.required && !secretAlreadySet && normalizedValue.trim().length === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

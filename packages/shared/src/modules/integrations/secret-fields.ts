@@ -28,10 +28,15 @@ export type CredentialsRecord = Record<string, unknown>
  */
 export const SECRET_CREDENTIAL_FIELD_TYPES: ReadonlySet<string> = new Set(['secret'])
 
+/** Whether a credential field is a write-only secret. Single source of truth. */
+export function isSecretCredentialField(field: { type?: string } | null | undefined): boolean {
+  return !!field && SECRET_CREDENTIAL_FIELD_TYPES.has(String(field.type))
+}
+
 /** Keys of the schema's credential fields that are write-only secrets. */
 export function secretCredentialFieldKeys(schema: IntegrationCredentialsSchema | null | undefined): string[] {
   return (schema?.fields ?? [])
-    .filter((field) => field && typeof field.key === 'string' && SECRET_CREDENTIAL_FIELD_TYPES.has(String(field.type)))
+    .filter((field) => typeof field?.key === 'string' && isSecretCredentialField(field))
     .map((field) => field.key)
 }
 
