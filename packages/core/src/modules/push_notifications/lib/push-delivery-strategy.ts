@@ -3,6 +3,7 @@ import type { NotificationDeliveryStrategy } from '@open-mercato/core/modules/no
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
+import type { NotificationCopySource } from '@open-mercato/core/modules/notifications/lib/notificationCopy'
 import { fanOutPushDeliveries, PUSH_CHANNEL, type PushFanoutPayload } from './push-fanout'
 
 export { PUSH_CHANNEL } from './push-fanout'
@@ -57,12 +58,24 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     if (notification.linkHref) data.linkHref = notification.linkHref
 
     const payload: PushFanoutPayload = {
-      title: ctx.title,
-      body: ctx.body,
       data,
       options: (notification.pushOptions ?? undefined) as PushOptions | undefined,
       silent,
     }
+
+    // For visible notifications, hand the raw copy down so the fan-out can translate title/body per
+    // device locale. `ctx.title`/`ctx.body` are already resolved in the default locale and serve as
+    // the fallback. Silent pushes carry no user-facing copy, so they skip translation entirely.
+    const copy: NotificationCopySource | undefined = silent
+      ? undefined
+      : {
+          titleKey: notification.titleKey ?? null,
+          bodyKey: notification.bodyKey ?? null,
+          titleVariables: notification.titleVariables ?? null,
+          bodyVariables: notification.bodyVariables ?? null,
+          title: ctx.title,
+          body: ctx.body,
+        }
 
     await fanOutPushDeliveries({
       em,
@@ -72,6 +85,7 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
       notificationId: notification.id,
       notificationTypeId: notification.type,
       payload,
+      copy,
     })
   },
 }

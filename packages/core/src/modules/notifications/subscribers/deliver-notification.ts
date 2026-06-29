@@ -5,9 +5,7 @@ import { DEFAULT_NOTIFICATION_DELIVERY_CONFIG, resolveNotificationDeliveryConfig
 import { getNotificationDeliveryStrategies } from '../lib/deliveryStrategies'
 import { sendEmail } from '@open-mercato/shared/lib/email/send'
 import NotificationEmail from '../emails/NotificationEmail'
-import { loadDictionary } from '@open-mercato/shared/lib/i18n/server'
-import { createFallbackTranslator } from '@open-mercato/shared/lib/i18n/translate'
-import { defaultLocale } from '@open-mercato/shared/lib/i18n/config'
+import { resolveNotificationCopy } from '../lib/notificationCopy'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { User } from '../../auth/data/entities'
 import type { TenantDataEncryptionService } from '@open-mercato/shared/lib/encryption/tenantDataEncryptionService'
@@ -45,23 +43,6 @@ const buildPanelLink = (panelUrl: string, notificationId: string) => {
   }
   const separator = panelUrl.includes('?') ? '&' : '?'
   return `${panelUrl}${separator}notificationId=${encodeURIComponent(notificationId)}`
-}
-
-const resolveNotificationCopy = async (
-  notification: Notification
-) => {
-  const dict = await loadDictionary(defaultLocale)
-  const t = createFallbackTranslator(dict)
-
-  const title = notification.titleKey
-    ? t(notification.titleKey, notification.title ?? notification.titleKey, notification.titleVariables ?? undefined)
-    : notification.title
-
-  const body = notification.bodyKey
-    ? t(notification.bodyKey, notification.body ?? notification.bodyKey ?? '', notification.bodyVariables ?? undefined)
-    : notification.body ?? null
-
-  return { title, body, t }
 }
 
 const resolveRecipient = async (

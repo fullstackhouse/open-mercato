@@ -1,5 +1,10 @@
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
+import {
+  registerModules,
+  registerAppDictionaryLoader,
+  invalidateDictionaryCache,
+} from '@open-mercato/shared/lib/i18n/server'
 import { enqueuePushDelivery } from '../queue'
 import { mobilePushDeliveryStrategy } from '../push-delivery-strategy'
 
@@ -162,6 +167,42 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(payload.options).toEqual({ sound: 'chime.caf', badge: 3 })
     expect(payload.silent).toBe(false)
     expect(row.silent).toBe(false)
+  })
+
+  it('reuses the default-locale copy for a device without a locale (no translation)', async () => {
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { titleKey: 'orders.shipped.title', bodyKey: 'orders.shipped.body' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    const row = fork.create.mock.calls[0][1] as { payload: { title?: string; body?: string | null } }
+    // ctx.title/ctx.body are already resolved in the default locale upstream and reused verbatim.
+    expect(row.payload.title).toBe('Shipped')
+    expect(row.payload.body).toBe('Your order shipped')
+  })
+
+  it('translates the delivery copy into the device locale', async () => {
+    registerAppDictionaryLoader(async () => ({}))
+    registerModules([
+      { translations: { pl: { orders: { shipped: { title: 'Wysłano {orderNumber}', body: 'W drodze' } } } } },
+    ] as never)
+    invalidateDictionaryCache()
+
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      // `pl-PL` also exercises locale normalization (region subtag stripped to `pl`).
+      devices: [{ id: 'dev-pl', pushToken: 'token-pltoken1', pushProvider: 'fcm', locale: 'pl-PL' }],
+      notification: {
+        titleKey: 'orders.shipped.title',
+        bodyKey: 'orders.shipped.body',
+        titleVariables: { orderNumber: '42' },
+      },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    const row = fork.create.mock.calls[0][1] as { payload: { title?: string; body?: string | null } }
+    expect(row.payload.title).toBe('Wysłano 42')
+    expect(row.payload.body).toBe('W drodze')
   })
 
   it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {

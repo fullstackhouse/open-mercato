@@ -7,6 +7,7 @@ import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/d
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { resolveLocaleFromAcceptLanguage } from '@open-mercato/shared/lib/i18n/locale'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '#generated/entities.ids.generated'
 import { UserDevice } from '../data/entities'
@@ -79,8 +80,14 @@ export async function POST(req: Request) {
     const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
     const organizationId = scope?.selectedId ?? auth.orgId ?? null
 
+    // When the app doesn't send an explicit per-device locale, fall back to the request's
+    // Accept-Language (the mobile client calls this with its own headers). Only on self-register —
+    // PUT stays tri-state, and admin register uses the admin's browser headers, not the device's.
+    const headerLocale = resolveLocaleFromAcceptLanguage(req.headers.get('accept-language'))
+
     const commandInput = registerDeviceCommandSchema.parse({
       ...body,
+      locale: body.locale ?? headerLocale ?? undefined,
       tenantId: auth.tenantId,
       organizationId,
       userId: actorUserId,

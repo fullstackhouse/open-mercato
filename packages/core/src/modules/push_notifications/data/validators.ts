@@ -1,6 +1,22 @@
 import { z } from 'zod'
+import { pushOptionsSchema } from '@open-mercato/core/modules/notifications/data/validators'
 
 export const PUSH_DELIVERY_STATUSES = ['pending', 'sent', 'failed', 'skipped'] as const
+
+// POST /api/push_notifications/custom-send — admin composes a one-off visible push to a single user.
+// title/body are literal free text (not i18n keys). data/pushOptions reuse the notifications contract.
+export const customSendSchema = z
+  .object({
+    recipientUserId: z.string().uuid(),
+    title: z.string().trim().min(1).max(500),
+    body: z.string().trim().max(2000).nullish(),
+    data: z.record(z.string(), z.string()).optional(),
+    pushOptions: pushOptionsSchema.optional(),
+  })
+  .strict()
+export type CustomSendInput = z.infer<typeof customSendSchema>
+
+export const customSendResponseSchema = z.object({ enqueued: z.number() })
 
 // Read-only delivery-log list contract (admin observability). No full push token is ever exposed —
 // only `token_snapshot` (last 8 chars) and the `provider` snapshot.

@@ -27,5 +27,18 @@
   "push_notifications.errors.forbidden": "Brak dostępu",
   "push_notifications.errors.invalid_id": "Nieprawidłowy identyfikator dostarczenia",
   "push_notifications.errors.not_found": "Nie znaleziono dostarczenia",
-  "push_notifications.errors.unauthorized": "Brak autoryzacji"
+  "push_notifications.errors.unauthorized": "Brak autoryzacji",
+  "push_notifications.errors.invalid_payload": "Nieprawidłowe żądanie",
+  "push_notifications.errors.send_failed": "Nie udało się wysłać powiadomienia push",
+  "push_notifications.send.pageTitle": "Wyślij push",
+  "push_notifications.send.message": "Wiadomość",
+  "push_notifications.send.userId": "ID użytkownika odbiorcy",
+  "push_notifications.send.userIdHint": "Użytkownik, na którego urządzenia trafi ten push.",
+  "push_notifications.send.title": "Tytuł",
+  "push_notifications.send.body": "Treść",
+  "push_notifications.send.submit": "Wyślij push",
+  "push_notifications.send.success": "Push zakolejkowany do wysłania",
+  "push_notifications.types.admin_custom_message.label": "Wiadomość administratora",
+  "push_notifications.types.admin_custom_message.title": "Wiadomość administratora",
+  "push_notifications.types.admin_custom_message.body": "Masz nową wiadomość."
 }

@@ -4,6 +4,12 @@ import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
+import { defaultLocale } from '@open-mercato/shared/lib/i18n/config'
+import { resolveSupportedLocale } from '@open-mercato/shared/lib/i18n/locale'
+import {
+  resolveNotificationCopy,
+  type NotificationCopySource,
+} from '@open-mercato/core/modules/notifications/lib/notificationCopy'
 import { PushNotificationDelivery } from '../data/entities'
 import { enqueuePushDelivery } from './queue'
 
@@ -29,6 +35,11 @@ export interface FanOutPushDeliveriesArgs {
   notificationId: string | null
   notificationTypeId: string
   payload: PushFanoutPayload
+  /**
+   * Per-device localizable copy for visible notifications. When present, `title`/`body` are
+   * resolved per device using its `locale`. Omit for silent pushes (no user-facing copy).
+   */
+  copy?: NotificationCopySource
 }
 
 function tokenSnapshot(token: string): string {
@@ -47,7 +58,7 @@ function tokenSnapshot(token: string): string {
  * so this stays decoupled from those modules' internals. Returns the number of jobs enqueued.
  */
 export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Promise<{ enqueued: number }> {
-  const { em, resolve, scope, userId, notificationId, notificationTypeId, payload } = args
+  const { em, resolve, scope, userId, notificationId, notificationTypeId, payload, copy } = args
   const { tenantId, organizationId } = scope
 
   // Require at least one active push CommunicationChannel for the tenant (push not configured ⇒ skip).
@@ -79,6 +90,20 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
 
   const silent = payload.silent === true
 
+  // Resolve the per-device localized copy. The default-locale case (the common one: device has no
+  // locale, an unsupported one, or already speaks the default) reuses the copy already resolved
+  // upstream — no dictionary load. Other locales translate via the shared notification-copy helper
+  // (dictionaries are memoized by loadDictionary). Silent pushes carry no copy and skip this.
+  async function resolveLocalizedPayload(deviceLocale?: string | null): Promise<PushFanoutPayload> {
+    if (!copy) return payload
+    const locale = resolveSupportedLocale(deviceLocale) ?? defaultLocale
+    if (locale === defaultLocale) {
+      return { ...payload, title: copy.title, body: copy.body ?? null }
+    }
+    const { title, body } = await resolveNotificationCopy(copy, locale)
+    return { ...payload, title, body }
+  }
+
   // Insert one pending delivery row per device, routing each device to the push channel whose
   // providerKey matches the device's pushProvider. Devices with no provider, or no matching
   // configured channel, are skipped. Snapshot the matched provider + truncated token per row.
@@ -89,6 +114,7 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
     if (!providerKey) continue
     const channel = channelsByProvider.get(providerKey)
     if (!channel) continue
+    const rowPayload = await resolveLocalizedPayload(device.locale)
     deliveries.push(
       fork.create(PushNotificationDelivery, {
         tenantId,
@@ -102,7 +128,7 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
         status: 'pending',
         attempts: 0,
         silent,
-        payload,
+        payload: rowPayload,
       }),
     )
   }

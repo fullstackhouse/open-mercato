@@ -79,6 +79,15 @@
           "nullable": true,
           "mappedType": "text"
         },
+        "locale": {
+          "name": "locale",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "text"
+        },
         "push_token": {
           "name": "push_token",
           "type": "text",

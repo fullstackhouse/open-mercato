@@ -10,6 +10,7 @@ export const registerDeviceSchema = z
     platform: devicePlatformSchema,
     clientAppVersion: z.string().trim().max(64).nullish(),
     osVersion: z.string().trim().max(64).nullish(),
+    locale: z.string().trim().min(2).max(35).nullish(),
     pushToken: z.string().trim().min(1).max(4096).nullish(),
     pushProvider: z.string().trim().min(1).max(32).nullish(),
   })
@@ -31,6 +32,7 @@ export const updateDeviceSchema = z
   .object({
     clientAppVersion: z.string().trim().max(64).nullable().optional(),
     osVersion: z.string().trim().max(64).nullable().optional(),
+    locale: z.string().trim().min(2).max(35).nullable().optional(),
     pushToken: z.string().trim().min(1).max(4096).nullable().optional(),
     pushProvider: z.string().trim().min(1).max(32).nullable().optional(),
     lastSeenAt: z.coerce.date().optional(),

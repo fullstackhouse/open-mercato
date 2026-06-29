@@ -15,6 +15,7 @@ export class UserDevice {
     | 'organizationId'
     | 'clientAppVersion'
     | 'osVersion'
+    | 'locale'
     | 'pushToken'
     | 'pushProvider'
     | 'pushTokenUpdatedAt'
@@ -46,6 +47,11 @@ export class UserDevice {
 
   @Property({ name: 'os_version', type: 'text', nullable: true })
   osVersion?: string | null
+
+  // Per-device language the client app picked (BCP-47, e.g. `en` / `en-US`). Normalized to a
+  // supported locale at push send time to translate the notification copy; null ⇒ default locale.
+  @Property({ name: 'locale', type: 'text', nullable: true })
+  locale?: string | null
 
   @Property({ name: 'push_token', type: 'text', nullable: true })
   pushToken?: string | null

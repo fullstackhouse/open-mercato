@@ -33,6 +33,7 @@ type DeviceSnapshot = {
   platform: string
   clientAppVersion: string | null
   osVersion: string | null
+  locale: string | null
   pushToken: string | null
   pushProvider: string | null
   pushTokenUpdatedAt: string | null
@@ -76,6 +77,7 @@ function serializeDevice(device: UserDevice): DeviceSnapshot {
     platform: device.platform,
     clientAppVersion: device.clientAppVersion ?? null,
     osVersion: device.osVersion ?? null,
+    locale: device.locale ?? null,
     pushToken: device.pushToken ?? null,
     pushProvider: device.pushProvider ?? null,
     pushTokenUpdatedAt: device.pushTokenUpdatedAt ? device.pushTokenUpdatedAt.toISOString() : null,
@@ -97,6 +99,7 @@ function applySnapshot(device: UserDevice, snapshot: DeviceSnapshot): void {
   device.platform = snapshot.platform as UserDevice['platform']
   device.clientAppVersion = snapshot.clientAppVersion
   device.osVersion = snapshot.osVersion
+  device.locale = snapshot.locale
   device.pushToken = snapshot.pushToken
   device.pushProvider = snapshot.pushProvider
   device.pushTokenUpdatedAt = toDate(snapshot.pushTokenUpdatedAt)
@@ -169,6 +172,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
               device.organizationId = parsed.organizationId ?? device.organizationId ?? null
               if (parsed.clientAppVersion !== undefined) device.clientAppVersion = parsed.clientAppVersion ?? null
               if (parsed.osVersion !== undefined) device.osVersion = parsed.osVersion ?? null
+              if (parsed.locale !== undefined) device.locale = parsed.locale ?? null
               if (hasPushToken) {
                 device.pushToken = parsed.pushToken ?? null
                 device.pushProvider = parsed.pushProvider ?? device.pushProvider ?? null
@@ -185,6 +189,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
                 platform: parsed.platform,
                 clientAppVersion: parsed.clientAppVersion ?? null,
                 osVersion: parsed.osVersion ?? null,
+                locale: parsed.locale ?? null,
                 pushToken: hasPushToken ? parsed.pushToken ?? null : null,
                 pushProvider: hasPushToken ? parsed.pushProvider ?? null : null,
                 pushTokenUpdatedAt: hasPushToken ? now : null,
@@ -335,6 +340,9 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
           }
           if (Object.prototype.hasOwnProperty.call(parsed, 'osVersion')) {
             device.osVersion = parsed.osVersion ?? null
+          }
+          if (Object.prototype.hasOwnProperty.call(parsed, 'locale')) {
+            device.locale = parsed.locale ?? null
           }
           if (Object.prototype.hasOwnProperty.call(parsed, 'pushToken')) {
             device.pushToken = parsed.pushToken ?? null

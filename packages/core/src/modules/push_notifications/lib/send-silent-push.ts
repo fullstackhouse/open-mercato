@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import { fanOutPushDeliveries } from './push-fanout'
+import { sendCustomPush, type SendCustomPushArgs } from './send-custom-push'
 
 type Resolve = <T = unknown>(name: string) => T
 
@@ -21,6 +22,7 @@ export interface SendSilentPushArgs {
 
 export interface PushNotificationService {
   sendSilentPush(args: SendSilentPushArgs): Promise<{ enqueued: number }>
+  sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueued: number }>
 }
 
 /**
@@ -62,4 +64,4 @@ export async function sendSilentPush(args: SendSilentPushArgs): Promise<{ enqueu
   })
 }
 
-export const pushNotificationService: PushNotificationService = { sendSilentPush }
+export const pushNotificationService: PushNotificationService = { sendSilentPush, sendCustomPush }

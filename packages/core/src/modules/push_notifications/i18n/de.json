@@ -27,5 +27,18 @@
   "push_notifications.errors.forbidden": "Zugriff verweigert",
   "push_notifications.errors.invalid_id": "Ungültige Zustellungs-ID",
   "push_notifications.errors.not_found": "Zustellung nicht gefunden",
-  "push_notifications.errors.unauthorized": "Nicht autorisiert"
+  "push_notifications.errors.unauthorized": "Nicht autorisiert",
+  "push_notifications.errors.invalid_payload": "Ungültige Anfrage",
+  "push_notifications.errors.send_failed": "Push-Benachrichtigung konnte nicht gesendet werden",
+  "push_notifications.send.pageTitle": "Push senden",
+  "push_notifications.send.message": "Nachricht",
+  "push_notifications.send.userId": "Empfänger-Benutzer-ID",
+  "push_notifications.send.userIdHint": "Der Benutzer, dessen Geräte diesen Push erhalten.",
+  "push_notifications.send.title": "Titel",
+  "push_notifications.send.body": "Text",
+  "push_notifications.send.submit": "Push senden",
+  "push_notifications.send.success": "Push zum Versand eingereiht",
+  "push_notifications.types.admin_custom_message.label": "Admin-Nachricht",
+  "push_notifications.types.admin_custom_message.title": "Admin-Nachricht",
+  "push_notifications.types.admin_custom_message.body": "Sie haben eine neue Nachricht."
 }

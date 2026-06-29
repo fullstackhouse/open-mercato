@@ -27,5 +27,18 @@
   "push_notifications.errors.forbidden": "Acceso denegado",
   "push_notifications.errors.invalid_id": "ID de envío no válido",
   "push_notifications.errors.not_found": "Envío no encontrado",
-  "push_notifications.errors.unauthorized": "No autorizado"
+  "push_notifications.errors.unauthorized": "No autorizado",
+  "push_notifications.errors.invalid_payload": "Solicitud no válida",
+  "push_notifications.errors.send_failed": "No se pudo enviar la notificación push",
+  "push_notifications.send.pageTitle": "Enviar push",
+  "push_notifications.send.message": "Mensaje",
+  "push_notifications.send.userId": "ID del usuario destinatario",
+  "push_notifications.send.userIdHint": "El usuario cuyos dispositivos reciben este push.",
+  "push_notifications.send.title": "Título",
+  "push_notifications.send.body": "Cuerpo",
+  "push_notifications.send.submit": "Enviar push",
+  "push_notifications.send.success": "Push en cola para envío",
+  "push_notifications.types.admin_custom_message.label": "Mensaje de administrador",
+  "push_notifications.types.admin_custom_message.title": "Mensaje de administrador",
+  "push_notifications.types.admin_custom_message.body": "Tienes un mensaje nuevo."
 }
