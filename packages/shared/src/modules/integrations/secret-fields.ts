@@ -35,8 +35,8 @@ export function secretCredentialFieldKeys(schema: IntegrationCredentialsSchema |
     .map((field) => field.key)
 }
 
-function isEmptyCredentialValue(value: unknown): boolean {
-  return value == null || String(value).length === 0
+export function isEmptyCredentialValue(value: unknown): boolean {
+  return value == null || String(value).trim().length === 0
 }
 
 /**

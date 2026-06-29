@@ -36,6 +36,10 @@ import {
   type IntegrationCredentialField,
   type IntegrationDetailBuiltInTab,
 } from '@open-mercato/shared/modules/integrations/types'
+import {
+  isEmptyCredentialValue,
+  secretCredentialFieldKeys,
+} from '@open-mercato/shared/modules/integrations/secret-fields'
 import { LoadingMessage, ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
 import { LogList, type LogListEntry } from '@open-mercato/ui/backend/LogList'
 import { Activity, AlertTriangle, Bell, Calendar, CheckCircle2, CreditCard, FileText, FileX, HardDrive, Key, MessageSquare, RefreshCw, Settings, Truck, Webhook, XCircle, Zap } from 'lucide-react'
@@ -736,12 +740,11 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
       // Write-only secrets: only submit a secret the operator actually retyped.
       // A blank secret is dropped so the server preserves the stored value
       // instead of receiving an empty string.
-      const secretFieldKeysForSave = (detail?.integration.credentials?.fields ?? detail?.bundle?.credentials?.fields ?? [])
-        .filter((field) => field.type === 'secret')
-        .map((field) => field.key)
+      const secretFieldKeysForSave = secretCredentialFieldKeys({
+        fields: detail?.integration.credentials?.fields ?? detail?.bundle?.credentials?.fields ?? [],
+      })
       for (const key of secretFieldKeysForSave) {
-        const value = sanitizedValues[key]
-        if (value == null || (typeof value === 'string' && value.length === 0)) {
+        if (isEmptyCredentialValue(sanitizedValues[key])) {
           delete sanitizedValues[key]
         }
       }
@@ -871,10 +874,6 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
   const editableCredentialFields = React.useMemo(
     () => (detail?.integration.credentials?.fields ?? detail?.bundle?.credentials?.fields ?? []).filter(isEditableCredentialField),
     [detail?.bundle?.credentials?.fields, detail?.integration.credentials?.fields],
-  )
-  const secretCredentialFieldKeys = React.useMemo(
-    () => new Set(editableCredentialFields.filter((field) => field.type === 'secret').map((field) => field.key)),
-    [editableCredentialFields],
   )
   const credentialSecretsSetLookup = React.useMemo(
     () => new Set(credentialSecretsSet),
