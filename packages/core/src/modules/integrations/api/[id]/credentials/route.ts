@@ -65,9 +65,11 @@ export async function GET(req: Request, ctx: { params?: Promise<{ id?: string }>
   const scope = { organizationId: auth.orgId as string, tenantId: auth.tenantId }
 
   let values: Record<string, unknown> | null
+  let ownValues: Record<string, unknown> | null
   let updatedAt: Date | null
   try {
     values = await credentialsService.resolve(integration.id, scope)
+    ownValues = await credentialsService.getRaw(integration.id, scope)
     updatedAt = await credentialsService.resolveUpdatedAt(integration.id, scope)
   } catch (error) {
     if (isCredentialsEncryptionUnavailableError(error)) {
@@ -78,11 +80,17 @@ export async function GET(req: Request, ctx: { params?: Promise<{ id?: string }>
 
   // Write-only secrets: never return `type:'secret'` VALUES on read. Instead
   // report which secrets currently have a stored value (`secretsSet`) so the
-  // admin UI can render "•••••• set — type to replace". `resolve()` above still
-  // returns the real secret server-side for sync/health — only this response is
-  // redacted.
+  // admin UI can render "•••••• set — type to replace".
+  //
+  // Secrets are integration-specific and are NOT inherited from a bundle: the
+  // non-secret config may still resolve through the bundle (`resolve()`), but
+  // `secretsSet` reflects only THIS integration's own stored secrets
+  // (`getRaw()`), so the UI never shows a bundle's secret as set on the
+  // integration. `resolve()` still returns the real secret server-side for
+  // sync/health — only this response is redacted.
   const schema = credentialsService.getSchema(integration.id)
-  const { credentials, secretsSet } = redactSecretCredentials(values ?? {}, schema)
+  const { credentials } = redactSecretCredentials(values ?? {}, schema)
+  const { secretsSet } = redactSecretCredentials(ownValues ?? {}, schema)
 
   return NextResponse.json({
     integrationId: integration.id,
@@ -182,14 +190,15 @@ export async function PUT(req: Request, ctx: { params?: Promise<{ id?: string }>
   // Write-only secrets: a blank/omitted `type:'secret'` value means "unchanged",
   // not "clear". The admin form re-submits every field (with secret values
   // redacted out by GET), so re-saving without retyping a secret would otherwise
-  // wipe it. Preserve the stored secret the operator currently sees as set
-  // (`resolve()` — same source the GET `secretsSet` came from). Skips the extra
-  // read entirely when the schema has no secret fields.
+  // wipe it. Preserve only THIS integration's own stored secret (`getRaw()`) —
+  // secrets are integration-specific and are never inherited from a bundle, so
+  // a blank secret must not copy a bundle's secret into the integration's row.
+  // Skips the extra read entirely when the schema has no secret fields.
   let credentialsToSave = payloadData.credentials
   if (secretCredentialFieldKeys(schema).length > 0) {
     let existingCredentials: Record<string, unknown> | null
     try {
-      existingCredentials = await credentialsService.resolve(integration.id, scope)
+      existingCredentials = await credentialsService.getRaw(integration.id, scope)
     } catch (error) {
       if (isCredentialsEncryptionUnavailableError(error)) {
         return NextResponse.json({ error: 'Integration credentials encryption is unavailable' }, { status: 503 })
