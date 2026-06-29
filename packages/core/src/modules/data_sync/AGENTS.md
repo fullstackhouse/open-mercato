@@ -53,6 +53,7 @@ packages/core/src/modules/data_sync/
 │   ├── adapter-registry.ts      # Register/get adapters by providerKey
 │   ├── id-mapping.ts            # External ID ↔ local ID lookup and storage
 │   ├── queue.ts                 # Queue helper for enqueuing sync jobs
+│   ├── run-parameters.ts        # Validate/coerce operator run parameters vs. adapter declaration
 │   ├── sync-engine.ts           # Orchestrates streaming import/export with progress
 │   └── sync-run-service.ts      # CRUD for SyncRun + cursor management
 ├── api/
@@ -111,6 +112,29 @@ Register adapters in your provider module's `di.ts`:
 ```typescript
 registerDataSyncAdapter(myAdapter)
 ```
+
+### Run parameters
+
+Adapters may declare optional, operator-facing `runParameters`. The dashboard
+renders a generic input per declared parameter, the run API validates and
+coerces the submitted values against the declaration (`lib/run-parameters.ts`),
+and the normalized values are persisted on the run and passed back on
+`StreamImportInput.parameters` / `StreamExportInput.parameters`. Keep
+declarations provider-agnostic — never special-case a provider in `data_sync`.
+
+```typescript
+runParameters: [
+  { key: 'dryRun', label: 'Dry run', type: 'boolean', defaultValue: false,
+    description: 'Report what would change without writing.' },
+  { key: 'startId', label: 'Start id', type: 'number', min: 0 },
+  { key: 'mode', label: 'Mode', type: 'select',
+    options: [{ value: 'fast' }, { value: 'thorough' }] },
+]
+```
+
+Supported types: `boolean`, `string`, `number`, `select`. A parameter may set
+`direction` to apply to only `import` or `export` runs; blank values fall back
+to `defaultValue`; values are retained across retries.
 
 If the sync provider needs bootstrap credentials, mappings, locales, channels, or other default sync settings after a fresh install, implement a provider-owned env preset flow:
 
