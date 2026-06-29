@@ -17,8 +17,12 @@ export { PUSH_CHANNEL } from './push-fanout'
  * `send-push` worker, so a slow/unavailable provider never blocks notification creation.
  *
  * Whether a push is silent (content-available wake-up) is a property of the registered
- * notification TYPE (`NotificationTypeDefinition.silent`), never a per-call flag. Silent types
- * bypass the per-channel user preference (background pushes are not user-facing opt-outs).
+ * notification TYPE (`NotificationTypeDefinition.silent`), never a per-call flag. `silent`
+ * controls only HOW the device is notified (background wake-up vs visible alert); it does not
+ * imply the push is non-opt-out. Silent types still respect the recipient's per-channel
+ * preference unless the type is `nonOptOut` — to force a silent push, mark the type
+ * `nonOptOut: true`. (The explicit `sendSilentPush` helper is a separate forced-wake-up path
+ * that never creates an in-app notification and is out of scope for this opt-out.)
  *
  * The shared device/channel fan-out lives in {@link fanOutPushDeliveries} and is reused by
  * `sendSilentPush` (which delivers the same silent payload without an in-app notification).
@@ -42,10 +46,10 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     const em = ctx.resolve('em') as EntityManager
     const silent = type.silent === true
 
-    // Respect the recipient's per-channel preference for visible notifications (default-on when
-    // unset). Two type-level bypasses skip the opt-out check: silent pushes (background wake-ups,
-    // not user-facing) and nonOptOut types (security/account alerts the user cannot disable).
-    if (!silent && type.nonOptOut !== true) {
+    // Respect the recipient's per-channel preference (default-on when unset). Only `nonOptOut`
+    // types skip the opt-out check (security/account alerts the user cannot disable). `silent`
+    // pushes are opt-out-able like any other: silent controls delivery style, not enforcement.
+    if (type.nonOptOut !== true) {
       const preferences = resolveNotificationPreferenceService({ resolve: ctx.resolve })
       const enabled = await preferences.isChannelEnabled({ tenantId, userId }, notification.type, PUSH_CHANNEL)
       if (!enabled) return

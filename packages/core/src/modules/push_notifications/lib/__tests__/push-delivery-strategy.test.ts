@@ -223,18 +223,47 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(row.silent).toBe(false)
   })
 
-  it('delivers a silent-typed notification without consulting preferences', async () => {
+  it('delivers a silent-typed notification as silent when the recipient has push enabled', async () => {
     getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
     const { ctx, fork } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // Silent (background) pushes are type-derived and bypass the user opt-out gate.
-    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    // Silent controls delivery style, not enforcement: the opt-out gate still runs.
+    expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
     expect(enqueueMock).toHaveBeenCalledTimes(1)
     const row = fork.create.mock.calls[0][1] as { payload: { silent: boolean }; silent: boolean }
     expect(row.silent).toBe(true)
     expect(row.payload.silent).toBe(true)
+  })
+
+  it('skips a silent-typed notification when the recipient opted out of push', async () => {
+    getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
+    expect(fork.create).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('forces a silent nonOptOut-typed notification even when the recipient opted out', async () => {
+    getTypeMock.mockReturnValue({ type: 'orders.sync', silent: true, nonOptOut: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { type: 'orders.sync' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // nonOptOut still bypasses the gate; silent merely sets the delivery style.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    const row = fork.create.mock.calls[0][1] as { silent: boolean }
+    expect(row.silent).toBe(true)
   })
 })
