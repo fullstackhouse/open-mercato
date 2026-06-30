@@ -9,6 +9,7 @@ import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { emitCrudSideEffects, emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { assertFound, CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { CrudEventsConfig, CrudIndexerConfig } from '@open-mercato/shared/lib/crud/types'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { E } from '#generated/entities.ids.generated'
@@ -107,9 +108,11 @@ export async function loadExistingDevice(
   em: EntityManager,
   scope: { tenantId: string; userId: string; deviceId: string },
 ): Promise<UserDevice | null> {
-  const active = await em.findOne(UserDevice, { ...scope, deletedAt: null })
+  // push_token is encrypted at rest; decrypt on read so snapshots/undo payloads keep the plaintext.
+  const dscope = { tenantId: scope.tenantId, organizationId: null }
+  const active = await findOneWithDecryption(em, UserDevice, { ...scope, deletedAt: null }, undefined, dscope)
   if (active) return active
-  return em.findOne(UserDevice, scope, { orderBy: { createdAt: 'desc' } })
+  return findOneWithDecryption(em, UserDevice, scope, { orderBy: { createdAt: 'desc' } }, dscope)
 }
 
 // Postgres SQLSTATE for unique_violation. MikroORM doesn't re-export pg error codes, so name it here.
@@ -237,7 +240,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
   },
   captureAfter: async (_input, result, ctx) => {
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: result.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: result.id })
     return device ? serializeDevice(device) : null
   },
   buildLog: async ({ result, snapshots }) => {
@@ -304,14 +307,20 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.
     ensureTenantScope(ctx, parsed.tenantId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null })
+    const device = await findOneWithDecryption(
+      em,
+      UserDevice,
+      { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null },
+      undefined,
+      { tenantId: parsed.tenantId, organizationId: null },
+    )
     return device ? { before: serializeDevice(device) } : {}
   },
   async execute(rawInput, ctx) {
     const parsed = updateDeviceCommandSchema.parse(rawInput)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const device = assertFound(
-      await em.findOne(UserDevice, { id: parsed.id, deletedAt: null }),
+      await findOneWithDecryption(em, UserDevice, { id: parsed.id, deletedAt: null }),
       'Device not found',
     )
     ensureTenantScope(ctx, device.tenantId)
@@ -358,7 +367,7 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
   },
   captureAfter: async (_input, result, ctx) => {
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: result.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: result.id })
     return device ? serializeDevice(device) : null
   },
   buildLog: async ({ snapshots }) => {
@@ -411,7 +420,13 @@ const deactivateDeviceCommand: CommandHandler<DeactivateDeviceCommandInput, { id
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.
     ensureTenantScope(ctx, parsed.tenantId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null })
+    const device = await findOneWithDecryption(
+      em,
+      UserDevice,
+      { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null },
+      undefined,
+      { tenantId: parsed.tenantId, organizationId: null },
+    )
     return device ? { before: serializeDevice(device) } : {}
   },
   async execute(rawInput, ctx) {

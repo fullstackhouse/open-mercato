@@ -115,6 +115,12 @@ export const enabledModules: ModuleEntry[] = [
   // at import time via `setup.ts`; the hub picks them up by `providerKey`.
   { id: 'channel_imap', from: '@open-mercato/channel-imap' },
   { id: 'channel_gmail', from: '@open-mercato/channel-gmail' },
+  // Mobile push providers for the push_notifications channel. Each registers a
+  // `push` ChannelAdapter at import time; the push delivery strategy routes each
+  // device to the channel whose providerKey matches its push_provider.
+  { id: 'channel_fcm', from: '@open-mercato/channel-fcm' },
+  { id: 'channel_apns', from: '@open-mercato/channel-apns' },
+  { id: 'channel_expo', from: '@open-mercato/channel-expo' },
   { id: 'sync_akeneo', from: '@open-mercato/sync-akeneo' },
   { id: 'shipping_carriers', from: '@open-mercato/core' },
   { id: 'webhooks', from: '@open-mercato/webhooks' },
