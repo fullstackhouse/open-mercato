@@ -12,8 +12,11 @@ delivery logic** (sender, providers, delivery rows, workers live in the `push_no
 
 ## Always
 
-- Scope every query by `tenant_id`. Org is **nullable** — the list route sets `orm.orgField: null`
-  (disables org scoping) and keeps `tenantField` for tenant isolation.
+- Scope every query by `tenant_id`. `organization_id` is **nullable**, but scoping follows the standard
+  org-scoped pattern like every other module: the list routes keep `orm.orgField: 'organizationId'` and
+  let the factory auto-filter by the caller's org scope. The query engine's org scope is null-aware —
+  callers with no org restriction (or whose scope includes null) also see null-org rows; a caller pinned
+  to a specific org does not.
 - Route all writes through the device commands (`commands/register.ts`, `commands/update.ts`,
   `commands/deactivate.ts` → `devices.devices.register`, `devices.devices.update`,
   `devices.devices.deactivate`; shared helpers in `commands/shared.ts`, registered via `commands/index.ts`)

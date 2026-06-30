@@ -37,7 +37,10 @@ const crud = makeCrudRoute({
   orm: {
     entity: UserDevice,
     idField: 'id',
-    orgField: null,
+    // organization_id stays nullable, but scoping follows the standard org-scoped pattern: the factory
+    // auto-filters by the caller's organization scope (null-aware in the query engine). Unrestricted
+    // admins see the whole tenant including null-org rows; org-restricted admins see only their orgs.
+    orgField: 'organizationId',
     tenantField: 'tenantId',
     softDeleteField: 'deletedAt',
   },
@@ -49,16 +52,12 @@ const crud = makeCrudRoute({
     entityId: E.devices.user_device,
     fields: deviceListFields,
     sortFieldMap: deviceListSortFieldMap,
-    // Tenant-wide (tenant scope enforced by orm.tenantField); optional userId/platform narrowing.
-    // `orgField: null` disables the factory's automatic org scoping (organization_id is nullable), so
-    // apply the same `ctx.organizationIds` scope the factory derives: null = unrestricted (whole
-    // tenant, including null-org devices), otherwise narrow to the caller's in-scope orgs (an empty
-    // set denies all). This mirrors isOrganizationReadAccessAllowed used on the detail routes.
-    buildFilters: async (query, ctx) => {
+    // Tenant + org scope is enforced by the factory (orm.tenantField + orm.orgField); only the optional
+    // userId/platform narrowing is left to do here.
+    buildFilters: async (query) => {
       const filters: Record<string, unknown> = {}
       if (query.userId) filters.user_id = { $eq: query.userId }
       if (query.platform) filters.platform = { $eq: query.platform }
-      if (ctx.organizationIds !== null) filters.organization_id = { $in: ctx.organizationIds }
       return filters
     },
   },
