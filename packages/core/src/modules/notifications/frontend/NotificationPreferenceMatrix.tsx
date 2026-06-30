@@ -46,24 +46,6 @@ export function buildPreferenceMap(
   return next
 }
 
-/** Flatten a preference map back into the API payload shape. */
-export function toPreferenceItems(
-  types: NotificationTypeItem[],
-  prefs: Record<string, boolean>,
-): PreferenceItem[] {
-  const items: PreferenceItem[] = []
-  for (const type of types) {
-    for (const channel of PREFERENCE_CHANNELS) {
-      items.push({
-        notificationTypeId: type.id,
-        channel: channel.key,
-        enabled: prefs[preferenceKey(type.id, channel.key)] ?? true,
-      })
-    }
-  }
-  return items
-}
-
 /**
  * Return only the entries whose value differs from the originally-loaded state. The server upserts
  * exactly what it receives (last-write-wins), so sending the diff keeps the payload bounded by the
