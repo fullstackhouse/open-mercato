@@ -3,6 +3,7 @@ import {
   getNotificationType,
   getNotificationTypes,
   registerNotificationTypes,
+  syncNotificationTypes,
 } from '../notification-type-registry'
 
 function def(type: string, extra: Partial<NotificationTypeDefinition> = {}): NotificationTypeDefinition {
@@ -40,5 +41,127 @@ describe('notification-type-registry', () => {
     registerNotificationTypes([def('a.one', { labelKey: 'second' })])
     expect(getNotificationTypes()).toHaveLength(1)
     expect(getNotificationType('a.one')?.labelKey).toBe('second')
+  })
+})
+
+type ExistingRow = { id: string; label_key: string; description_key: string | null }
+
+/**
+ * Minimal kysely test double for `syncNotificationTypes` (mirrors the query_index
+ * jobs.test.ts pattern): records inserted value-rows, updates (id + set payload),
+ * and pruned ids, and replays a configurable `notification_types` SELECT result.
+ */
+function createFakeEm(existing: ExistingRow[]) {
+  const recorded = {
+    inserted: [] as Array<Record<string, unknown>>,
+    insertUsedOnConflict: false,
+    updated: [] as Array<{ id: unknown; set: Record<string, unknown> }>,
+    deletedIds: [] as unknown[],
+  }
+
+  const selectChain: any = {
+    select: () => selectChain,
+    where: () => selectChain,
+    execute: async () => existing,
+  }
+  const insertChain: any = {
+    values: (rows: Array<Record<string, unknown>>) => {
+      recorded.inserted.push(...rows)
+      return insertChain
+    },
+    onConflict: (cb: (oc: any) => unknown) => {
+      recorded.insertUsedOnConflict = true
+      try { cb({ column: () => ({ doNothing: () => ({}) }) }) } catch { /* builder shape only */ }
+      return insertChain
+    },
+    execute: async () => undefined,
+  }
+  const makeUpdateChain = () => {
+    const entry: { id: unknown; set: Record<string, unknown> } = { id: undefined, set: {} }
+    const chain: any = {
+      set: (obj: Record<string, unknown>) => { entry.set = obj; return chain },
+      where: (col: string, _op: string, val: unknown) => { if (col === 'id') entry.id = val; return chain },
+      execute: async () => { recorded.updated.push(entry) },
+    }
+    return chain
+  }
+  const makeDeleteChain = () => {
+    const chain: any = {
+      where: (col: string, op: string, val: unknown) => {
+        if (col === 'id' && op === 'in' && Array.isArray(val)) recorded.deletedIds.push(...val)
+        return chain
+      },
+      execute: async () => undefined,
+    }
+    return chain
+  }
+
+  const db: any = {
+    selectFrom: () => selectChain,
+    insertInto: () => insertChain,
+    updateTable: () => makeUpdateChain(),
+    deleteFrom: () => makeDeleteChain(),
+  }
+  const em = { getKysely: () => db }
+  return { em, recorded }
+}
+
+describe('syncNotificationTypes (DB read-through mirror)', () => {
+  beforeEach(() => {
+    registerNotificationTypes([], { replace: true })
+  })
+
+  it('creates missing types via INSERT ... ON CONFLICT DO NOTHING', async () => {
+    registerNotificationTypes([def('a.one', { labelKey: 'a.one.label' }), def('a.two')], { replace: true })
+    const { em, recorded } = createFakeEm([])
+    const res = await syncNotificationTypes(em as never, { force: true })
+
+    expect(recorded.inserted.map((r) => r.id).sort()).toEqual(['a.one', 'a.two'])
+    expect(recorded.inserted.find((r) => r.id === 'a.one')?.label_key).toBe('a.one.label')
+    expect(recorded.insertUsedOnConflict).toBe(true)
+    expect(recorded.updated).toHaveLength(0)
+    expect(recorded.deletedIds).toHaveLength(0)
+    expect(res).toMatchObject({ created: 2, updated: 0, deleted: 0 })
+  })
+
+  it('updates only drifted rows and leaves in-sync rows untouched', async () => {
+    registerNotificationTypes(
+      [def('a.one', { labelKey: 'new.label' }), def('a.two', { labelKey: 'same.label' })],
+      { replace: true },
+    )
+    const { em, recorded } = createFakeEm([
+      { id: 'a.one', label_key: 'old.label', description_key: null },
+      { id: 'a.two', label_key: 'same.label', description_key: null },
+    ])
+    const res = await syncNotificationTypes(em as never, { force: true })
+
+    expect(recorded.inserted).toHaveLength(0)
+    expect(recorded.updated.map((u) => u.id)).toEqual(['a.one'])
+    expect(recorded.updated[0]?.set.label_key).toBe('new.label')
+    expect(recorded.deletedIds).toHaveLength(0)
+    expect(res).toMatchObject({ created: 0, updated: 1, deleted: 0 })
+  })
+
+  it('prunes system-wide rows no longer in the catalogue', async () => {
+    registerNotificationTypes([def('keep.one', { labelKey: 'keep.label' })], { replace: true })
+    const { em, recorded } = createFakeEm([
+      { id: 'keep.one', label_key: 'keep.label', description_key: null },
+      { id: 'stale.one', label_key: 'x', description_key: null },
+      { id: 'stale.two', label_key: 'y', description_key: null },
+    ])
+    const res = await syncNotificationTypes(em as never, { force: true })
+
+    expect((recorded.deletedIds as string[]).sort()).toEqual(['stale.one', 'stale.two'])
+    expect(recorded.deletedIds).not.toContain('keep.one')
+    expect(res.deleted).toBe(2)
+  })
+
+  it('never prunes when the in-memory catalogue is empty (guard)', async () => {
+    registerNotificationTypes([], { replace: true })
+    const { em, recorded } = createFakeEm([{ id: 'orphan', label_key: 'x', description_key: null }])
+    const res = await syncNotificationTypes(em as never, { force: true })
+
+    expect(recorded.deletedIds).toHaveLength(0)
+    expect(res.deleted).toBe(0)
   })
 })

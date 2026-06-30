@@ -82,6 +82,11 @@ export function NotificationPreferencesPageClient() {
     setSaving(true)
     try {
       const preferences = diffPreferenceItems(types, initialPrefs.current, prefs)
+      // Nothing changed since load/last save — skip the no-op write entirely.
+      if (preferences.length === 0) {
+        flash(t('notifications.preferences.saveSuccess', 'Notification preferences saved'), 'success')
+        return
+      }
       const response = await runMutation({
         operation: () =>
           apiCall<SaveResponse>('/api/notifications/preferences', {
