@@ -51,8 +51,12 @@ separate `api/admin/devices` tree holds the **cross-user** operations gated by `
     revived }`. Uniqueness of active rows enforced by the partial unique index
     `user_devices_tenant_org_user_device_active_unique ... where deleted_at is null` (null org is
     coalesced to the nil UUID so null-org rows still dedupe per tenant/user/device).
-  - `GET /api/devices` — the caller's own devices only. It does **not** honor `?userId`.
-  - `PUT` / `DELETE /api/devices/:id` — **owner only** (403 otherwise). Update bumps `last_seen_at`.
+  - `GET /api/devices` — the caller's own devices, scoped to the active organization. It does **not**
+    honor `?userId`.
+  - `PUT` / `DELETE /api/devices/:id` — **owner only** (403 otherwise) and scoped to the active org
+    (a device outside the current org reads as 404), mirroring the list + the user-owned-resource
+    convention. Update advances `last_seen_at` only when the client explicitly sends `lastSeenAt`
+    (metadata-only edits do not touch presence).
 - **Admin** (`devices.admin`) under `api/admin/devices`:
   - `GET /api/devices/admin/devices` — tenant-wide list; optional `?userId=` / `?platform=`.
   - `POST /api/devices/admin/devices` — register on behalf of any user (`userId` in body,
