@@ -1,17 +1,32 @@
-import { readPushEnvelope } from '../push-envelope'
+import { readPushEnvelope, resolvePushBody } from '../push-envelope'
 import type { MessageContent } from '../adapter'
 
 describe('readPushEnvelope', () => {
-  it('assembles title/body/data from a well-formed envelope', () => {
+  it('assembles title/body/data/options/silent from a well-formed envelope', () => {
     const content: MessageContent = {
       text: 'fallback text',
-      raw: { title: 'Hello', body: 'Body text', data: { type: 'orders.shipped', notificationId: 'n1' } },
+      raw: {
+        title: 'Hello',
+        body: 'Body text',
+        data: { type: 'orders.shipped', notificationId: 'n1' },
+        options: { sound: 'chime.caf', badge: 2 },
+        silent: true,
+      },
     }
     expect(readPushEnvelope(content)).toEqual({
       title: 'Hello',
       body: 'Body text',
       data: { type: 'orders.shipped', notificationId: 'n1' },
+      options: { sound: 'chime.caf', badge: 2 },
+      silent: true,
     })
+  })
+
+  it('defaults options to {} and silent to false', () => {
+    const envelope = readPushEnvelope({ raw: { title: 'Hi' } })
+    expect(envelope.options).toEqual({})
+    expect(envelope.silent).toBe(false)
+    expect(readPushEnvelope({ raw: { silent: 'yes' } }).silent).toBe(false)
   })
 
   it('falls back to content.text when raw.body is absent', () => {
@@ -51,6 +66,16 @@ describe('readPushEnvelope', () => {
   })
 
   it('is defensive against an undefined content', () => {
-    expect(readPushEnvelope(undefined)).toEqual({ title: '', body: '', data: {} })
+    expect(readPushEnvelope(undefined)).toEqual({ title: '', body: '', data: {}, options: {}, silent: false })
+  })
+})
+
+describe('resolvePushBody', () => {
+  it('returns the envelope body when no options.body override is set', () => {
+    expect(resolvePushBody(readPushEnvelope({ raw: { body: 'Body text' } }))).toBe('Body text')
+  })
+
+  it('prefers options.body when provided', () => {
+    expect(resolvePushBody(readPushEnvelope({ raw: { body: 'Body text', options: { body: 'override' } } }))).toBe('override')
   })
 })

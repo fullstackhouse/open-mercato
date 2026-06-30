@@ -47,6 +47,59 @@ describe('ExpoChannelAdapter', () => {
     expect(messages[0].data).toEqual({ type: 'orders.shipped', notificationId: 'n1' })
   })
 
+  it('sends a data-only content-available message when silent', async () => {
+    const { client, send } = buildClient({ status: 'ok', id: 'ticket-silent' })
+    setExpoClientFactory(() => client)
+
+    const result = await getExpoChannelAdapter().sendMessage(
+      buildInput({
+        content: { raw: { title: '', body: '', data: { type: 'esim.installation_data' }, silent: true } },
+      }),
+    )
+
+    expect(result.status).toBe('sent')
+    const message = send.mock.calls[0][0][0]
+    expect(message).toEqual({ to: 'ExponentPushToken[abc]', data: { type: 'esim.installation_data' }, _contentAvailable: true })
+    expect(message.title).toBeUndefined()
+    expect(message.body).toBeUndefined()
+  })
+
+  it('applies push options (sound/badge/priority/channel/image/body)', async () => {
+    const { client, send } = buildClient({ status: 'ok', id: 'ticket-opts' })
+    setExpoClientFactory(() => client)
+
+    await getExpoChannelAdapter().sendMessage(
+      buildInput({
+        content: {
+          raw: {
+            title: 'Hello',
+            body: 'Body text',
+            data: {},
+            options: {
+              sound: 'chime.caf',
+              badge: 5,
+              priority: 'high',
+              channelId: 'orders',
+              image: 'https://cdn/x.png',
+              body: 'override body',
+            },
+          },
+        },
+      }),
+    )
+
+    expect(send.mock.calls[0][0][0]).toMatchObject({
+      to: 'ExponentPushToken[abc]',
+      title: 'Hello',
+      body: 'override body',
+      sound: 'chime.caf',
+      badge: 5,
+      priority: 'high',
+      channelId: 'orders',
+      richContent: { image: 'https://cdn/x.png' },
+    })
+  })
+
   it('fails fast when the push token is missing', async () => {
     const result = await getExpoChannelAdapter().sendMessage(buildInput({ metadata: { platform: 'ios' } }))
     expect(result.status).toBe('failed')
