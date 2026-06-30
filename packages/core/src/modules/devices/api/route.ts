@@ -34,8 +34,11 @@ const crud = makeCrudRoute({
   orm: {
     entity: UserDevice,
     idField: 'id',
-    // Devices are tenant-scoped; organization_id is nullable, so disable automatic org scoping.
-    orgField: null,
+    // organization_id stays nullable, but scoping follows the standard org-scoped pattern (like every
+    // other module): the factory auto-filters by the caller's organization scope. The query engine's
+    // org scope is null-aware — callers whose scope includes null (or who have no org restriction) also
+    // see null-org rows; a caller pinned to a specific org does not.
+    orgField: 'organizationId',
     tenantField: 'tenantId',
     softDeleteField: 'deletedAt',
   },
