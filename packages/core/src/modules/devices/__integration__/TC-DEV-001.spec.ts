@@ -1,6 +1,11 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api'
 import { getTokenScope, readJsonSafe } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures'
+import {
+  OPTIMISTIC_LOCK_HEADER_NAME,
+  OPTIMISTIC_LOCK_CONFLICT_CODE,
+  OPTIMISTIC_LOCK_CONFLICT_ERROR,
+} from '@open-mercato/shared/lib/crud/optimistic-lock-headers'
 
 type RegisterResult = { id: string; deviceId: string; revived: boolean }
 type DeviceListItem = {
@@ -432,5 +437,114 @@ test.describe('TC-DEV-002: Devices admin endpoints', () => {
       data: { userId: employeeScope.userId, deviceId: uniqueDeviceId(), platform: 'ios' },
     })
     expect(create.status()).toBe(403)
+  })
+})
+
+// Admin detail GET reads straight from the DB (strongly consistent, unlike the query-index list), so
+// it is the deterministic way to assert exact timestamps / per-field state for a single device.
+type DeviceDetail = DeviceListItem & { os_version?: string | null; updated_at?: string | null }
+
+async function adminGetDevice(
+  request: APIRequestContext,
+  token: string,
+  id: string,
+): Promise<DeviceDetail> {
+  const res = await apiRequest(request, 'GET', `${ADMIN_PATH}/${id}`, { token })
+  expect(res.status(), 'admin device detail GET should return 200').toBe(200)
+  const body = await readJsonSafe<{ item?: DeviceDetail }>(res)
+  expect(body?.item, 'admin device detail should include item').toBeTruthy()
+  return body!.item!
+}
+
+const LOCK_BASE_URL = process.env.BASE_URL?.trim() || ''
+function resolveLockUrl(path: string): string {
+  return LOCK_BASE_URL ? `${LOCK_BASE_URL}${path}` : path
+}
+
+async function putWithLockHeader(
+  request: APIRequestContext,
+  token: string,
+  path: string,
+  expectedUpdatedAt: string,
+  data: Record<string, unknown>,
+) {
+  return request.fetch(resolveLockUrl(path), {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      [OPTIMISTIC_LOCK_HEADER_NAME]: expectedUpdatedAt,
+    },
+    data,
+  })
+}
+
+test.describe('TC-DEV-003: last_seen_at presence semantics', () => {
+  test('metadata-only edit keeps last_seen_at; explicit lastSeenAt advances it', async ({ request }) => {
+    const employeeToken = await getAuthToken(request, 'employee')
+    const adminToken = await getAuthToken(request, 'admin')
+    const deviceId = uniqueDeviceId()
+    let createdId: string | null = null
+    try {
+      createdId = (await registerDevice(request, employeeToken, { deviceId, platform: 'ios', osVersion: 'iOS 18.0' })).json?.id ?? null
+      expect(createdId).toBeTruthy()
+
+      const before = await adminGetDevice(request, adminToken, createdId!)
+      const lastSeenT0 = before.last_seen_at
+      expect(lastSeenT0).toBeTruthy()
+
+      // Metadata-only PUT (no lastSeenAt) must NOT bump presence — only the row's updated_at moves.
+      const put1 = await apiRequest(request, 'PUT', `${SELF_PATH}/${createdId}`, { token: employeeToken, data: { osVersion: 'iOS 18.1' } })
+      expect(put1.status()).toBe(200)
+      const after1 = await adminGetDevice(request, adminToken, createdId!)
+      expect(after1.os_version, 'metadata edit should apply').toBe('iOS 18.1')
+      expect(after1.last_seen_at, 'last_seen_at must NOT change on a metadata-only edit').toBe(lastSeenT0)
+      expect(after1.updated_at, 'updated_at should advance (row was written)').not.toBe(before.updated_at)
+
+      // An explicit client-supplied lastSeenAt DOES advance presence.
+      const explicit = '2031-01-02T03:04:05.000Z'
+      const put2 = await apiRequest(request, 'PUT', `${SELF_PATH}/${createdId}`, { token: employeeToken, data: { lastSeenAt: explicit } })
+      expect(put2.status()).toBe(200)
+      const after2 = await adminGetDevice(request, adminToken, createdId!)
+      expect(new Date(after2.last_seen_at as string).toISOString()).toBe(explicit)
+    } finally {
+      await deleteDeviceIfExists(request, employeeToken, createdId)
+    }
+  })
+})
+
+test.describe('TC-DEV-004: optimistic locking on device update', () => {
+  test('a stale expected-updated-at is refused with a structured 409', async ({ request }) => {
+    const adminToken = await getAuthToken(request, 'admin')
+    const employeeScope = getTokenScope(await getAuthToken(request, 'employee'))
+    const deviceId = uniqueDeviceId()
+    let createdId: string | null = null
+    try {
+      const reg = await apiRequest(request, 'POST', ADMIN_PATH, {
+        token: adminToken,
+        data: { userId: employeeScope.userId, deviceId, platform: 'android' },
+      })
+      expect(reg.status()).toBe(201)
+      createdId = (await readJsonSafe<RegisterResult>(reg))?.id ?? null
+      expect(createdId).toBeTruthy()
+
+      const t0 = (await adminGetDevice(request, adminToken, createdId!)).updated_at as string
+      expect(t0).toBeTruthy()
+
+      // Session A holds the fresh version → wins.
+      const sessionA = await putWithLockHeader(request, adminToken, `${ADMIN_PATH}/${createdId}`, t0, { osVersion: 'locked-A' })
+      expect(sessionA.status(), 'session A (fresh version) should win').toBeLessThan(300)
+
+      const t1 = (await adminGetDevice(request, adminToken, createdId!)).updated_at as string
+      expect(t1, 'updated_at should advance after session A').not.toBe(t0)
+
+      // Session B replays the now-stale version → refused with 409.
+      const sessionB = await putWithLockHeader(request, adminToken, `${ADMIN_PATH}/${createdId}`, t0, { osVersion: 'stale-B' })
+      expect(sessionB.status(), 'stale session B should be refused with 409').toBe(409)
+      const body = await readJsonSafe<Record<string, unknown>>(sessionB)
+      expect(body).toMatchObject({ error: OPTIMISTIC_LOCK_CONFLICT_ERROR, code: OPTIMISTIC_LOCK_CONFLICT_CODE })
+    } finally {
+      if (createdId) await apiRequest(request, 'DELETE', `${ADMIN_PATH}/${createdId}`, { token: adminToken }).catch(() => undefined)
+    }
   })
 })
