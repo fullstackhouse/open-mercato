@@ -27,12 +27,11 @@ export interface SendCustomPushArgs {
 /**
  * Deliver an admin-composed, one-off **visible** push to all of a user's push-capable devices.
  *
- * The mirror image of {@link sendSilentPush}: same direct fan-out (no in-app `Notification` row, no
- * email, no per-channel preference check), but a visible payload carrying a literal title/body. The
- * `type` MUST be registered and **not** silent (a visible push cannot target a silent type) — the
- * inverse of the silent guard. Because the copy is literal free text, it is delivered verbatim (no
- * per-device locale translation). The actual provider send happens in the `send-push` worker; the
- * returned `enqueued` is the number of per-device jobs scheduled.
+ * A direct fan-out (no in-app `Notification` row, no email, no per-channel preference check) carrying
+ * a visible payload with a literal title/body. The `type` MUST be registered and **not** silent (a
+ * visible push cannot target a silent type). Because the copy is literal free text, it is delivered
+ * verbatim (no per-device locale translation). The actual provider send happens in the `send-push`
+ * worker; the returned `enqueued` is the number of per-device jobs scheduled.
  */
 export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueued: number }> {
   const {
@@ -73,3 +72,9 @@ export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueu
     },
   })
 }
+
+export interface PushNotificationService {
+  sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueued: number }>
+}
+
+export const pushNotificationService: PushNotificationService = { sendCustomPush }

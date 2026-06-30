@@ -50,9 +50,9 @@ function tokenSnapshot(token: string): string {
 /**
  * Resolve a recipient's push-capable devices, route each to its provider's tenant push
  * `CommunicationChannel`, persist one `pending` {@link PushNotificationDelivery} per device, and
- * enqueue a send job per row. Shared by the `push` delivery strategy (visible notifications) and
- * `sendSilentPush` (content-available wake-ups); it is preference-agnostic — the caller decides
- * whether to consult per-channel preferences before fanning out.
+ * enqueue a send job per row. Shared by the `push` delivery strategy (visible + silent
+ * notifications) and `sendCustomPush` (admin one-off pushes); it is preference-agnostic — the
+ * caller decides whether to consult per-channel preferences before fanning out.
  *
  * Cross-module entities are resolved via DI tokens (registered `asValue` by their owning modules)
  * so this stays decoupled from those modules' internals. Returns the number of jobs enqueued.

@@ -21,11 +21,10 @@ export { PUSH_CHANNEL } from './push-fanout'
  * controls only HOW the device is notified (background wake-up vs visible alert); it does not
  * imply the push is non-opt-out. Silent types still respect the recipient's per-channel
  * preference unless the type is `nonOptOut` — to force a silent push, mark the type
- * `nonOptOut: true`. (The explicit `sendSilentPush` helper is a separate forced-wake-up path
- * that never creates an in-app notification and is out of scope for this opt-out.)
+ * `nonOptOut: true`. A silent push is therefore just a notification created through the normal
+ * `notificationService.create()` flow whose type is `silent: true`; there is no separate helper.
  *
- * The shared device/channel fan-out lives in {@link fanOutPushDeliveries} and is reused by
- * `sendSilentPush` (which delivers the same silent payload without an in-app notification).
+ * The shared device/channel fan-out lives in {@link fanOutPushDeliveries}.
  */
 export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
   id: PUSH_CHANNEL,

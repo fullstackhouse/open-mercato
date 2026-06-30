@@ -191,7 +191,7 @@ describe('fanOutPushDeliveries', () => {
       resolve,
       ...baseArgs,
       notificationId: null,
-      payload: { data: { type: 'esim.installation_data' }, silent: true },
+      payload: { data: { type: 'sync.data.updated' }, silent: true },
     })
     expect(result).toEqual({ enqueued: 1 })
     expect(created[0].silent).toBe(true)
