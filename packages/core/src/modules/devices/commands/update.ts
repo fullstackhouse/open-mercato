@@ -55,6 +55,9 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
           if (Object.prototype.hasOwnProperty.call(parsed, 'osVersion')) {
             device.osVersion = parsed.osVersion ?? null
           }
+          if (Object.prototype.hasOwnProperty.call(parsed, 'locale')) {
+            device.locale = parsed.locale ?? null
+          }
           if (Object.prototype.hasOwnProperty.call(parsed, 'pushToken')) {
             device.pushToken = parsed.pushToken ?? null
             device.pushTokenUpdatedAt = now

@@ -53,13 +53,13 @@ describe('ExpoChannelAdapter', () => {
 
     const result = await getExpoChannelAdapter().sendMessage(
       buildInput({
-        content: { raw: { title: '', body: '', data: { type: 'esim.installation_data' }, silent: true } },
+        content: { raw: { title: '', body: '', data: { type: 'sync.data.updated' }, silent: true } },
       }),
     )
 
     expect(result.status).toBe('sent')
     const message = send.mock.calls[0][0][0]
-    expect(message).toEqual({ to: 'ExponentPushToken[abc]', data: { type: 'esim.installation_data' }, _contentAvailable: true })
+    expect(message).toEqual({ to: 'ExponentPushToken[abc]', data: { type: 'sync.data.updated' }, _contentAvailable: true })
     expect(message.title).toBeUndefined()
     expect(message.body).toBeUndefined()
   })

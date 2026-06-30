@@ -64,6 +64,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
               device.organizationId = parsed.organizationId ?? device.organizationId ?? null
               if (parsed.clientAppVersion !== undefined) device.clientAppVersion = parsed.clientAppVersion ?? null
               if (parsed.osVersion !== undefined) device.osVersion = parsed.osVersion ?? null
+              if (parsed.locale !== undefined) device.locale = parsed.locale ?? null
               if (hasPushToken) {
                 device.pushToken = parsed.pushToken ?? null
                 device.pushProvider = parsed.pushProvider ?? device.pushProvider ?? null
@@ -80,6 +81,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
                 platform: parsed.platform,
                 clientAppVersion: parsed.clientAppVersion ?? null,
                 osVersion: parsed.osVersion ?? null,
+                locale: parsed.locale ?? null,
                 pushToken: hasPushToken ? parsed.pushToken ?? null : null,
                 pushProvider: hasPushToken ? parsed.pushProvider ?? null : null,
                 pushTokenUpdatedAt: hasPushToken ? now : null,
