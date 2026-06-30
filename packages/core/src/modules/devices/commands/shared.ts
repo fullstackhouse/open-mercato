@@ -86,7 +86,9 @@ export function applySnapshot(device: UserDevice, snapshot: DeviceSnapshot): voi
 
 export async function loadExistingDevice(
   em: EntityManager,
-  scope: { tenantId: string; userId: string; deviceId: string },
+  // organizationId is part of the device identity (a null value matches IS NULL, mirroring the
+  // coalesce(...) bucket in the unique index), so a device is looked up per (tenant, org, user, device).
+  scope: { tenantId: string; organizationId: string | null; userId: string; deviceId: string },
 ): Promise<UserDevice | null> {
   const active = await em.findOne(UserDevice, { ...scope, deletedAt: null })
   if (active) return active
@@ -96,7 +98,7 @@ export async function loadExistingDevice(
 // Postgres SQLSTATE for unique_violation. MikroORM doesn't re-export pg error codes, so name it here.
 const PG_UNIQUE_VIOLATION = '23505'
 
-// A concurrent first-registration of the same (tenant, user, device_id) loses the race against the
+// A concurrent first-registration of the same (tenant, org, user, device_id) loses the race against the
 // partial unique index. Surface it as a 409 conflict instead of a raw 500 — the endpoint is an
 // idempotent upsert, so the caller can simply re-issue the request to land on the existing row.
 export function isDeviceUniqueViolation(error: unknown): boolean {

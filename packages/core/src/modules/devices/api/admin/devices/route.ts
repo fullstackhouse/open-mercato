@@ -85,6 +85,7 @@ export async function POST(req: Request) {
     const em = container.resolve('em') as EntityManager
     const existing = await loadExistingDevice(em.fork(), {
       tenantId: auth.tenantId,
+      organizationId,
       userId: body.userId,
       deviceId: body.deviceId,
     })
