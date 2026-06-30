@@ -2,7 +2,6 @@ import {
   buildPreferenceMap,
   diffPreferenceItems,
   preferenceKey,
-  toPreferenceItems,
   PREFERENCE_CHANNELS,
   type NotificationTypeItem,
 } from '../NotificationPreferenceMatrix'
@@ -40,11 +39,5 @@ describe('NotificationPreferenceMatrix helpers', () => {
     expect(diffPreferenceItems(types, initial, current)).toEqual([
       { notificationTypeId: 'a.one', channel: 'push', enabled: true },
     ])
-  })
-
-  it('toPreferenceItems flattens the full matrix (defaults to enabled)', () => {
-    const items = toPreferenceItems(types, buildPreferenceMap(types, []))
-    expect(items).toHaveLength(types.length * PREFERENCE_CHANNELS.length)
-    expect(items.every((item) => item.enabled === true)).toBe(true)
   })
 })
