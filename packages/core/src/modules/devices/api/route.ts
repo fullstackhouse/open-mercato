@@ -41,7 +41,7 @@ const crud = makeCrudRoute({
   },
   indexer: { entityType: E.devices.user_device },
   // Align the CRUD cache resource tag with the command's resourceKind ('devices.user_device') so
-  // writes through commands/devices.ts invalidate this list cache. Without this, the factory falls
+  // writes through the device commands invalidate this list cache. Without this, the factory falls
   // back to the ORM entity name and the cache is never busted (stale list under ENABLE_CRUD_API_CACHE).
   // The factory does not own the write methods here (custom POST + command bus), so no events are emitted.
   events: { module: 'devices', entity: 'user_device' },

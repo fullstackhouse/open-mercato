@@ -3,22 +3,17 @@ import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import {
   createCrudOpenApiFactory,
   createPagedListResponseSchema as createSharedPagedListResponseSchema,
-  defaultCreateResponseSchema as sharedDefaultCreateResponseSchema,
-  defaultOkResponseSchema as sharedDefaultOkResponseSchema,
   type CrudOpenApiOptions,
 } from '@open-mercato/shared/lib/openapi/crud'
-
-export const defaultCreateResponseSchema = sharedDefaultCreateResponseSchema
-export const defaultOkResponseSchema = sharedDefaultOkResponseSchema
 
 export function createPagedListResponseSchema(itemSchema: ZodTypeAny) {
   return createSharedPagedListResponseSchema(itemSchema, { paginationMetaOptional: true })
 }
 
+// createCrudOpenApiFactory already falls back to the shared default create/ok response schemas
+// when omitted, so there is nothing module-specific to re-pass or re-export here.
 const buildDevicesCrudOpenApi = createCrudOpenApiFactory({
   defaultTag: 'Devices',
-  defaultCreateResponseSchema,
-  defaultOkResponseSchema,
   makeListDescription: ({ pluralLower }) =>
     `Returns the authenticated user's registered ${pluralLower} (admins may list across users).`,
 })

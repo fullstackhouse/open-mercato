@@ -14,8 +14,10 @@ delivery logic** (sender, providers, delivery rows, workers live in the `push_no
 
 - Scope every query by `tenant_id`. Org is **nullable** — the list route sets `orm.orgField: null`
   (disables org scoping) and keeps `tenantField` for tenant isolation.
-- Route all writes through `commands/devices.ts` (`devices.devices.register`, `devices.devices.update`,
-  `devices.devices.deactivate`) — they carry undo snapshots, query-index side effects, and domain events.
+- Route all writes through the device commands (`commands/register.ts`, `commands/update.ts`,
+  `commands/deactivate.ts` → `devices.devices.register`, `devices.devices.update`,
+  `devices.devices.deactivate`; shared helpers in `commands/shared.ts`, registered via `commands/index.ts`)
+  — they carry undo snapshots, query-index side effects, and domain events.
 - Treat `push_token` as a secret: **never** include it in list/response field sets. Only
   `push_provider` and `push_token_updated_at` are exposed.
 - Honor the `pushToken` tri-state on `PUT`: absent key = leave unchanged; explicit `null` = clear
