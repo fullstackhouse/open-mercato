@@ -83,9 +83,10 @@ export type NotificationTypeDefinition = {
    */
   category?: string
   /**
-   * When `true`, this type may be delivered as a silent / content-available push
-   * (a data-only wake-up that creates no in-app `Notification` row and bypasses
-   * per-channel preferences). Gates `pushNotificationService.sendSilentPush`.
+   * When `true`, this type's push is delivered as a silent / content-available (data-only)
+   * wake-up instead of a visible alert. `silent` selects the delivery STYLE only — the
+   * notification still flows through the normal `notificationService.create()` path (in-app
+   * row created, per-channel preferences respected unless the type is `nonOptOut`).
    */
   silent?: boolean
   /**

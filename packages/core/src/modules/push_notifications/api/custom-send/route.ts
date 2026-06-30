@@ -13,7 +13,7 @@ import {
 } from '@open-mercato/shared/lib/crud/mutation-guard-registry'
 import type { AwilixContainer } from 'awilix'
 import { customSendSchema, customSendResponseSchema } from '../../data/validators'
-import type { PushNotificationService } from '../../lib/send-silent-push'
+import type { PushNotificationService } from '../../lib/send-custom-push'
 
 const RESOURCE_KIND = 'push_notifications.push_notification_delivery'
 
