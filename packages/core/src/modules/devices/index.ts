@@ -7,7 +7,7 @@ export const metadata: ModuleInfo = {
   version: '0.1.0',
   description: 'Per-tenant user device registry (platform, app/OS metadata, push token storage).',
   author: 'Open Mercato Team',
-  license: 'Proprietary',
+  license: 'MIT',
   requires: ['auth'],
   ejectable: true,
 }
