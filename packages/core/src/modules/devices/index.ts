@@ -1,5 +1,5 @@
 import type { ModuleInfo } from '@open-mercato/shared/modules/registry'
-import './commands/devices'
+import './commands'
 
 export const metadata: ModuleInfo = {
   name: 'devices',

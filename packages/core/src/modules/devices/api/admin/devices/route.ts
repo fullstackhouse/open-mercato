@@ -17,7 +17,7 @@ import {
   type RegisterDeviceCommandInput,
 } from '../../../data/validators'
 import { isOrganizationReadAccessAllowed } from '@open-mercato/core/modules/directory/utils/organizationScopeGuard'
-import { loadExistingDevice } from '../../../commands/devices'
+import { loadExistingDevice } from '../../../commands/shared'
 import { resolveDeviceActorUserId } from '../../auth'
 import { createDevicesCrudOpenApi, createPagedListResponseSchema } from '../../openapi'
 import { deviceListSchema, deviceListFields, deviceListSortFieldMap, deviceListItemSchema } from '../../deviceList'
