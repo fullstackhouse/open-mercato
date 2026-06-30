@@ -95,6 +95,22 @@ test.describe('TC-NOTIF-011: Notification type catalogue + channel preferences',
     expect(mine).toHaveLength(1)
   })
 
+  test('GET /types is idempotent (stable, de-duplicated catalogue) and an empty save is a no-op', async ({ request }) => {
+    const token = await getAuthToken(request, 'employee')
+
+    // The read-through mirror reconcile must converge: repeated reads return the same set, no dupes.
+    const first = (await getTypes(request, token)).items.map((item) => item.id).sort()
+    const second = (await getTypes(request, token)).items.map((item) => item.id).sort()
+    expect(second).toEqual(first)
+    expect(new Set(second).size).toBe(second.length)
+
+    // The client sends an empty diff when nothing changed — accepted, and writes no rows.
+    const before = await getPreferences(request, token)
+    expect(await putPreferences(request, token, [])).toBe(200)
+    const after = await getPreferences(request, token)
+    expect(after.length).toBe(before.length)
+  })
+
   test('rejects unauthenticated preference writes', async ({ request }) => {
     const res = await apiRequest(request, 'PUT', PREFERENCES_PATH, {
       token: '',
