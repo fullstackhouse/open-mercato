@@ -24,8 +24,11 @@ export interface NotificationPreferenceService {
    * row exists (lazy-seed, default-on) — does not write.
    */
   isChannelEnabled(scope: NotificationPreferenceScope, typeId: string, channel: string): Promise<boolean>
-  /** Bulk find-or-upsert of preference rows for the scoped user. */
-  setPreferences(scope: NotificationPreferenceScope, items: NotificationPreferenceInput[]): Promise<void>
+  /**
+   * Bulk find-or-upsert of preference rows for the scoped user. Returns the number of rows actually
+   * changed (created, or whose `enabled` flipped) so callers can skip emitting events on no-op writes.
+   */
+  setPreferences(scope: NotificationPreferenceScope, items: NotificationPreferenceInput[]): Promise<number>
   /** All stored preference rows for the scoped user (absence ⇒ enabled). */
   listForUser(scope: NotificationPreferenceScope): Promise<NotificationPreference[]>
 }
@@ -59,7 +62,7 @@ export function createNotificationPreferenceService(
     },
 
     async setPreferences(scope, items) {
-      if (items.length === 0) return
+      if (items.length === 0) return 0
       const em = rootEm.fork()
       const existing = await em.find(NotificationPreference, {
         tenantId: scope.tenantId,
@@ -69,6 +72,7 @@ export function createNotificationPreferenceService(
         existing.map((row) => [`${row.notificationTypeId}::${row.channel}`, row]),
       )
 
+      let changed = 0
       await withAtomicFlush(
         em,
         [
@@ -76,7 +80,9 @@ export function createNotificationPreferenceService(
             for (const item of items) {
               const row = byKey.get(`${item.typeId}::${item.channel}`)
               if (row) {
+                if (row.enabled === item.enabled) continue
                 row.enabled = item.enabled
+                changed += 1
                 continue
               }
               const next = em.create(NotificationPreference, {
@@ -87,11 +93,13 @@ export function createNotificationPreferenceService(
                 enabled: item.enabled,
               })
               em.persist(next)
+              changed += 1
             }
           },
         ],
         { transaction: true, label: 'notifications.setPreferences' },
       )
+      return changed
     },
   }
 }
@@ -99,6 +107,9 @@ export function createNotificationPreferenceService(
 export function resolveNotificationPreferenceService(container: {
   resolve: (name: string) => unknown
 }): NotificationPreferenceService {
+  // Construct from the request-scoped `em`, mirroring `resolveNotificationService`. (The request
+  // container does not expose the module's scoped service bindings, so resolving `em` directly is the
+  // module convention — see notificationService.ts.)
   const em = container.resolve('em') as EntityManager
   return createNotificationPreferenceService({ em })
 }

@@ -11,8 +11,8 @@ import { Spinner } from '@open-mercato/ui/primitives/spinner'
 import {
   NotificationPreferenceMatrix,
   buildPreferenceMap,
+  diffPreferenceItems,
   preferenceKey,
-  toPreferenceItems,
   type NotificationTypeItem,
   type PreferenceItem,
 } from './NotificationPreferenceMatrix'
@@ -39,6 +39,8 @@ export function NotificationUserPreferencesAdminPageClient() {
   const [searching, setSearching] = React.useState(false)
   const [selected, setSelected] = React.useState<UserRow | null>(null)
   const [prefs, setPrefs] = React.useState<Record<string, boolean>>({})
+  // Baseline for the selected user; saves send only entries that differ from this.
+  const initialPrefs = React.useRef<Record<string, boolean>>({})
   const [prefsLoading, setPrefsLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
 
@@ -98,7 +100,9 @@ export function NotificationUserPreferencesAdminPageClient() {
         undefined,
         { errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'), allowNullResult: true },
       )
-      setPrefs(buildPreferenceMap(types, body?.items ?? []))
+      const map = buildPreferenceMap(types, body?.items ?? [])
+      initialPrefs.current = map
+      setPrefs(map)
     } catch (err) {
       flash(err instanceof Error ? err.message : t('notifications.preferences.loadError', 'Failed to load notification preferences'), 'error')
       setSelected(null)
@@ -115,7 +119,7 @@ export function NotificationUserPreferencesAdminPageClient() {
     if (!selected) return
     setSaving(true)
     try {
-      const preferences = toPreferenceItems(types, prefs)
+      const preferences = diffPreferenceItems(types, initialPrefs.current, prefs)
       const response = await runMutation({
         operation: () =>
           apiCall<SaveResponse>('/api/notifications/admin/preferences', {
@@ -129,6 +133,7 @@ export function NotificationUserPreferencesAdminPageClient() {
       if (!response.ok) {
         throw new Error(response.result?.error || t('notifications.preferences.saveError', 'Failed to save notification preferences'))
       }
+      initialPrefs.current = prefs
       flash(t('notifications.preferences.saveSuccess', 'Notification preferences saved'), 'success')
     } catch (err) {
       flash(err instanceof Error ? err.message : t('notifications.preferences.saveError', 'Failed to save notification preferences'), 'error')

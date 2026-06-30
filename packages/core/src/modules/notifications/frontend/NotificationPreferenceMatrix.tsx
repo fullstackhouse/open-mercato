@@ -64,6 +64,30 @@ export function toPreferenceItems(
   return items
 }
 
+/**
+ * Return only the entries whose value differs from the originally-loaded state. The server upserts
+ * exactly what it receives (last-write-wins), so sending the diff keeps the payload bounded by the
+ * number of toggles — not the catalogue size — and avoids materializing redundant default-on rows.
+ */
+export function diffPreferenceItems(
+  types: NotificationTypeItem[],
+  initial: Record<string, boolean>,
+  current: Record<string, boolean>,
+): PreferenceItem[] {
+  const items: PreferenceItem[] = []
+  for (const type of types) {
+    for (const channel of PREFERENCE_CHANNELS) {
+      const key = preferenceKey(type.id, channel.key)
+      const before = initial[key] ?? true
+      const after = current[key] ?? true
+      if (before !== after) {
+        items.push({ notificationTypeId: type.id, channel: channel.key, enabled: after })
+      }
+    }
+  }
+  return items
+}
+
 export type NotificationPreferenceMatrixProps = {
   types: NotificationTypeItem[]
   prefs: Record<string, boolean>

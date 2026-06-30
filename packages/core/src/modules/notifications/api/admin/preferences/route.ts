@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import type { AwilixContainer } from 'awilix'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
+import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { User } from '../../../../auth/data/entities'
+import { assertActorCanAccessUserTarget } from '../../../../auth/lib/grantChecks'
+import type { RbacService } from '../../../../auth/services/rbacService'
 import { resolveNotificationPreferenceService, type NotificationPreferenceScope } from '../../../lib/notificationPreferenceService'
 import { runGuardedNotificationWrite, NOTIFICATION_PREFERENCE_RESOURCE_KIND } from '../../../lib/routeHelpers'
 import { PREFERENCE_UPDATED_EVENT } from '../../../events'
@@ -26,10 +30,40 @@ const unauthorized = async () => {
   return NextResponse.json({ error: t('api.errors.unauthorized', 'Unauthorized') }, { status: 401 })
 }
 
-/** Confirm the target user exists in the acting admin's tenant (prevents cross-tenant writes). */
-async function assertTargetUserInTenant(em: EntityManager, userId: string, tenantId: string): Promise<boolean> {
-  const user = await em.findOne(User, { id: userId, tenantId, deletedAt: null })
-  return Boolean(user)
+/**
+ * Authorize the acting admin to manage a target user's preferences. Returns an error response to
+ * send, or null when access is granted. Two gates, mirroring the platform's user-management scoping:
+ *   - 404 when the user does not exist in the acting tenant (existence/tenant check — the shared
+ *     `assertActorCanAccessUserTarget` delegates silently on a fully-missing target).
+ *   - standard org scoping via `assertActorCanAccessUserTarget` (403 out-of-org / 404 cross-tenant,
+ *     super-admin and `__all__` bypass) — the same guard `auth` user CRUD uses, instead of a
+ *     hand-rolled tenant-only check.
+ */
+async function authorizeTargetUser(
+  container: AwilixContainer,
+  em: EntityManager,
+  auth: { sub: string; tenantId: string },
+  targetUserId: string,
+): Promise<NextResponse | null> {
+  const { t } = await resolveTranslations()
+  const user = await em.findOne(User, { id: targetUserId, tenantId: auth.tenantId, deletedAt: null })
+  if (!user) {
+    return NextResponse.json({ error: t('notifications.preferences.userNotFound', 'User not found') }, { status: 404 })
+  }
+  try {
+    const rbacService = container.resolve('rbacService') as RbacService
+    await assertActorCanAccessUserTarget({
+      em,
+      rbacService,
+      actorUserId: auth.sub,
+      tenantId: auth.tenantId,
+      targetUserId,
+    })
+  } catch (err) {
+    if (isCrudHttpError(err)) return NextResponse.json(err.body, { status: err.status })
+    throw err
+  }
+  return null
 }
 
 export async function GET(req: Request) {
@@ -46,9 +80,8 @@ export async function GET(req: Request) {
   const container = await createRequestContainer()
   try {
     const em = container.resolve('em') as EntityManager
-    if (!(await assertTargetUserInTenant(em, parsed.data.userId, auth.tenantId))) {
-      return NextResponse.json({ error: t('notifications.preferences.userNotFound', 'User not found') }, { status: 404 })
-    }
+    const denied = await authorizeTargetUser(container, em, { sub: auth.sub, tenantId: auth.tenantId }, parsed.data.userId)
+    if (denied) return denied
     const service = resolveNotificationPreferenceService(container)
     const scope: NotificationPreferenceScope = { tenantId: auth.tenantId, userId: parsed.data.userId }
     const rows = await service.listForUser(scope)
@@ -77,9 +110,8 @@ export async function PUT(req: Request) {
   const container = await createRequestContainer()
   try {
     const em = container.resolve('em') as EntityManager
-    if (!(await assertTargetUserInTenant(em, parsed.data.userId, auth.tenantId))) {
-      return NextResponse.json({ error: t('notifications.preferences.userNotFound', 'User not found') }, { status: 404 })
-    }
+    const denied = await authorizeTargetUser(container, em, { sub: auth.sub, tenantId: auth.tenantId }, parsed.data.userId)
+    if (denied) return denied
     const service = resolveNotificationPreferenceService(container)
     const scope: NotificationPreferenceScope = { tenantId: auth.tenantId, userId: parsed.data.userId }
     const guarded = await runGuardedNotificationWrite(
@@ -100,14 +132,17 @@ export async function PUT(req: Request) {
     )
     if (!guarded.ok) return guarded.response
 
-    const eventBus = container.resolve('eventBus') as {
-      emit: (event: string, payload: unknown, options?: unknown) => Promise<void>
+    // Skip the event on no-op writes (nothing actually changed).
+    if (guarded.result > 0) {
+      const eventBus = container.resolve('eventBus') as {
+        emit: (event: string, payload: unknown, options?: unknown) => Promise<void>
+      }
+      await eventBus.emit(
+        PREFERENCE_UPDATED_EVENT,
+        { tenantId: auth.tenantId, userId: parsed.data.userId },
+        { tenantId: auth.tenantId, organizationId: auth.orgId ?? null },
+      )
     }
-    await eventBus.emit(
-      PREFERENCE_UPDATED_EVENT,
-      { tenantId: auth.tenantId, userId: parsed.data.userId },
-      { tenantId: auth.tenantId, organizationId: auth.orgId ?? null },
-    )
 
     return NextResponse.json({ ok: true })
   } finally {

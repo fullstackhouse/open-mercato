@@ -80,14 +80,17 @@ export async function PUT(req: Request) {
     )
     if (!guarded.ok) return guarded.response
 
-    const eventBus = container.resolve('eventBus') as {
-      emit: (event: string, payload: unknown, options?: unknown) => Promise<void>
+    // Skip the event on no-op writes (nothing actually changed).
+    if (guarded.result > 0) {
+      const eventBus = container.resolve('eventBus') as {
+        emit: (event: string, payload: unknown, options?: unknown) => Promise<void>
+      }
+      await eventBus.emit(
+        PREFERENCE_UPDATED_EVENT,
+        { tenantId: auth.tenantId, userId: auth.sub },
+        { tenantId: auth.tenantId, organizationId: auth.orgId ?? null },
+      )
     }
-    await eventBus.emit(
-      PREFERENCE_UPDATED_EVENT,
-      { tenantId: auth.tenantId, userId: auth.sub },
-      { tenantId: auth.tenantId, organizationId: auth.orgId ?? null },
-    )
 
     return NextResponse.json({ ok: true })
   } finally {
