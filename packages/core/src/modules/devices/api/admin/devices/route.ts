@@ -9,15 +9,12 @@ import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '#generated/entities.ids.generated'
-import type { EntityManager } from '@mikro-orm/postgresql'
 import { UserDevice } from '../../../data/entities'
 import {
   registerDeviceAdminSchema,
   registerDeviceCommandSchema,
   type RegisterDeviceCommandInput,
 } from '../../../data/validators'
-import { isOrganizationReadAccessAllowed } from '@open-mercato/core/modules/directory/utils/organizationScopeGuard'
-import { loadExistingDevice } from '../../../commands/shared'
 import { resolveDeviceActorUserId } from '../../auth'
 import { createDevicesCrudOpenApi, createPagedListResponseSchema } from '../../openapi'
 import { deviceListSchema, deviceListFields, deviceListSortFieldMap, deviceListItemSchema } from '../../deviceList'
@@ -79,20 +76,9 @@ export async function POST(req: Request) {
     const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
     const organizationId = scope?.selectedId ?? auth.orgId ?? null
 
-    // Register is an idempotent upsert that revives/updates any existing row for this tuple. Block it
-    // when the target user already has a device in an organization the admin cannot access, so a
-    // restricted admin can't move another org's device into their own scope.
-    const em = container.resolve('em') as EntityManager
-    const existing = await loadExistingDevice(em.fork(), {
-      tenantId: auth.tenantId,
-      organizationId,
-      userId: body.userId,
-      deviceId: body.deviceId,
-    })
-    if (existing && !isOrganizationReadAccessAllowed({ scope, auth, organizationId: existing.organizationId ?? null })) {
-      return NextResponse.json({ error: translate('devices.errors.forbidden', 'Access denied') }, { status: 403 })
-    }
-
+    // Register is an idempotent upsert keyed per (tenant, org, user, device). organizationId is the
+    // admin's own resolved scope, so the upsert can only ever touch a row inside an org the admin can
+    // access — no cross-org guard is needed here.
     const commandInput = registerDeviceCommandSchema.parse({
       ...body,
       tenantId: auth.tenantId,

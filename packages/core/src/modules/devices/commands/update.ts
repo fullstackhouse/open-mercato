@@ -55,7 +55,12 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
           if (Object.prototype.hasOwnProperty.call(parsed, 'pushProvider')) {
             device.pushProvider = parsed.pushProvider ?? null
           }
-          device.lastSeenAt = parsed.lastSeenAt ?? now
+          // Only a client-supplied lastSeenAt advances presence. Metadata-only edits (e.g. an admin
+          // changing push_provider) must NOT bump last_seen_at — device presence is maintained by the
+          // register heartbeat, not by edits.
+          if (Object.prototype.hasOwnProperty.call(parsed, 'lastSeenAt') && parsed.lastSeenAt) {
+            device.lastSeenAt = parsed.lastSeenAt
+          }
         },
       ],
       { transaction: true },
