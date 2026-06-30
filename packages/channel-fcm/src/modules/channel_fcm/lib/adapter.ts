@@ -9,7 +9,7 @@ import {
   MISSING_PUSH_TOKEN_RESULT,
   readPushToken,
 } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
-import { readPushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
+import { readPushEnvelope, resolvePushBody, type PushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import {
   fcmCredentialsSchema,
   parseFcmServiceAccount,
@@ -79,6 +79,54 @@ async function resolveMessaging(serviceAccount: FcmServiceAccount): Promise<Fire
   return defaultMessagingFactory(serviceAccount)
 }
 
+/**
+ * Build the firebase-admin message from the push envelope, branching on
+ * `envelope.silent` (data-only content-available wake-up) and applying the
+ * recognized `pushOptions` (sound/badge/image/priority/channelId) per platform.
+ */
+export function buildFcmMessage(token: string, envelope: PushEnvelope): Record<string, unknown> {
+  const { options, silent } = envelope
+  const apnsPriority = options.priority === 'normal' ? '5' : '10'
+
+  if (silent) {
+    return {
+      token,
+      data: envelope.data,
+      android: { priority: 'high' },
+      apns: {
+        headers: { 'apns-push-type': 'background', 'apns-priority': '5' },
+        payload: { aps: { 'content-available': 1 } },
+      },
+    }
+  }
+
+  const body = resolvePushBody(envelope)
+  const sound = options.sound ?? 'default'
+  const androidNotification: Record<string, unknown> = { sound }
+  if (options.channelId) androidNotification.channelId = options.channelId
+  if (options.image) androidNotification.imageUrl = options.image
+  const aps: Record<string, unknown> = { sound }
+  if (typeof options.badge === 'number') aps.badge = options.badge
+
+  return {
+    token,
+    notification: {
+      title: envelope.title,
+      body,
+      ...(options.image ? { imageUrl: options.image } : {}),
+    },
+    data: envelope.data,
+    android: {
+      ...(options.priority ? { priority: options.priority } : {}),
+      notification: androidNotification,
+    },
+    apns: {
+      headers: { 'apns-priority': apnsPriority },
+      payload: { aps },
+    },
+  }
+}
+
 class FcmChannelAdapter extends BasePushChannelAdapter {
   readonly providerKey = 'fcm'
   protected readonly credentialsSchema = fcmCredentialsSchema
@@ -101,13 +149,7 @@ class FcmChannelAdapter extends BasePushChannelAdapter {
     }
 
     try {
-      const externalMessageId = await messaging.send({
-        token,
-        notification: { title: envelope.title, body: envelope.body },
-        data: envelope.data,
-        android: { notification: { sound: 'default' } },
-        apns: { payload: { aps: { sound: 'default' } } },
-      })
+      const externalMessageId = await messaging.send(buildFcmMessage(token, envelope))
       return { externalMessageId, status: 'sent' }
     } catch (err) {
       const code = typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : undefined

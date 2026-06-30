@@ -6,6 +6,7 @@ import type { ChannelAdapter, SendMessageResult } from '@open-mercato/core/modul
 import { DEVICE_UNREGISTERED } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
 import { refreshCredentialsIfNeeded } from '@open-mercato/core/modules/communication_channels/lib/credential-refresh'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
+import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
 import { PushNotificationDelivery } from '../data/entities'
 import { emitPushNotificationsEvent } from '../events'
@@ -27,7 +28,13 @@ interface CredentialsServiceLike {
   ): Promise<Record<string, unknown> | null>
 }
 
-type PushPayload = { title?: string; body?: string | null; data?: Record<string, string> }
+type PushPayload = {
+  title?: string
+  body?: string | null
+  data?: Record<string, string>
+  options?: PushOptions
+  silent?: boolean
+}
 
 type ProcessResult = { status: PushNotificationDelivery['status']; deliveryId: string } | null
 
@@ -230,7 +237,13 @@ export async function processPushDeliveryJob(
     const result = await adapter.sendMessage({
       content: {
         ...converted.content,
-        raw: { title: payload.title ?? '', body: payload.body ?? null, data: payload.data ?? {} },
+        raw: {
+          title: payload.title ?? '',
+          body: payload.body ?? null,
+          data: payload.data ?? {},
+          options: payload.options ?? {},
+          silent: payload.silent === true,
+        },
       },
       credentials,
       scope,

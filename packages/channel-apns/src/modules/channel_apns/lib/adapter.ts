@@ -9,7 +9,7 @@ import {
   MISSING_PUSH_TOKEN_RESULT,
   readPushToken,
 } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
-import { readPushEnvelope, type PushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
+import { readPushEnvelope, resolvePushBody, type PushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import {
   apnsCredentialsSchema,
   resolveApnsCredentials,
@@ -80,16 +80,37 @@ async function getProvider(credentials: ApnsResolvedCredentials): Promise<ApnsPr
   return pending
 }
 
+/**
+ * Populate an APNs `Notification` from the push envelope, branching on `silent` (background
+ * content-available wake-up — no alert/sound) and applying the recognized push options. Mutates and
+ * returns `note`. Extracted from the sender so it is unit-testable without `@parse/node-apn`.
+ */
+export function buildApnsNotification(
+  note: Record<string, unknown>,
+  payload: PushEnvelope & { topic: string },
+): Record<string, unknown> {
+  const { options, silent } = payload
+  note.topic = payload.topic
+  note.payload = payload.data
+  if (silent) {
+    note.contentAvailable = 1
+    note.pushType = 'background'
+    note.priority = 5
+  } else {
+    note.alert = { title: payload.title, body: resolvePushBody(payload) }
+    note.sound = options.sound ?? 'default'
+    if (typeof options.badge === 'number') note.badge = options.badge
+    if (options.priority === 'normal') note.priority = 5
+  }
+  return note
+}
+
 function defaultSenderFactory(credentials: ApnsResolvedCredentials): ApnsSender {
   return async (payload, token) => {
     const apnModule = await import('@parse/node-apn')
     const apn = (apnModule as { default?: unknown }).default ?? apnModule
     const Notification = (apn as { Notification: new () => Record<string, unknown> }).Notification
-    const note = new Notification()
-    note.alert = { title: payload.title, body: payload.body }
-    note.sound = 'default'
-    note.topic = payload.topic
-    note.payload = payload.data
+    const note = buildApnsNotification(new Notification(), payload)
 
     const provider = await getProvider(credentials)
     const result = await provider.send(note, token)

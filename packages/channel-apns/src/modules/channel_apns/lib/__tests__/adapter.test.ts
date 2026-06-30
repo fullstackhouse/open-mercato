@@ -1,5 +1,6 @@
-import { getApnsChannelAdapter, setApnsSenderFactory, type ApnsSender } from '../adapter'
+import { buildApnsNotification, getApnsChannelAdapter, setApnsSenderFactory, type ApnsSender } from '../adapter'
 import type { SendMessageInput } from '@open-mercato/core/modules/communication_channels/lib/adapter'
+import type { PushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 
 const credentials = {
   p8Key: '-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n',
@@ -38,6 +39,30 @@ describe('ApnsChannelAdapter', () => {
     expect(token).toBe('apns-device-token-abc')
     expect(payload).toMatchObject({ title: 'Hello', body: 'Body text', topic: 'com.example.app' })
     expect(payload.data).toEqual({ type: 'orders.shipped', notificationId: 'n1' })
+  })
+
+  it('forwards the silent flag and push options to the sender', async () => {
+    const send: ApnsSender = jest.fn(async () => ({ ok: true }))
+    setApnsSenderFactory(() => send)
+
+    await getApnsChannelAdapter().sendMessage(
+      buildInput({
+        content: {
+          raw: {
+            title: '',
+            body: '',
+            data: { type: 'esim.installation_data' },
+            silent: true,
+            options: { badge: 4, priority: 'normal' },
+          },
+        },
+      }),
+    )
+
+    const [payload] = (send as jest.Mock).mock.calls[0]
+    expect(payload.silent).toBe(true)
+    expect(payload.options).toEqual({ badge: 4, priority: 'normal' })
+    expect(payload.topic).toBe('com.example.app')
   })
 
   it('fails fast when the push token is missing', async () => {
@@ -80,5 +105,40 @@ describe('ApnsChannelAdapter', () => {
     expect(result.status).toBe('failed')
     expect(result.error).toBe('socket hang up')
     expect(result.metadata?.unregistered).toBeUndefined()
+  })
+})
+
+function envelope(overrides: Partial<PushEnvelope> = {}): PushEnvelope & { topic: string } {
+  return {
+    title: 'Hello',
+    body: 'Body text',
+    data: { type: 'orders.shipped' },
+    options: {},
+    silent: false,
+    topic: 'com.example.app',
+    ...overrides,
+  }
+}
+
+describe('buildApnsNotification', () => {
+  it('builds a content-available background note for a silent envelope', () => {
+    const note = buildApnsNotification({}, envelope({ title: '', body: '', silent: true }))
+    expect(note.contentAvailable).toBe(1)
+    expect(note.pushType).toBe('background')
+    expect(note.priority).toBe(5)
+    expect(note.alert).toBeUndefined()
+    expect(note.sound).toBeUndefined()
+    expect(note.payload).toEqual({ type: 'orders.shipped' })
+  })
+
+  it('applies alert, sound, badge, body override and priority from options', () => {
+    const note = buildApnsNotification(
+      {},
+      envelope({ options: { sound: 'chime.caf', badge: 7, priority: 'normal', body: 'override body' } }),
+    )
+    expect(note.alert).toEqual({ title: 'Hello', body: 'override body' })
+    expect(note.sound).toBe('chime.caf')
+    expect(note.badge).toBe(7)
+    expect(note.priority).toBe(5)
   })
 })

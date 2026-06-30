@@ -8,7 +8,7 @@ import {
   MISSING_PUSH_TOKEN_RESULT,
   readPushToken,
 } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
-import { readPushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
+import { readPushEnvelope, resolvePushBody, type PushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import { expoCredentialsSchema, type ExpoCredentials } from './credentials'
 
 export interface ExpoPushTicket {
@@ -20,10 +20,36 @@ export interface ExpoPushTicket {
 
 export interface ExpoPushMessage {
   to: string
-  title: string
-  body: string
+  title?: string
+  body?: string
   data?: Record<string, string>
   sound?: string
+  badge?: number
+  priority?: 'default' | 'normal' | 'high'
+  channelId?: string
+  richContent?: { image?: string }
+  /** Data-only / silent delivery (iOS background wake-up). */
+  _contentAvailable?: boolean
+}
+
+/** Build the Expo message, branching on silent and applying recognized push options. */
+export function buildExpoMessage(token: string, envelope: PushEnvelope): ExpoPushMessage {
+  const { options, silent } = envelope
+  if (silent) {
+    return { to: token, data: envelope.data, _contentAvailable: true }
+  }
+  const message: ExpoPushMessage = {
+    to: token,
+    title: envelope.title,
+    body: resolvePushBody(envelope),
+    data: envelope.data,
+    sound: options.sound ?? 'default',
+  }
+  if (typeof options.badge === 'number') message.badge = options.badge
+  if (options.priority) message.priority = options.priority
+  if (options.channelId) message.channelId = options.channelId
+  if (options.image) message.richContent = { image: options.image }
+  return message
 }
 
 /**
@@ -110,9 +136,7 @@ class ExpoChannelAdapter extends BasePushChannelAdapter {
     const envelope = readPushEnvelope(input.content)
 
     try {
-      const tickets = await client.send([
-        { to: token, title: envelope.title, body: envelope.body, data: envelope.data, sound: 'default' },
-      ])
+      const tickets = await client.send([buildExpoMessage(token, envelope)])
       const ticket = tickets[0]
       if (!ticket) return { externalMessageId: '', status: 'failed', error: 'no_response' }
       if (ticket.status === 'ok') {
