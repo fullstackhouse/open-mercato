@@ -71,6 +71,17 @@ export async function syncNotificationTypes(
     [
       () => {
         for (const def of definitions) {
+          // Internal/admin-only types are never exposed to the client catalogue. Skip mirroring them
+          // (and drop a stale row if a type was flipped to hidden) so GET /api/notifications/types
+          // never lists them; they remain in the in-memory registry for delivery logic.
+          if (def.hiddenFromSettings === true) {
+            const stale = byId.get(def.type)
+            if (stale) {
+              em.remove(stale)
+              updated += 1
+            }
+            continue
+          }
           const labelKey = def.labelKey ?? def.titleKey
           const descriptionKey = def.descriptionKey ?? null
           const category = def.category ?? null

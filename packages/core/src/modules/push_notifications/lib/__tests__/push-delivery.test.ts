@@ -200,6 +200,31 @@ describe('processPushDeliveryJob', () => {
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
+  it('fails terminally with channel_unavailable when the provider channel is missing', async () => {
+    const delivery = makeDelivery()
+    const h = makeHarness({ delivery, channel: null })
+
+    await processPushDeliveryJob(h.em as never, job, h.resolve)
+
+    expect(delivery.status).toBe('failed')
+    expect(delivery.lastError).toBe('channel_unavailable')
+    expect(h.sendMessage).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('treats an adapter exception as a retryable failure', async () => {
+    const delivery = makeDelivery({ attempts: 0 })
+    const h = makeHarness({ delivery })
+    h.sendMessage.mockRejectedValueOnce(new Error('socket hang up'))
+
+    await processPushDeliveryJob(h.em as never, job, h.resolve)
+
+    expect(delivery.status).toBe('pending')
+    expect(delivery.attempts).toBe(1)
+    expect(delivery.lastError).toBe('socket hang up')
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+  })
+
   it('retries a transient failure with backoff, then fails after max attempts', async () => {
     const retry = makeDelivery({ attempts: 0 })
     const h1 = makeHarness({ delivery: retry, sendResult: { externalMessageId: '', status: 'failed', error: 'boom' } })

@@ -9,8 +9,9 @@ import { withClient } from '@open-mercato/core/modules/core/__integration__/help
 
 // Phase 5: visible notifications can carry an arbitrary app-readable `data` map (exposed to in-app
 // clients) plus a push-only `pushOptions` map (sound/badge/priority/…). This proves the create →
-// persist → DTO round-trip for both. Silent push itself has no HTTP trigger and is covered by the
-// push_notifications unit suites (send-silent-push / push-delivery-strategy / adapters).
+// persist → DTO round-trip for both. Silent push is just a `silent: true` type going through the
+// same create flow and is covered by the push_notifications unit suites (push-delivery-strategy /
+// adapters).
 test.describe('TC-NOTIF-012: Notification create carries data + pushOptions', () => {
   test('persists data (exposed in the DTO) and push_options (push-only)', async ({ request }) => {
     const token = await getAuthToken(request, 'superadmin')

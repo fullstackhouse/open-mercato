@@ -83,9 +83,10 @@ export type NotificationTypeDefinition = {
    */
   category?: string
   /**
-   * When `true`, this type may be delivered as a silent / content-available push
-   * (a data-only wake-up that creates no in-app `Notification` row and bypasses
-   * per-channel preferences). Gates `pushNotificationService.sendSilentPush`.
+   * When `true`, this type's push is delivered as a silent / content-available (data-only)
+   * wake-up instead of a visible alert. `silent` selects the delivery STYLE only — the
+   * notification still flows through the normal `notificationService.create()` path (in-app
+   * row created, per-channel preferences respected unless the type is `nonOptOut`).
    */
   silent?: boolean
   /**
@@ -95,6 +96,14 @@ export type NotificationTypeDefinition = {
    * `setPreferences` refuses to store an opt-out row for it.
    */
   nonOptOut?: boolean
+  /**
+   * When `true`, this type is hidden from the client-facing catalogue: it is NOT mirrored to the
+   * `notification_types` table and therefore not returned by `GET /api/notifications/types`, so a
+   * mobile app's preferences screen never lists it. Used for internal/admin-only types (e.g. one-off
+   * admin custom pushes) that are dispatched by the server, not toggled by users. The type still
+   * lives in the in-memory registry for delivery logic (`getNotificationType`).
+   */
+  hiddenFromSettings?: boolean
 }
 
 export type NotificationDto = {

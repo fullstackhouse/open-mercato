@@ -18,14 +18,18 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
 - **Queue** (`lib/queue.ts`) mirrors the webhooks queue: `createModuleQueue` + `enqueuePushDelivery` +
   a local-worker bootstrap for dev/test (`QUEUE_STRATEGY !== 'async'`).
 - **Fan-out** (`lib/push-fanout.ts`, `fanOutPushDeliveries`) is the shared device-resolution + provider
-  routing + delivery-row insert + enqueue. Both the strategy (visible notifications) and `sendSilentPush`
+  routing + delivery-row insert + enqueue. The strategy (visible notifications) and `sendCustomPush`
   call it; it is preference-agnostic (the caller decides whether to gate on preferences).
-- **Silent push** (`lib/send-silent-push.ts`, exposed in DI as `pushNotificationService`) delivers a
-  content-available wake-up to a single user's devices with **no** in-app `Notification` row and **no**
-  preference check. Silent-ness is a property of the **registered notification type**
-  (`NotificationTypeDefinition.silent: true`), validated against the type registry — never a per-call
-  flag. Other modules trigger it from a subscriber/command via DI:
-  `ctx.resolve('pushNotificationService').sendSilentPush({ resolve: ctx.resolve, tenantId, userId, type, data?, pushOptions? })`.
+- **Silent push** is **not** a separate API — it is just a notification whose **type** is declared
+  `silent: true` (`NotificationTypeDefinition.silent`), created through the **normal**
+  `notificationService.create()` flow (`create()` → `notifications:deliver` subscriber → the `push`
+  strategy). The strategy derives `silent` from the type, sends a content-available (data-only) push,
+  and skips user-facing copy; the in-app `Notification` row is still created and per-channel
+  preferences still apply — to make a silent type always fire, declare it `nonOptOut: true`. There is
+  no `sendSilentPush` helper. (Email/in-app channels respecting `silent` is deferred — see spec Phase 7.)
+- **Admin custom push** (`lib/send-custom-push.ts`, exposed in DI as `pushNotificationService`) is a
+  one-off **visible** push with literal title/body that fans out directly (no in-app row, no email, no
+  preference check); it backs `api/custom-send/route.ts`.
 - **Flexible payload.** A notification's optional `data` (arbitrary app-readable map, also exposed to
   in-app clients) and `pushOptions` (flat `sound`/`badge`/`image`/`priority`/`channelId`/`body` map, both
   from the `notifications` module) ride the push envelope `raw`. The adapters map `pushOptions` onto each
@@ -43,8 +47,9 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
 - Keep the `unregistered` sentinel identical across provider adapters (`result.metadata.unregistered ===
   true` or `result.error === 'device_unregistered'`) so the worker's soft-delete fires uniformly.
 - Keep the delivery log append-only (status transitions only); it is intentionally optimistic-lock-exempt.
-- Declare a notification type `silent: true` (in its module's `notifications.ts`) before calling
-  `sendSilentPush` for it — the call throws on an unregistered or non-silent type.
+- To send a silent push, declare the notification type `silent: true` (in its module's
+  `notifications.ts`) and create it via the normal `notificationService.create()` — the `push`
+  strategy turns it into a content-available wake-up. Do not add a bespoke silent-send path.
 
 ## Never
 
