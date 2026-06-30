@@ -1,0 +1,169 @@
+import type { EntityManager } from '@mikro-orm/postgresql'
+import type { EntityName } from '@mikro-orm/core'
+import { sql } from 'kysely'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
+import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
+import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
+import { enqueuePushDelivery } from './queue'
+
+export const PUSH_CHANNEL = 'push'
+
+type Resolve = <T = unknown>(name: string) => T
+
+/** The push payload persisted on each delivery row and unpacked by the worker into the send envelope. */
+export interface PushFanoutPayload {
+  title?: string
+  body?: string | null
+  data: Record<string, string>
+  options?: PushOptions
+  silent?: boolean
+}
+
+export interface FanOutPushDeliveriesArgs {
+  em: EntityManager
+  resolve: Resolve
+  scope: { tenantId: string; organizationId: string | null }
+  userId: string
+  /** Source in-app notification id, or `null` for a silent push (no Notification row). */
+  notificationId: string | null
+  notificationTypeId: string
+  payload: PushFanoutPayload
+}
+
+function tokenSnapshot(token: string): string {
+  // Persist at most the last 8 chars of the (long) provider token — never the full secret.
+  return token.slice(-8)
+}
+
+/**
+ * Resolve a recipient's push-capable devices, route each to its provider's tenant push
+ * `CommunicationChannel`, persist one `pending` push delivery row per device, and enqueue a send
+ * job per row. Shared by the `push` delivery strategy (visible notifications) and `sendSilentPush`
+ * (content-available wake-ups); it is preference-agnostic — the caller decides whether to consult
+ * per-channel preferences before fanning out.
+ *
+ * Cross-module entities are resolved via DI tokens (registered `asValue` by their owning modules)
+ * so this stays decoupled from those modules' internals. Returns the number of jobs enqueued.
+ */
+export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Promise<{ enqueued: number }> {
+  const { em, resolve, scope, userId, notificationId, notificationTypeId, payload } = args
+  const { tenantId, organizationId } = scope
+  const silent = payload.silent === true
+
+  // Require at least one active push CommunicationChannel for the tenant (push not configured ⇒ skip).
+  // This is the cheapest, most selective short-circuit (most tenants have no push channel), so it runs
+  // before the per-recipient device lookup. Channels are indexed by providerKey so each device can be
+  // routed to its matching provider below (ios→apns, android→fcm, expo→expo). Oldest-first so that when
+  // a tenant has more than one active channel for the same provider, the pick is deterministic.
+  const ChannelRef = resolve('CommunicationChannel') as EntityName<CommunicationChannel>
+  const channels = await em.find(
+    ChannelRef,
+    {
+      tenantId,
+      channelType: PUSH_CHANNEL,
+      isActive: true,
+      deletedAt: null,
+    },
+    { orderBy: { createdAt: 'asc' } },
+  )
+  if (channels.length === 0) return { enqueued: 0 }
+  const channelsByProvider = new Map<string, CommunicationChannel>()
+  for (const channel of channels) {
+    if (!channelsByProvider.has(channel.providerKey)) channelsByProvider.set(channel.providerKey, channel)
+  }
+
+  // Load the recipient's devices that can receive push (active + has a token). Scoped to the
+  // notification's organization so an org-scoped notification never fans out to a device the user
+  // registered under a different org — device identity is per (tenant, org, user, device) (see devices
+  // module). A tenant-level (null-org) notification targets the user's tenant-level (null-org) devices.
+  // `push_token` is encrypted at rest; decrypt on read (no-op when encryption is disabled).
+  const DeviceRef = resolve('UserDevice') as EntityName<UserDevice>
+  const devices = await findWithDecryption(
+    em,
+    DeviceRef,
+    {
+      tenantId,
+      organizationId,
+      userId,
+      deletedAt: null,
+      pushToken: { $ne: null },
+    },
+    undefined,
+    { tenantId, organizationId },
+  )
+  if (devices.length === 0) return { enqueued: 0 }
+
+  // Insert one pending delivery row per device, routing each device to the push channel whose
+  // providerKey matches the device's pushProvider. Devices with no provider, or no matching configured
+  // channel, are skipped. Insert via INSERT ... ON CONFLICT DO NOTHING on the (notification_id,
+  // user_device_id) partial unique index: the `push` strategy runs inside the at-least-once persistent
+  // `notifications:deliver` subscriber, so a redelivered event re-runs it — the conflict clause makes
+  // the re-fan-out a no-op instead of inserting a duplicate set of rows (and duplicate pushes). Silent
+  // pushes carry a null notification_id and are excluded from the partial index (they are triggered
+  // explicitly, not via at-least-once redelivery). Only the rows actually inserted are enqueued.
+  const rows = devices.flatMap((device) => {
+    const providerKey = device.pushProvider
+    if (!providerKey) return []
+    const channel = channelsByProvider.get(providerKey)
+    if (!channel) return []
+    return [{
+      tenant_id: tenantId,
+      organization_id: organizationId,
+      notification_id: notificationId,
+      notification_type_id: notificationTypeId,
+      user_device_id: device.id,
+      user_id: userId,
+      provider: channel.providerKey,
+      token_snapshot: tokenSnapshot(device.pushToken as string),
+      silent,
+      status: 'pending',
+      attempts: 0,
+      payload: sql`${JSON.stringify(payload)}::jsonb`,
+      created_at: sql`now()`,
+      updated_at: sql`now()`,
+    }]
+  })
+  // A registered device whose pushProvider has no matching active channel (e.g. an Expo device on an
+  // FCM-only tenant) is correctly skipped above — but it produces no delivery row and would otherwise
+  // be an invisible no-op. Surface a count so a provider-config gap is diagnosable.
+  const skippedNoChannel = devices.length - rows.length
+  if (skippedNoChannel > 0) {
+    console.warn('[push_notifications] Skipped devices with no matching push channel', {
+      tenantId,
+      userId,
+      notificationId,
+      skipped: skippedNoChannel,
+    })
+  }
+  if (rows.length === 0) return { enqueued: 0 }
+
+  const db = em.getKysely<any>()
+  const inserted = (await db
+    .insertInto('push_notification_deliveries')
+    .values(rows)
+    .onConflict((oc: any) =>
+      oc.columns(['notification_id', 'user_device_id']).where('notification_id', 'is not', null).doNothing(),
+    )
+    .returning(['id'])
+    .execute()) as Array<{ id: string }>
+
+  // Enqueue one send job per inserted row (per-device retry isolation, idempotent on delivery id).
+  // If enqueue fails, mark that row failed instead of leaving it orphaned in `pending` forever
+  // (the worker only ever processes rows it receives a job for).
+  let enqueued = 0
+  for (const row of inserted) {
+    try {
+      await enqueuePushDelivery({ deliveryId: row.id, tenantId, organizationId })
+      enqueued += 1
+    } catch (error) {
+      const reason = error instanceof Error ? `enqueue_failed: ${error.message}` : 'enqueue_failed'
+      await db
+        .updateTable('push_notification_deliveries')
+        .set({ status: 'failed', last_error: reason, updated_at: sql`now()` })
+        .where('id', '=', row.id)
+        .execute()
+    }
+  }
+  return { enqueued }
+}

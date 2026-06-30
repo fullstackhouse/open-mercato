@@ -44,7 +44,14 @@ describe('notification-type-registry', () => {
   })
 })
 
-type ExistingRow = { id: string; label_key: string; description_key: string | null }
+type ExistingRow = {
+  id: string
+  label_key: string
+  description_key: string | null
+  category?: string | null
+  silent?: boolean
+  non_opt_out?: boolean
+}
 
 /**
  * Minimal kysely test double for `syncNotificationTypes` (mirrors the query_index
@@ -59,10 +66,13 @@ function createFakeEm(existing: ExistingRow[]) {
     deletedIds: [] as unknown[],
   }
 
+  // Mirror the DB defaults (category null, silent/non_opt_out false) so rows that omit the
+  // Phase-5 columns don't read back as `undefined` and register spurious drift.
+  const selectRows = existing.map((row) => ({ category: null, silent: false, non_opt_out: false, ...row }))
   const selectChain: any = {
     select: () => selectChain,
     where: () => selectChain,
-    execute: async () => existing,
+    execute: async () => selectRows,
   }
   const insertChain: any = {
     values: (rows: Array<Record<string, unknown>>) => {
@@ -163,5 +173,44 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
 
     expect(recorded.deletedIds).toHaveLength(0)
     expect(res.deleted).toBe(0)
+  })
+
+  it('mirrors category/silent/nonOptOut onto a newly inserted row', async () => {
+    registerNotificationTypes(
+      [def('a.secure', { category: 'security', silent: true, nonOptOut: true })],
+      { replace: true },
+    )
+    const { em, recorded } = createFakeEm([])
+    const res = await syncNotificationTypes(em as never, { force: true })
+
+    expect(res.created).toBe(1)
+    expect(recorded.inserted[0]).toMatchObject({
+      id: 'a.secure',
+      category: 'security',
+      silent: true,
+      non_opt_out: true,
+    })
+  })
+
+  it('updates an existing row when category/silent drift', async () => {
+    registerNotificationTypes(
+      [def('a.secure', { labelKey: 'a.secure.title', category: 'security', silent: true })],
+      { replace: true },
+    )
+    const { em, recorded } = createFakeEm([
+      {
+        id: 'a.secure',
+        label_key: 'a.secure.title',
+        description_key: null,
+        category: null,
+        silent: false,
+        non_opt_out: false,
+      },
+    ])
+    const res = await syncNotificationTypes(em as never, { force: true })
+
+    expect(res.updated).toBe(1)
+    expect(recorded.inserted).toHaveLength(0)
+    expect(recorded.updated[0]?.set).toMatchObject({ category: 'security', silent: true })
   })
 })

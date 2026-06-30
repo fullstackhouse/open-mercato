@@ -7,7 +7,14 @@ const PREFERENCES_PAGE = '/backend/profile/notification-preferences'
 const ADMIN_PREFERENCES_PATH = '/api/notifications/admin/preferences'
 const ADMIN_PREFERENCES_PAGE = '/backend/notifications/user-preferences'
 
-type NotificationTypeItem = { id: string; labelKey: string; descriptionKey?: string | null }
+type NotificationTypeItem = {
+  id: string
+  labelKey: string
+  descriptionKey?: string | null
+  category?: string | null
+  silent: boolean
+  nonOptOut: boolean
+}
 type TypesResponse = { items: NotificationTypeItem[] }
 
 type PreferenceItem = { notificationTypeId: string; channel: string; enabled: boolean }
@@ -62,7 +69,15 @@ test.describe('TC-NOTIF-011: Notification type catalogue + channel preferences',
       expect(item.id.length).toBeGreaterThan(0)
       expect(typeof item.labelKey).toBe('string')
       expect(item.labelKey.length).toBeGreaterThan(0)
+      // Phase 6 metadata: every item exposes the silent flag and the opt-out
+      // lock as booleans, and category as a string or null (never undefined).
+      expect(typeof item.silent).toBe('boolean')
+      expect(typeof item.nonOptOut).toBe('boolean')
+      expect(item.category === null || typeof item.category === 'string').toBe(true)
     }
+
+    // At least one type defaults silent=false; the catalogue is opt-in per type.
+    expect(items.some((item) => item.silent === false)).toBe(true)
   })
 
   test('preferences default to enabled, round-trip on opt-out, and upsert idempotently', async ({ request }) => {

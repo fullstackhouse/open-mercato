@@ -37,6 +37,8 @@ export const notificationTypes: NotificationTypeDefinition[] = [
     bodyKey: 'auth.notifications.account.locked.body',
     icon: 'lock',
     severity: 'warning',
+    // Security alert — the user must not be able to silence it.
+    nonOptOut: true,
     actions: [
       {
         id: 'contact_support',
@@ -55,6 +57,8 @@ export const notificationTypes: NotificationTypeDefinition[] = [
     bodyKey: 'auth.notifications.login.newDevice.body',
     icon: 'smartphone',
     severity: 'info',
+    // Security alert — the user must not be able to silence it.
+    nonOptOut: true,
     actions: [
       {
         id: 'view_sessions',
