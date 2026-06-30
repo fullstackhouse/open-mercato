@@ -37,8 +37,18 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     }
 
     const body = updateDeviceSchema.parse(await readJsonSafe(req, {}))
+    const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
+    // Self devices are scoped to the caller's active organization, mirroring the list route and the
+    // user-owned-resource convention (e.g. progress jobs): a device outside the current org context
+    // reads as not-found. When there is no active org, scope by tenant only.
+    const currentOrganizationId = scope?.selectedId ?? auth.orgId ?? null
     const em = container.resolve('em') as EntityManager
-    const device = await em.findOne(UserDevice, { id: parsedParams.data.id, tenantId: auth.tenantId, deletedAt: null })
+    const device = await em.findOne(UserDevice, {
+      id: parsedParams.data.id,
+      tenantId: auth.tenantId,
+      ...(currentOrganizationId ? { organizationId: currentOrganizationId } : {}),
+      deletedAt: null,
+    })
     if (!device) {
       return NextResponse.json({ error: translate('devices.errors.not_found', 'Device not found') }, { status: 404 })
     }
@@ -46,7 +56,6 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       return NextResponse.json({ error: translate('devices.errors.forbidden', 'Access denied') }, { status: 403 })
     }
 
-    const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
     const mctx: DeviceMutationContext = {
       container,
       auth,
@@ -85,8 +94,16 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
       return NextResponse.json({ error: translate('devices.errors.invalid_id', 'Invalid device id') }, { status: 400 })
     }
 
+    const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
+    // Same active-org scoping as PUT/the list route: a device outside the current org reads as not-found.
+    const currentOrganizationId = scope?.selectedId ?? auth.orgId ?? null
     const em = container.resolve('em') as EntityManager
-    const device = await em.findOne(UserDevice, { id: parsedParams.data.id, tenantId: auth.tenantId, deletedAt: null })
+    const device = await em.findOne(UserDevice, {
+      id: parsedParams.data.id,
+      tenantId: auth.tenantId,
+      ...(currentOrganizationId ? { organizationId: currentOrganizationId } : {}),
+      deletedAt: null,
+    })
     if (!device) {
       return NextResponse.json({ error: translate('devices.errors.not_found', 'Device not found') }, { status: 404 })
     }
@@ -94,7 +111,6 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
       return NextResponse.json({ error: translate('devices.errors.forbidden', 'Access denied') }, { status: 403 })
     }
 
-    const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
     const mctx: DeviceMutationContext = {
       container,
       auth,
