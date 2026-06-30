@@ -51,7 +51,7 @@ describe('ApnsChannelAdapter', () => {
           raw: {
             title: '',
             body: '',
-            data: { type: 'esim.installation_data' },
+            data: { type: 'sync.data.updated' },
             silent: true,
             options: { badge: 4, priority: 'normal' },
           },
