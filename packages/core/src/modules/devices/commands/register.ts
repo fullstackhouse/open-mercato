@@ -30,6 +30,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const existing = await loadExistingDevice(em, {
       tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId ?? null,
       userId: parsed.userId,
       deviceId: parsed.deviceId,
     })
@@ -42,6 +43,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const existing = await loadExistingDevice(em, {
       tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId ?? null,
       userId: parsed.userId,
       deviceId: parsed.deviceId,
     })

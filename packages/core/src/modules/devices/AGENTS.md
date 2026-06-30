@@ -1,6 +1,6 @@
 # Devices Module — Agent Guidelines
 
-Generic per-tenant device registry: `(tenant, user, device, platform)` plus app/OS metadata and
+Generic device registry keyed on `(tenant, org, user, device)` plus app/OS metadata and
 push-token storage. Channel-agnostic — it owns device identity and the token *field*, but **no push
 delivery logic** (sender, providers, delivery rows, workers live in the `push_notifications` module).
 
@@ -46,10 +46,11 @@ Endpoints are split the same way other modules split them (e.g. `customer_accoun
 separate `api/admin/devices` tree holds the **cross-user** operations gated by `devices.admin`.
 
 - **Self-serve** (`devices.view` / `devices.manage`):
-  - `POST /api/devices` — register/upsert the **caller's own** device. Idempotent on `(tenant, user,
-    device_id)`; a soft-deleted row is **revived** (`deleted_at = null`); response `{ id, deviceId,
+  - `POST /api/devices` — register/upsert the **caller's own** device. Idempotent on `(tenant, org,
+    user, device_id)`; a soft-deleted row is **revived** (`deleted_at = null`); response `{ id, deviceId,
     revived }`. Uniqueness of active rows enforced by the partial unique index
-    `user_devices_tenant_user_device_active_unique ... where deleted_at is null`.
+    `user_devices_tenant_org_user_device_active_unique ... where deleted_at is null` (null org is
+    coalesced to the nil UUID so null-org rows still dedupe per tenant/user/device).
   - `GET /api/devices` — the caller's own devices only. It does **not** honor `?userId`.
   - `PUT` / `DELETE /api/devices/:id` — **owner only** (403 otherwise). Update bumps `last_seen_at`.
 - **Admin** (`devices.admin`) under `api/admin/devices`:
