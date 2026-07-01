@@ -1,7 +1,18 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api'
 import { getTokenScope, readJsonSafe } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures'
-import { withClient } from '@open-mercato/core/modules/core/__integration__/helpers/dbFixtures'
+import {
+  withClient,
+  createOrganizationInDb,
+  deleteOrganizationInDb,
+} from '@open-mercato/core/modules/core/__integration__/helpers/dbFixtures'
+import {
+  createRoleFixture,
+  createUserFixture,
+  setRoleAclFeatures,
+  deleteRoleIfExists,
+  deleteUserIfExists,
+} from '@open-mercato/core/modules/core/__integration__/helpers/authFixtures'
 
 const LIST_PATH = '/api/push_notifications/deliveries'
 // A well-formed RFC-4122 v4 UUID (version + variant nibbles valid) that does not exist — the route's
@@ -149,12 +160,13 @@ test.describe('TC-PUSH-001: Push delivery detail (token secrecy + tenant scoping
     }
   })
 
-  test('admin can read a tenant-level (org-less) row', async ({ request }) => {
+  test('an unrestricted admin can read a tenant-level (org-less) row', async ({ request }) => {
     const adminToken = await getAuthToken(request, 'admin')
     const scope = getTokenScope(adminToken)
     let id: string | null = null
     try {
-      // organization_id NULL = tenant-wide; it must be readable by an admin within the tenant.
+      // organization_id NULL = tenant-wide. Standard org scoping makes it readable by an org-unrestricted
+      // admin (the default admin sees all orgs in the tenant); org-restricted admins are covered below.
       id = await seedDelivery({ tenantId: scope.tenantId, userId: scope.userId, organizationId: null, fullToken: FULL_TOKEN })
 
       const res = await apiRequest(request, 'GET', `${LIST_PATH}/${id}`, { token: adminToken })
@@ -177,6 +189,63 @@ test.describe('TC-PUSH-001: Push delivery detail (token secrecy + tenant scoping
       expect(res.status()).toBe(404)
     } finally {
       await deleteDelivery(id)
+    }
+  })
+
+  // Standard org scoping (matches devices TC-DEV-005): an org-restricted admin reads only rows in an
+  // allowed org. An out-of-scope org row and a tenant-level (NULL-org) row both deny with 403 — the
+  // route no longer special-cases NULL-org rows as tenant-wide-readable.
+  test('an org-restricted admin: 200 in-scope, 403 out-of-scope, 403 tenant-level (org-less)', async ({ request }) => {
+    test.slow()
+    const stamp = Date.now()
+    const password = 'Secret123!'
+    const adminToken = await getAuthToken(request, 'admin')
+    const { tenantId, userId } = getTokenScope(adminToken)
+    const email = `tc-push-001-restricted-${stamp}@example.com`
+    let orgAId: string | null = null
+    let orgBId: string | null = null
+    let roleId: string | null = null
+    let restrictedUserId: string | null = null
+    let idA: string | null = null
+    let idB: string | null = null
+    let idNull: string | null = null
+    try {
+      orgAId = await createOrganizationInDb({ name: `PUSH-001 Org A ${stamp}`, tenantId })
+      orgBId = await createOrganizationInDb({ name: `PUSH-001 Org B ${stamp}`, tenantId })
+
+      idA = await seedDelivery({ tenantId, userId, organizationId: orgAId, fullToken: FULL_TOKEN })
+      idB = await seedDelivery({ tenantId, userId, organizationId: orgBId, fullToken: FULL_TOKEN })
+      idNull = await seedDelivery({ tenantId, userId, organizationId: null, fullToken: FULL_TOKEN })
+
+      // An admin whose visibility is restricted to org B.
+      roleId = await createRoleFixture(request, adminToken, { name: `PUSH-001 Restricted ${stamp}` })
+      await setRoleAclFeatures(request, adminToken, {
+        roleId,
+        features: ['push_notifications.view_deliveries'],
+        organizations: [orgBId],
+      })
+      restrictedUserId = await createUserFixture(request, adminToken, {
+        email,
+        password,
+        organizationId: orgBId,
+        roles: [roleId],
+      })
+      const restrictedToken = await getAuthToken(request, email, password)
+
+      const okB = await apiRequest(request, 'GET', `${LIST_PATH}/${idB}`, { token: restrictedToken })
+      expect(okB.status()).toBe(200)
+      const denyA = await apiRequest(request, 'GET', `${LIST_PATH}/${idA}`, { token: restrictedToken })
+      expect(denyA.status()).toBe(403)
+      const denyNull = await apiRequest(request, 'GET', `${LIST_PATH}/${idNull}`, { token: restrictedToken })
+      expect(denyNull.status()).toBe(403)
+    } finally {
+      await deleteDelivery(idA)
+      await deleteDelivery(idB)
+      await deleteDelivery(idNull)
+      await deleteUserIfExists(request, adminToken, restrictedUserId)
+      await deleteRoleIfExists(request, adminToken, roleId)
+      await deleteOrganizationInDb(orgAId).catch(() => undefined)
+      await deleteOrganizationInDb(orgBId).catch(() => undefined)
     }
   })
 })

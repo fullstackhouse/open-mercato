@@ -23,11 +23,10 @@ const crud = makeCrudRoute({
   orm: {
     entity: PushNotificationDelivery,
     idField: 'id',
-    // organization_id is nullable; scope is applied manually in buildFilters so a restricted admin
-    // still sees tenant-level (NULL-org) delivery rows — the platform-standard `orgField` scope would
-    // hide them from an org-pinned caller. (devices itself now uses standard `orgField`; this route
-    // intentionally diverges to keep tenant-wide deliveries observable.)
-    orgField: null,
+    // organization_id is nullable; the CRUD factory + query engine apply standard org scoping, exactly
+    // like devices and every other module. Unrestricted admins see every row in the tenant (including
+    // tenant-level NULL-org rows); org-restricted admins see only rows in an allowed org.
+    orgField: 'organizationId',
     tenantField: 'tenantId',
   },
   indexer: { entityType: E.push_notifications.push_notification_delivery },
@@ -36,7 +35,7 @@ const crud = makeCrudRoute({
     entityId: E.push_notifications.push_notification_delivery,
     fields: deliveryListFields,
     sortFieldMap: deliveryListSortFieldMap,
-    buildFilters: async (query, ctx) => {
+    buildFilters: async (query) => {
       const filters: Record<string, unknown> = {}
       if (query.status) filters.status = { $eq: query.status }
       if (query.userId) filters.user_id = { $eq: query.userId }
@@ -44,15 +43,6 @@ const crud = makeCrudRoute({
       if (query.from) createdAt.$gte = query.from
       if (query.to) createdAt.$lte = query.to
       if (Object.keys(createdAt).length > 0) filters.created_at = createdAt
-      // organization_id is nullable: tenant-level notifications produce push deliveries with a NULL
-      // org. A restricted admin (organizationIds = [...]) must still see those rows, which are already
-      // tenant-scoped, so scope to "in an allowed org OR org-less". Unrestricted (null) sees everything.
-      if (ctx.organizationIds !== null) {
-        filters.$or = [
-          { organization_id: { $in: ctx.organizationIds } },
-          { organization_id: { $eq: null } },
-        ]
-      }
       return filters
     },
   },
