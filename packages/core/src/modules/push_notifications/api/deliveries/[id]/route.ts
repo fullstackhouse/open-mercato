@@ -102,6 +102,7 @@ const detailResponseSchema = z.object({ item: deliveryDetailItemSchema })
 export const openApi: OpenApiRouteDoc = {
   tag: 'PushNotifications',
   summary: 'Read a single push delivery log row',
+  pathParams: paramsSchema,
   methods: {
     GET: {
       summary: 'Get a push delivery',

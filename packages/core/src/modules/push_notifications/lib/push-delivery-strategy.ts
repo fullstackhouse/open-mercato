@@ -1,11 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { EntityName } from '@mikro-orm/core'
+import { sql } from 'kysely'
 import type { NotificationDeliveryStrategy } from '@open-mercato/core/modules/notifications/lib/deliveryStrategies'
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
-import { PushNotificationDelivery } from '../data/entities'
 import { enqueuePushDelivery } from './queue'
 
 export const PUSH_CHANNEL = 'push'
@@ -85,40 +85,52 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
 
     const payload = { title: ctx.title, body: ctx.body, data }
 
-    // 5. Insert one pending delivery row per device, snapshotting provider + truncated token.
-    const fork = em.fork()
-    const deliveries: PushNotificationDelivery[] = devices.map((device) =>
-      fork.create(PushNotificationDelivery, {
-        tenantId,
-        organizationId,
-        notificationId: notification.id,
-        notificationTypeId: notification.type,
-        userDeviceId: device.id,
-        userId,
-        provider: channel.providerKey,
-        tokenSnapshot: tokenSnapshot(device.pushToken as string),
-        status: 'pending',
-        attempts: 0,
-        payload,
-      }),
-    )
-    fork.persist(deliveries)
-    await fork.flush()
+    // 5. Insert one pending delivery row per device (snapshotting provider + truncated token) via
+    //    INSERT ... ON CONFLICT DO NOTHING on the (notification_id, user_device_id) partial unique
+    //    index. This strategy runs inside the at-least-once persistent `notifications:deliver`
+    //    subscriber, so a redelivered event re-runs it — the conflict clause makes the re-fan-out a
+    //    no-op instead of inserting a duplicate set of rows (and duplicate pushes). Only the rows
+    //    actually inserted are returned, so exactly those are enqueued.
+    const db = em.getKysely<any>()
+    const rows = devices.map((device) => ({
+      tenant_id: tenantId,
+      organization_id: organizationId,
+      notification_id: notification.id,
+      notification_type_id: notification.type,
+      user_device_id: device.id,
+      user_id: userId,
+      provider: channel.providerKey,
+      token_snapshot: tokenSnapshot(device.pushToken as string),
+      status: 'pending',
+      attempts: 0,
+      payload: sql`${JSON.stringify(payload)}::jsonb`,
+      created_at: sql`now()`,
+      updated_at: sql`now()`,
+    }))
+    const inserted = (await db
+      .insertInto('push_notification_deliveries')
+      .values(rows)
+      .onConflict((oc: any) =>
+        oc.columns(['notification_id', 'user_device_id']).where('notification_id', 'is not', null).doNothing(),
+      )
+      .returning(['id'])
+      .execute()) as Array<{ id: string }>
 
-    // 6. Enqueue one send job per delivery row (per-device retry isolation, idempotent on delivery id).
+    // 6. Enqueue one send job per inserted row (per-device retry isolation, idempotent on delivery id).
     //    If enqueue fails, mark that row failed instead of leaving it orphaned in `pending` forever
     //    (the worker only ever processes rows it receives a job for).
-    let enqueueFailures = false
-    for (const delivery of deliveries) {
+    for (const row of inserted) {
       try {
-        await enqueuePushDelivery({ deliveryId: delivery.id, tenantId, organizationId })
+        await enqueuePushDelivery({ deliveryId: row.id, tenantId, organizationId })
       } catch (error) {
-        enqueueFailures = true
-        delivery.status = 'failed'
-        delivery.lastError = error instanceof Error ? `enqueue_failed: ${error.message}` : 'enqueue_failed'
+        const reason = error instanceof Error ? `enqueue_failed: ${error.message}` : 'enqueue_failed'
+        await db
+          .updateTable('push_notification_deliveries')
+          .set({ status: 'failed', last_error: reason, updated_at: sql`now()` })
+          .where('id', '=', row.id)
+          .execute()
       }
     }
-    if (enqueueFailures) await fork.flush()
   },
 }
 

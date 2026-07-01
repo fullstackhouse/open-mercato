@@ -20,6 +20,16 @@ export type PushDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'sk
 @Entity({ tableName: 'push_notification_deliveries' })
 @Index({ name: 'push_notification_deliveries_tenant_status_idx', properties: ['tenantId', 'status', 'createdAt'] })
 @Index({ name: 'push_notification_deliveries_notification_idx', properties: ['notificationId'] })
+// Idempotency guard for the fan-out: the `push` strategy runs inside the at-least-once persistent
+// `notifications:deliver` subscriber, so a redelivered event would otherwise insert a second set of
+// rows for the same (notification, device) → a duplicate push. A partial unique index (only where
+// notification_id is set — direct/silent pushes without a notification are out of scope) lets the
+// strategy insert-on-conflict-do-nothing, making a re-run a no-op.
+@Index({
+  name: 'push_notification_deliveries_notif_device_unique',
+  expression:
+    'create unique index "push_notification_deliveries_notif_device_unique" on "push_notification_deliveries" ("notification_id", "user_device_id") where "notification_id" is not null',
+})
 export class PushNotificationDelivery {
   [OptionalProps]?:
     | 'organizationId'
