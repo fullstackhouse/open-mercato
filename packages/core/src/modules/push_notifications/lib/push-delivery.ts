@@ -99,7 +99,11 @@ async function handleRetryableFailure(
         organizationId: delivery.organizationId ?? null,
         userId: delivery.userId,
         provider: delivery.provider,
-        status: delivery.status,
+        // The row is reset to `pending` to release the claim for the re-enqueued attempt, but the
+        // logical outcome of THIS attempt is "failed, retry scheduled". Emit `retrying` (not the reset
+        // row status `pending`) so subscribers keying off `status` aren't misled; `willRetry` still gates
+        // ultimate-failure counters.
+        status: 'retrying',
         willRetry: true,
       },
       { persistent: true },
@@ -199,9 +203,13 @@ export async function processPushDeliveryJob(
   } catch {
     credentialsService = undefined
   }
+  // Credentials are keyed by the CHANNEL's org context, not the notification's: at connect time they
+  // are stored under `channel.organizationId ?? tenantId` (see communication_channels
+  // connect-credential-channel). Using the notification's `job.organizationId` here would miss the
+  // creds whenever a tenant-level (org-less) channel serves an org-scoped notification.
   const credentialScope = {
     tenantId: job.tenantId,
-    organizationId: job.organizationId ?? job.tenantId,
+    organizationId: channel.organizationId ?? job.tenantId,
     userId: channel.userId ?? null,
   }
   let credentials: Record<string, unknown> = {}

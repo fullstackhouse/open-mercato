@@ -6,6 +6,13 @@ import { enqueuePushDelivery } from './queue'
 
 // Minutes a row may sit in `sending` before it is treated as abandoned by a dead worker. Tunable via
 // OM_PUSH_STUCK_RECLAIM_MINUTES (0 means "reclaim on the next tick"; negative/non-numeric → default).
+//
+// INVARIANT: this window MUST exceed the worst-case single provider send time. `updated_at` is stamped
+// once when the row is claimed (`pending` → `sending`) and is NOT refreshed mid-send (no heartbeat), so
+// a legitimate send that runs longer than the window would be reclaimed and re-enqueued → a duplicate
+// push. The default (5m) is comfortably above any adapter's send/HTTP timeout; if you lower it, keep it
+// above the adapter timeout. Duplicates are otherwise bounded by MAX_ATTEMPTS and inherent to
+// at-least-once delivery.
 const DEFAULT_STUCK_MINUTES = 5
 
 export type ReclaimStuckResult = { reEnqueued: number; expired: number }

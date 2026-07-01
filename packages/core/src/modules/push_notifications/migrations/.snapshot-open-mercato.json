@@ -327,6 +327,15 @@
           "unique": false
         },
         {
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "keyName": "push_notification_deliveries_notif_device_unique",
+          "primary": false,
+          "unique": false,
+          "expression": "create unique index \"push_notification_deliveries_notif_device_unique\" on \"push_notification_deliveries\" (\"notification_id\", \"user_device_id\") where \"notification_id\" is not null"
+        },
+        {
           "columnNames": [
             "id"
           ],

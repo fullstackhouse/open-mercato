@@ -2,6 +2,10 @@ import { z } from 'zod'
 
 export const PUSH_DELIVERY_STATUSES = ['pending', 'sending', 'sent', 'failed', 'skipped', 'expired'] as const
 
+// A `created_at` range bound: an ISO-8601 date (`2026-07-01`) or datetime (`2026-07-01T00:00:00Z`).
+// Validated here so a malformed value fails with a 400 instead of reaching the query engine / Postgres.
+const rangeDateFilter = z.union([z.string().datetime({ offset: true }), z.string().date()])
+
 // Read-only delivery-log list contract (admin observability). No full push token is ever exposed —
 // only `token_snapshot` (last 8 chars) and the `provider` snapshot.
 export const deliveryListSchema = z
@@ -10,8 +14,8 @@ export const deliveryListSchema = z
     pageSize: z.coerce.number().min(1).max(100).default(50),
     status: z.enum(PUSH_DELIVERY_STATUSES).optional(),
     userId: z.string().uuid().optional(),
-    from: z.string().optional(),
-    to: z.string().optional(),
+    from: rangeDateFilter.optional(),
+    to: rangeDateFilter.optional(),
     sortField: z.string().optional(),
     sortDir: z.enum(['asc', 'desc']).optional(),
   })
@@ -32,6 +36,7 @@ export const deliveryListFields: string[] = [
   'last_error',
   'created_at',
   'sent_at',
+  'next_retry_at',
   'updated_at',
 ]
 

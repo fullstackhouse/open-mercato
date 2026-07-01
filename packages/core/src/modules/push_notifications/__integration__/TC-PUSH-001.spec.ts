@@ -99,6 +99,12 @@ test.describe('TC-PUSH-001: Push delivery log API (admin observability)', () => 
     }
   })
 
+  test('rejects a malformed date filter with 400 (never reaches the query engine)', async ({ request }) => {
+    const adminToken = await getAuthToken(request, 'admin')
+    const res = await listDeliveries(request, adminToken, '?from=not-a-date')
+    expect(res.status).toBe(400)
+  })
+
   test('employee without push_notifications.view_deliveries is forbidden', async ({ request }) => {
     const employeeToken = await getAuthToken(request, 'employee')
     const res = await listDeliveries(request, employeeToken)

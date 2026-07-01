@@ -194,6 +194,14 @@ describe('processPushDeliveryJob', () => {
     expect(retry.attempts).toBe(1)
     expect(retry.nextRetryAt).toBeInstanceOf(Date)
     expect(enqueueMock).toHaveBeenCalledTimes(1)
+    // The row is reset to `pending` to release the claim, but the failed event reports the logical
+    // outcome of the attempt (`retrying`), not the reset row status, so subscribers keying off
+    // `status` aren't misled.
+    expect(emitMock).toHaveBeenCalledWith(
+      'push_notifications.delivery.failed',
+      expect.objectContaining({ status: 'retrying', willRetry: true }),
+      expect.any(Object),
+    )
 
     const exhausted = makeDelivery({ attempts: 2 })
     const h2 = makeHarness({ delivery: exhausted, sendResult: { externalMessageId: '', status: 'failed', error: 'boom' } })
@@ -202,6 +210,41 @@ describe('processPushDeliveryJob', () => {
     expect(exhausted.attempts).toBe(3)
     expect(exhausted.lastError).toBe('boom')
     expect(exhausted.nextRetryAt).toBeNull()
+  })
+
+  it('resolves credentials by the channel org context, not the notification org', async () => {
+    // A tenant-level (org-less) push channel serving an org-scoped notification: credentials were
+    // stored under the channel's org context (tenantId when the channel is org-less), so resolution
+    // must use `channel.organizationId ?? tenantId`, NOT the notification's org.
+    const delivery = makeDelivery({ organizationId: 'org-1' })
+    const h = makeHarness({
+      delivery,
+      channel: { providerKey: 'push_stub', credentialsRef: 'cred-1', userId: null, organizationId: null },
+    })
+    const orgJob = { deliveryId: 'del-1', tenantId: TENANT, organizationId: 'org-1' }
+
+    await processPushDeliveryJob(h.em as never, orgJob, h.resolve)
+
+    expect(h.credentialsService.resolve).toHaveBeenCalledWith(
+      'channel_push_stub',
+      expect.objectContaining({ tenantId: TENANT, organizationId: TENANT }),
+    )
+  })
+
+  it('resolves credentials under the channel organization when the channel is org-bound', async () => {
+    const delivery = makeDelivery({ organizationId: 'org-1' })
+    const h = makeHarness({
+      delivery,
+      channel: { providerKey: 'push_stub', credentialsRef: 'cred-1', userId: null, organizationId: 'org-2' },
+    })
+    const orgJob = { deliveryId: 'del-1', tenantId: TENANT, organizationId: 'org-1' }
+
+    await processPushDeliveryJob(h.em as never, orgJob, h.resolve)
+
+    expect(h.credentialsService.resolve).toHaveBeenCalledWith(
+      'channel_push_stub',
+      expect.objectContaining({ organizationId: 'org-2' }),
+    )
   })
 
   it('does not re-send a row it cannot claim (lost the race / already terminal)', async () => {
