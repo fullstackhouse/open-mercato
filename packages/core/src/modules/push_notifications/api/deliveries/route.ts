@@ -23,7 +23,10 @@ const crud = makeCrudRoute({
   orm: {
     entity: PushNotificationDelivery,
     idField: 'id',
-    // organization_id is nullable; scope is applied manually in buildFilters (mirrors devices admin list).
+    // organization_id is nullable; scope is applied manually in buildFilters so a restricted admin
+    // still sees tenant-level (NULL-org) delivery rows — the platform-standard `orgField` scope would
+    // hide them from an org-pinned caller. (devices itself now uses standard `orgField`; this route
+    // intentionally diverges to keep tenant-wide deliveries observable.)
     orgField: null,
     tenantField: 'tenantId',
   },
