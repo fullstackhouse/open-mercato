@@ -20,6 +20,11 @@ export const NOTIFICATION_RESOURCE_KIND = 'notifications.notification'
 export const NOTIFICATION_SETTINGS_RESOURCE_KIND = 'notifications.settings'
 
 /**
+ * Mutation-guard resource kind for a user's channel preferences.
+ */
+export const NOTIFICATION_PREFERENCE_RESOURCE_KIND = 'notifications.preference'
+
+/**
  * Notification scope context for service calls
  */
 export interface NotificationScope {
