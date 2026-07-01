@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { logCrudAccess } from '@open-mercato/shared/lib/crud/factory'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { isOrganizationReadAccessAllowed } from '@open-mercato/core/modules/directory/utils/organizationScopeGuard'
@@ -36,6 +37,7 @@ function serializeDelivery(delivery: PushNotificationDelivery) {
     provider_response: delivery.providerResponse ?? null,
     created_at: delivery.createdAt ? delivery.createdAt.toISOString() : null,
     sent_at: delivery.sentAt ? delivery.sentAt.toISOString() : null,
+    next_retry_at: delivery.nextRetryAt ? delivery.nextRetryAt.toISOString() : null,
     updated_at: delivery.updatedAt ? delivery.updatedAt.toISOString() : null,
   }
 }
@@ -69,13 +71,28 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     ) {
       return NextResponse.json({ error: translate('push_notifications.errors.forbidden', 'Access denied') }, { status: 403 })
     }
-    return NextResponse.json({ item: serializeDelivery(delivery) })
+    const item = serializeDelivery(delivery)
+    // Audit the read: this hand-rolled detail route bypasses makeCrudRoute (which logs list reads
+    // for free), and it exposes per-user delivery detail (user/device ids, payload). Mirrors the
+    // other hand-rolled core read routes (directory tenants/orgs, auth roles/users, feature_toggles).
+    await logCrudAccess({
+      container,
+      auth,
+      request: req,
+      items: [item],
+      idField: 'id',
+      resourceKind: 'push_notifications.push_notification_delivery',
+      organizationId: delivery.organizationId ?? null,
+      tenantId: auth.tenantId ?? null,
+      accessType: 'read:item',
+    })
+    return NextResponse.json({ item })
   } catch (err) {
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
     console.error('[push_notifications.deliveries.GET]', err)
-    return NextResponse.json({ error: translate('push_notifications.errors.not_found', 'Delivery not found') }, { status: 500 })
+    return NextResponse.json({ error: translate('push_notifications.errors.server_error', 'Something went wrong') }, { status: 500 })
   }
 }
 

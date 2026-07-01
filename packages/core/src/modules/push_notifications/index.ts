@@ -7,7 +7,7 @@ export const metadata: ModuleInfo = {
   description:
     'Push delivery rails: a `push` notification delivery strategy that fans out to registered devices and sends through the communication_channels hub.',
   author: 'Open Mercato Team',
-  license: 'Proprietary',
+  license: 'MIT',
   requires: ['auth', 'devices', 'notifications', 'communication_channels', 'integrations'],
   ejectable: true,
 }

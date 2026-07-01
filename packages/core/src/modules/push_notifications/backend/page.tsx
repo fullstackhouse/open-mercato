@@ -10,7 +10,7 @@ import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/u
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 
-type PushDeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
+type PushDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'expired'
 
 type Row = {
   id: string
@@ -35,9 +35,11 @@ type ResponsePayload = {
 
 const statusVariant: StatusMap<PushDeliveryStatus> = {
   pending: 'info',
+  sending: 'info',
   sent: 'success',
   failed: 'error',
   skipped: 'neutral',
+  expired: 'warning',
 }
 
 function formatDate(value: string | null, t: (key: string) => string) {
@@ -68,9 +70,11 @@ export default function PushDeliveriesListPage() {
       type: 'select',
       options: [
         { value: 'pending', label: t('push_notifications.deliveries.status.pending') },
+        { value: 'sending', label: t('push_notifications.deliveries.status.sending') },
         { value: 'sent', label: t('push_notifications.deliveries.status.sent') },
         { value: 'failed', label: t('push_notifications.deliveries.status.failed') },
         { value: 'skipped', label: t('push_notifications.deliveries.status.skipped') },
+        { value: 'expired', label: t('push_notifications.deliveries.status.expired') },
       ],
     },
     { id: 'userId', label: t('push_notifications.deliveries.columns.user'), type: 'text' },

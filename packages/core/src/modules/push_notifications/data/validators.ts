@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const PUSH_DELIVERY_STATUSES = ['pending', 'sent', 'failed', 'skipped'] as const
+export const PUSH_DELIVERY_STATUSES = ['pending', 'sending', 'sent', 'failed', 'skipped', 'expired'] as const
 
 // Read-only delivery-log list contract (admin observability). No full push token is ever exposed —
 // only `token_snapshot` (last 8 chars) and the `provider` snapshot.
@@ -57,6 +57,7 @@ export const deliveryListItemSchema = z.object({
   last_error: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   sent_at: z.string().nullable().optional(),
+  next_retry_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
 })
 

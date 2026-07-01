@@ -62,10 +62,15 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     const enabled = await preferences.isChannelEnabled({ tenantId, userId }, notification.type, PUSH_CHANNEL)
     if (!enabled) return
 
-    // 4. Load the recipient's devices that can receive push (active + has a token).
+    // 4. Load the recipient's devices that can receive push (active + has a token). Scoped to the
+    //    notification's organization so an org-scoped notification never fans out to a device the
+    //    user registered under a different org — device identity is per (tenant, org, user, device)
+    //    (see devices module), so this matches standard devices org scoping. A tenant-level
+    //    (null-org) notification targets the user's tenant-level (null-org) devices.
     const DeviceRef = ctx.resolve('UserDevice') as EntityName<UserDevice>
     const devices = await em.find(DeviceRef, {
       tenantId,
+      organizationId,
       userId,
       deletedAt: null,
       pushToken: { $ne: null },

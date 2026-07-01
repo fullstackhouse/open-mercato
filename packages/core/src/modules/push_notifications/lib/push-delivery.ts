@@ -5,12 +5,12 @@ import type { ChannelAdapter, SendMessageResult } from '@open-mercato/core/modul
 import { refreshCredentialsIfNeeded } from '@open-mercato/core/modules/communication_channels/lib/credential-refresh'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
+import { calculateBackoffDelayMs } from '@open-mercato/shared/lib/delivery/retry'
 import { PushNotificationDelivery } from '../data/entities'
 import { emitPushNotificationsEvent } from '../events'
 import { enqueuePushDelivery, type PushDeliveryJob } from './queue'
 
 const MAX_ATTEMPTS = 3
-const BASE_RETRY_DELAY_MS = 1000
 
 type Resolve = <T = unknown>(name: string) => T
 
@@ -40,6 +40,8 @@ async function finalize(
   delivery: PushNotificationDelivery,
   event: 'push_notifications.delivery.sent' | 'push_notifications.delivery.failed',
 ): Promise<ProcessResult> {
+  // A terminal row never has a pending retry scheduled.
+  delivery.nextRetryAt = null
   await em.flush()
   await emitPushNotificationsEvent(
     event,
@@ -76,9 +78,11 @@ async function handleRetryableFailure(
   delivery.lastError = reason
   delivery.providerResponse = providerResponse
   if (delivery.attempts < MAX_ATTEMPTS) {
-    // Stay `pending` and re-enqueue with exponential backoff; per-delivery isolation.
-    const delayMs = BASE_RETRY_DELAY_MS * Math.pow(2, Math.max(delivery.attempts - 1, 0))
+    // Release the claim (`pending`) and re-enqueue with exponential backoff + jitter; per-delivery
+    // isolation. Jitter avoids a thundering herd when a provider outage fails many deliveries at once.
+    const delayMs = calculateBackoffDelayMs(delivery.attempts)
     delivery.status = 'pending'
+    delivery.nextRetryAt = new Date(Date.now() + delayMs)
     await em.flush()
     try {
       await enqueuePushDelivery(job, delayMs)
@@ -102,7 +106,9 @@ async function handleRetryableFailure(
     )
     return { status: delivery.status, deliveryId: delivery.id }
   }
-  delivery.status = 'failed'
+  // Retries exhausted: distinct terminal `expired` status (vs `failed` for terminal errors), so the
+  // admin log can tell "gave up after N attempts" from "channel unavailable / no adapter".
+  delivery.status = 'expired'
   return finalize(em, delivery, 'push_notifications.delivery.failed')
 }
 
@@ -137,18 +143,28 @@ async function softDeleteUnregisteredDevice(
 /**
  * Send one push delivery row through the communication_channels hub.
  *
- * Idempotent on the delivery id: a row that is no longer `pending` is a no-op. Mirrors the
- * `test-send` route flow — resolve channel → adapter → credentials → convertOutbound → sendMessage —
- * but adds delivery-row bookkeeping, retry/backoff, and device soft-delete on `unregistered`.
+ * Idempotent on the delivery id: the row is claimed atomically, so a redelivered job that cannot win
+ * the claim (already `sending`/terminal) is a no-op. Mirrors the `test-send` route flow — resolve
+ * channel → adapter → credentials → convertOutbound → sendMessage — but adds delivery-row
+ * bookkeeping, retry/backoff, and device soft-delete on `unregistered`.
  */
 export async function processPushDeliveryJob(
   em: EntityManager,
   job: PushDeliveryJob,
   resolve: Resolve,
 ): Promise<ProcessResult> {
+  // Atomically claim the row (`pending` → `sending`) so a redelivered/duplicated job — inherent to
+  // at-least-once queues — is processed by exactly one worker. Only the worker whose update wins the
+  // race proceeds; the loser (or a non-pending/terminal row) is a no-op. Mirrors the `messages`
+  // send-email claim pattern, which is stronger than a plain read-then-check status guard.
+  const claimed = await em.nativeUpdate(
+    PushNotificationDelivery,
+    { id: job.deliveryId, tenantId: job.tenantId, status: 'pending' },
+    { status: 'sending', updatedAt: new Date() },
+  )
   const delivery = await em.findOne(PushNotificationDelivery, { id: job.deliveryId, tenantId: job.tenantId })
   if (!delivery) return null
-  if (delivery.status !== 'pending') return { status: delivery.status, deliveryId: delivery.id }
+  if (claimed === 0) return { status: delivery.status, deliveryId: delivery.id }
 
   // Resolve the device for its full (secret) push token. Soft via DI token to avoid coupling.
   const DeviceRef = resolve('UserDevice') as EntityName<UserDevice>

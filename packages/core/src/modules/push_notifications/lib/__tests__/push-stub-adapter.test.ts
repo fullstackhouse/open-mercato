@@ -47,6 +47,7 @@ function makeDelivery(overrides: Partial<PushNotificationDelivery> = {}): PushNo
     providerResponse: null,
     createdAt: new Date(),
     sentAt: null,
+    nextRetryAt: null,
     updatedAt: new Date(),
     ...overrides,
   } as PushNotificationDelivery
@@ -57,6 +58,13 @@ function makeHarness(delivery: PushNotificationDelivery, pushToken: string) {
   const channel = { providerKey: PUSH_STUB_PROVIDER_KEY, credentialsRef: null, userId: null }
   const commandBus = { execute: jest.fn(async () => ({})) }
   const em = {
+    nativeUpdate: jest.fn(async (entity: unknown, where: Record<string, unknown>, data: Record<string, unknown>) => {
+      if (entity !== PushNotificationDelivery) return 0
+      const statusMatches = where.status === undefined || delivery.status === where.status
+      if (!statusMatches) return 0
+      Object.assign(delivery, data)
+      return 1
+    }),
     findOne: jest.fn(async (entity: unknown) => {
       if (entity === PushNotificationDelivery) return delivery
       if (entity === deviceRef) return device
