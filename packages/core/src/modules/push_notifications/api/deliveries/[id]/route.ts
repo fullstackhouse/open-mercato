@@ -57,15 +57,14 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (!delivery) {
       return NextResponse.json({ error: translate('push_notifications.errors.not_found', 'Delivery not found') }, { status: 404 })
     }
-    // Tenant-level (org-less) delivery rows are visible to any admin with the feature in the tenant;
-    // the tenant-scoped lookup above already enforces isolation. Only org-bound rows need the
-    // per-organization read-access check (which denies a null target for a restricted principal).
+    // Standard org read scoping (matches the list route + devices): an unrestricted admin reads any
+    // row in the tenant, including tenant-level (NULL-org) ones; an org-restricted admin may read only
+    // rows in an allowed org — a NULL-org target is denied (fail-closed).
     if (
-      delivery.organizationId &&
       !isOrganizationReadAccessAllowed({
         scope: await resolveOrganizationScopeForRequest({ container, auth, request: req }),
         auth,
-        organizationId: delivery.organizationId,
+        organizationId: delivery.organizationId ?? null,
       })
     ) {
       return NextResponse.json({ error: translate('push_notifications.errors.forbidden', 'Access denied') }, { status: 403 })
