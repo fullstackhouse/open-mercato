@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { buildWebhookHeaders, generateMessageId } from '@open-mercato/shared/lib/webhooks'
+import { calculateBackoffDelayMs } from '@open-mercato/shared/lib/delivery/retry'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { WebhookDeliveryEntity, WebhookEntity } from '../data/entities'
 import { emitWebhooksEvent } from '../events'
@@ -408,8 +409,5 @@ function shouldRetryStatus(status: number): boolean {
 }
 
 function calculateNextRetry(attemptNumber: number): Date {
-  const baseDelayMs = 1000
-  const jitterMs = Math.floor(Math.random() * 1000)
-  const delayMs = baseDelayMs * Math.pow(2, Math.max(attemptNumber - 1, 0)) + jitterMs
-  return new Date(Date.now() + delayMs)
+  return new Date(Date.now() + calculateBackoffDelayMs(attemptNumber))
 }

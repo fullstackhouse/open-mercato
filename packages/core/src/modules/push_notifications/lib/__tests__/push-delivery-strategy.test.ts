@@ -96,7 +96,7 @@ describe('mobilePushDeliveryStrategy', () => {
   })
 
   it('inserts a pending delivery row per device and enqueues each', async () => {
-    const { ctx, fork } = makeCtx({
+    const { ctx, fork, em } = makeCtx({
       channel: { providerKey: 'push_stub' },
       devices: [
         { id: 'dev-1', pushToken: 'token-aaaaaaaa' },
@@ -108,6 +108,9 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(fork.persist).toHaveBeenCalledTimes(1)
     expect(fork.flush).toHaveBeenCalledTimes(1)
     expect(enqueueMock).toHaveBeenCalledTimes(2)
+    // Devices are loaded scoped to the notification's organization (null here), never tenant-wide,
+    // so an org-scoped notification cannot fan out to a device registered under a different org.
+    expect(em.find).toHaveBeenCalledWith(deviceRef, expect.objectContaining({ organizationId: null }))
     // provider snapshotted, last-8 token snapshot, never the full token.
     const firstRow = fork.create.mock.calls[0][1] as Record<string, unknown>
     expect(firstRow.provider).toBe('push_stub')

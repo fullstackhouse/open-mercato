@@ -7,7 +7,7 @@ import { StatusBadge, type StatusMap } from '@open-mercato/ui/primitives/status-
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 
-type PushDeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
+type PushDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'expired'
 
 type DeliveryDetail = {
   id: string
@@ -24,14 +24,17 @@ type DeliveryDetail = {
   provider_response: Record<string, unknown> | null
   created_at: string | null
   sent_at: string | null
+  next_retry_at: string | null
   updated_at: string | null
 }
 
 const statusVariant: StatusMap<PushDeliveryStatus> = {
   pending: 'info',
+  sending: 'info',
   sent: 'success',
   failed: 'error',
   skipped: 'neutral',
+  expired: 'warning',
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -125,6 +128,9 @@ export default function PushDeliveryDetailPage() {
               </Field>
               <Field label={t('push_notifications.deliveries.columns.sent')}>
                 {item.sent_at ? new Date(item.sent_at).toLocaleString() : '—'}
+              </Field>
+              <Field label={t('push_notifications.deliveries.detail.nextRetry')}>
+                {item.next_retry_at ? new Date(item.next_retry_at).toLocaleString() : '—'}
               </Field>
               <Field label={t('push_notifications.deliveries.detail.lastError')}>{item.last_error ?? '—'}</Field>
             </div>

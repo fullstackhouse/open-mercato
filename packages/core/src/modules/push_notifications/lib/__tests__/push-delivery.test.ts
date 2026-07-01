@@ -44,6 +44,7 @@ function makeDelivery(overrides: Partial<PushNotificationDelivery> = {}): PushNo
     providerResponse: null,
     createdAt: new Date(),
     sentAt: null,
+    nextRetryAt: null,
     updatedAt: new Date(),
     ...overrides,
   } as PushNotificationDelivery
@@ -82,6 +83,15 @@ function makeHarness(opts: {
   const commandBus = { execute: jest.fn(async () => ({})) }
 
   const em = {
+    // Simulate the atomic pending -> sending claim: only mutate + report 1 row when the current
+    // status matches the `where` guard (i.e. the row is still `pending`).
+    nativeUpdate: jest.fn(async (entity: unknown, where: Record<string, unknown>, data: Record<string, unknown>) => {
+      if (entity !== PushNotificationDelivery || !opts.delivery) return 0
+      const statusMatches = where.status === undefined || opts.delivery.status === where.status
+      if (!statusMatches) return 0
+      Object.assign(opts.delivery, data)
+      return 1
+    }),
     findOne: jest.fn(async (entity: unknown) => {
       if (entity === PushNotificationDelivery) return opts.delivery
       if (entity === deviceRef) return device
@@ -176,19 +186,31 @@ describe('processPushDeliveryJob', () => {
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
-  it('retries a transient failure with backoff, then fails after max attempts', async () => {
+  it('retries a transient failure with backoff, then expires after max attempts', async () => {
     const retry = makeDelivery({ attempts: 0 })
     const h1 = makeHarness({ delivery: retry, sendResult: { externalMessageId: '', status: 'failed', error: 'boom' } })
     await processPushDeliveryJob(h1.em as never, job, h1.resolve)
     expect(retry.status).toBe('pending')
     expect(retry.attempts).toBe(1)
+    expect(retry.nextRetryAt).toBeInstanceOf(Date)
     expect(enqueueMock).toHaveBeenCalledTimes(1)
 
     const exhausted = makeDelivery({ attempts: 2 })
     const h2 = makeHarness({ delivery: exhausted, sendResult: { externalMessageId: '', status: 'failed', error: 'boom' } })
     await processPushDeliveryJob(h2.em as never, job, h2.resolve)
-    expect(exhausted.status).toBe('failed')
+    expect(exhausted.status).toBe('expired')
     expect(exhausted.attempts).toBe(3)
     expect(exhausted.lastError).toBe('boom')
+    expect(exhausted.nextRetryAt).toBeNull()
+  })
+
+  it('does not re-send a row it cannot claim (lost the race / already terminal)', async () => {
+    const delivery = makeDelivery({ status: 'sending' })
+    const h = makeHarness({ delivery })
+
+    const result = await processPushDeliveryJob(h.em as never, job, h.resolve)
+
+    expect(result?.status).toBe('sending')
+    expect(h.sendMessage).not.toHaveBeenCalled()
   })
 })

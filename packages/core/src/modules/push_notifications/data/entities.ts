@@ -1,13 +1,14 @@
 import { OptionalProps } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy'
 
-export type PushDeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
+export type PushDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'expired'
 
 /**
  * Append-only delivery log for a single push notification attempt against one device.
  *
- * One row per (notification, device). The strategy inserts rows `pending`; the
- * `send-push` worker transitions them to `sent`/`failed`/`skipped`. This is a
+ * One row per (notification, device). The strategy inserts rows `pending`; the `send-push` worker
+ * atomically claims a row (`pending` → `sending`, so a redelivered job is processed once) and then
+ * transitions it to `sent`/`failed`/`skipped`, or `expired` once retries are exhausted. This is a
  * background-job/log row, so it is intentionally EXEMPT from optimistic locking
  * (status transitions are server-driven, never concurrently user-edited) and is
  * NOT added to the curated `optimistic-lock-editable-entities` list.
@@ -29,6 +30,7 @@ export class PushNotificationDelivery {
     | 'providerResponse'
     | 'createdAt'
     | 'sentAt'
+    | 'nextRetryAt'
     | 'updatedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
@@ -82,6 +84,11 @@ export class PushNotificationDelivery {
 
   @Property({ name: 'sent_at', type: Date, nullable: true })
   sentAt?: Date | null
+
+  // Set when a retryable failure re-enqueues the job (observability for the admin delivery log);
+  // cleared once the delivery reaches a terminal state.
+  @Property({ name: 'next_retry_at', type: Date, nullable: true })
+  nextRetryAt?: Date | null
 
   @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
   updatedAt: Date = new Date()
