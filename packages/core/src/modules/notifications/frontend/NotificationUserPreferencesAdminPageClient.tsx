@@ -6,8 +6,8 @@ import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/ap
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { Input } from '@open-mercato/ui/primitives/input'
-import { Spinner } from '@open-mercato/ui/primitives/spinner'
+import { LoadingMessage } from '@open-mercato/ui/backend/detail'
+import { LookupSelect, type LookupSelectItem } from '@open-mercato/ui/backend/inputs'
 import {
   NotificationPreferenceMatrix,
   buildPreferenceMap,
@@ -34,10 +34,9 @@ export function NotificationUserPreferencesAdminPageClient() {
   const t = useT()
   const [types, setTypes] = React.useState<NotificationTypeItem[]>([])
   const [typesLoading, setTypesLoading] = React.useState(true)
-  const [search, setSearch] = React.useState('')
-  const [results, setResults] = React.useState<UserRow[]>([])
-  const [searching, setSearching] = React.useState(false)
-  const [selected, setSelected] = React.useState<UserRow | null>(null)
+  const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null)
+  // id -> display label, populated as options are fetched so the heading can name the selected user.
+  const userLabels = React.useRef<Map<string, string>>(new Map())
   const [prefs, setPrefs] = React.useState<Record<string, boolean>>({})
   // Baseline for the selected user; saves send only entries that differ from this.
   const initialPrefs = React.useRef<Record<string, boolean>>({})
@@ -72,31 +71,31 @@ export function NotificationUserPreferencesAdminPageClient() {
     return () => { cancelled = true }
   }, [t])
 
-  React.useEffect(() => {
-    const term = search.trim()
-    let cancelled = false
-    const handle = setTimeout(async () => {
-      setSearching(true)
-      try {
-        const params = new URLSearchParams({ pageSize: '10' })
-        if (term) params.set('search', term)
-        const body = await apiCall<UsersResponse>(`/api/auth/users?${params.toString()}`)
-        if (!cancelled) setResults(body.ok ? (body.result?.items ?? []) : [])
-      } catch {
-        if (!cancelled) setResults([])
-      } finally {
-        if (!cancelled) setSearching(false)
-      }
-    }, 300)
-    return () => { cancelled = true; clearTimeout(handle) }
-  }, [search])
+  // Async user lookup for LookupSelect. Devices admins may lack auth.users.list; degrade to no
+  // options (x-om-forbidden-redirect: 0 + swallow) instead of redirecting the whole page.
+  const fetchUsers = React.useCallback(async (query?: string): Promise<LookupSelectItem[]> => {
+    const params = new URLSearchParams({ page: '1', pageSize: '10' })
+    if (query && query.trim().length) params.set('search', query.trim())
+    const call = await apiCall<UsersResponse>(
+      `/api/auth/users?${params.toString()}`,
+      { headers: { 'x-om-forbidden-redirect': '0' } },
+      { fallback: null },
+    ).catch(() => null)
+    if (!call || !call.ok) return []
+    return (call.result?.items ?? []).flatMap((user) => {
+      if (!user || typeof user.id !== 'string' || !user.id.trim()) return []
+      const label = userLabel(user)
+      userLabels.current.set(user.id, label)
+      const email = user.email?.trim() ?? null
+      return [{ id: user.id, title: label, subtitle: email && email !== label ? email : null }]
+    })
+  }, [])
 
-  const selectUser = async (user: UserRow) => {
-    setSelected(user)
+  const loadPreferencesFor = React.useCallback(async (userId: string) => {
     setPrefsLoading(true)
     try {
       const body = await readApiResultOrThrow<PreferencesResponse>(
-        `/api/notifications/admin/preferences?userId=${encodeURIComponent(user.id)}`,
+        `/api/notifications/admin/preferences?userId=${encodeURIComponent(userId)}`,
         undefined,
         { errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'), allowNullResult: true },
       )
@@ -105,10 +104,15 @@ export function NotificationUserPreferencesAdminPageClient() {
       setPrefs(map)
     } catch (err) {
       flash(err instanceof Error ? err.message : t('notifications.preferences.loadError', 'Failed to load notification preferences'), 'error')
-      setSelected(null)
+      setSelectedUserId(null)
     } finally {
       setPrefsLoading(false)
     }
+  }, [t, types])
+
+  const handleSelectUser = (userId: string | null) => {
+    setSelectedUserId(userId)
+    if (userId) void loadPreferencesFor(userId)
   }
 
   const togglePref = (typeId: string, channel: string, enabled: boolean) => {
@@ -116,7 +120,7 @@ export function NotificationUserPreferencesAdminPageClient() {
   }
 
   const handleSave = async () => {
-    if (!selected) return
+    if (!selectedUserId) return
     setSaving(true)
     try {
       const preferences = diffPreferenceItems(types, initialPrefs.current, prefs)
@@ -126,14 +130,17 @@ export function NotificationUserPreferencesAdminPageClient() {
         return
       }
       const response = await runMutation({
+        // optimistic-lock-exempt: idempotent per-cell preference toggle grid — the client sends only
+        // changed (type, channel) cells (diffPreferenceItems) and the server upserts them
+        // last-write-wins per cell, so there is no lost-update hazard to version-lock.
         operation: () =>
           apiCall<SaveResponse>('/api/notifications/admin/preferences', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: selected.id, preferences }),
+            body: JSON.stringify({ userId: selectedUserId, preferences }),
           }),
         context: { formId: ADMIN_PREFERENCES_CONTEXT_ID, resourceKind: 'notifications.preference', retryLastMutation },
-        mutationPayload: { userId: selected.id, preferences },
+        mutationPayload: { userId: selectedUserId, preferences },
       })
       if (!response.ok) {
         throw new Error(response.result?.error || t('notifications.preferences.saveError', 'Failed to save notification preferences'))
@@ -147,6 +154,8 @@ export function NotificationUserPreferencesAdminPageClient() {
     }
   }
 
+  const selectedLabel = selectedUserId ? (userLabels.current.get(selectedUserId) ?? selectedUserId) : ''
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -156,51 +165,22 @@ export function NotificationUserPreferencesAdminPageClient() {
         </p>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <Input
-          value={search}
-          placeholder={t('notifications.preferences.admin.searchPlaceholder', 'Search users by name or email...')}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-        <div className="rounded-lg border border-border">
-          {searching ? (
-            <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
-              <Spinner size="sm" />
-              {t('notifications.preferences.admin.searching', 'Searching...')}
-            </div>
-          ) : results.length === 0 ? (
-            <div className="px-4 py-3 text-sm text-muted-foreground">
-              {t('notifications.preferences.admin.noUsers', 'No users found.')}
-            </div>
-          ) : (
-            <ul className="divide-y divide-border">
-              {results.map((user) => (
-                <li key={user.id}>
-                  <button
-                    type="button"
-                    onClick={() => selectUser(user)}
-                    className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm hover:bg-muted/50 ${selected?.id === user.id ? 'bg-muted/50 font-medium' : ''}`}
-                  >
-                    <span>{userLabel(user)}</span>
-                    {user.email && user.name ? <span className="text-xs text-muted-foreground">{user.email}</span> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+      <LookupSelect
+        value={selectedUserId}
+        onChange={handleSelectUser}
+        fetchOptions={fetchUsers}
+        defaultOpen
+        searchPlaceholder={t('notifications.preferences.admin.searchPlaceholder', 'Search users by name or email...')}
+        emptyLabel={t('notifications.preferences.admin.noUsers', 'No users found.')}
+      />
 
-      {selected ? (
+      {selectedUserId ? (
         <div className="flex flex-col gap-4">
           <h2 className="text-lg font-medium">
-            {t('notifications.preferences.admin.editingFor', 'Preferences for {user}').replace('{user}', userLabel(selected))}
+            {t('notifications.preferences.admin.editingFor', 'Preferences for {user}').replace('{user}', selectedLabel)}
           </h2>
           {prefsLoading || typesLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner size="sm" />
-              {t('notifications.preferences.loading', 'Loading notification preferences...')}
-            </div>
+            <LoadingMessage label={t('notifications.preferences.loading', 'Loading notification preferences...')} />
           ) : (
             <>
               <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} />

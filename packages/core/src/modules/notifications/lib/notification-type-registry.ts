@@ -65,7 +65,7 @@ export async function syncNotificationTypes(
     return { created: 0, updated: 0, deleted: 0, total: definitions.length }
   }
 
-  const db = (em as any).getKysely() as Kysely<any>
+  const db = em.getKysely<any>() as Kysely<any>
 
   // Read existing system-wide rows via kysely (not the ORM) so they stay out of the identity map and
   // the route's subsequent em.find reflects exactly what this function just wrote.

@@ -168,8 +168,8 @@ test.describe('TC-NOTIF-011: Notification type catalogue + channel preferences',
     await page.goto(ADMIN_PREFERENCES_PAGE)
     await expect(page.getByRole('heading', { name: /User Notification Preferences/i })).toBeVisible()
 
-    // The initial (empty-search) load lists users; pick the first.
-    const firstUser = page.locator('ul li button').first()
+    // LookupSelect (defaultOpen) lists users on load; pick the first option.
+    const firstUser = page.locator('[role="button"][aria-pressed]').first()
     await expect(firstUser).toBeVisible()
     await firstUser.click()
 

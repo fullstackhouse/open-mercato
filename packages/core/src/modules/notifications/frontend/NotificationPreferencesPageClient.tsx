@@ -6,7 +6,7 @@ import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/ap
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { Spinner } from '@open-mercato/ui/primitives/spinner'
+import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import {
   NotificationPreferenceMatrix,
   buildPreferenceMap,
@@ -88,6 +88,10 @@ export function NotificationPreferencesPageClient() {
         return
       }
       const response = await runMutation({
+        // optimistic-lock-exempt: the preference matrix is an idempotent per-cell toggle grid.
+        // The client sends only changed (type, channel) cells (diffPreferenceItems) and the server
+        // upserts them last-write-wins per cell, so there is no lost-update hazard on a shared
+        // aggregate that version-locking would guard.
         operation: () =>
           apiCall<SaveResponse>('/api/notifications/preferences', {
             method: 'PUT',
@@ -112,12 +116,7 @@ export function NotificationPreferencesPageClient() {
   }
 
   if (loading || !types) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner size="sm" />
-        {t('notifications.preferences.loading', 'Loading notification preferences...')}
-      </div>
-    )
+    return <LoadingMessage label={t('notifications.preferences.loading', 'Loading notification preferences...')} />
   }
 
   return (
@@ -131,11 +130,12 @@ export function NotificationPreferencesPageClient() {
 
       <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} />
 
+      {error && <ErrorMessage label={error} />}
+
       <div className="flex items-center gap-3">
         <Button type="button" onClick={handleSave} disabled={saving}>
           {saving ? t('notifications.preferences.saving', 'Saving...') : t('notifications.preferences.save', 'Save preferences')}
         </Button>
-        {error && <span className="text-sm text-destructive">{error}</span>}
       </div>
     </div>
   )

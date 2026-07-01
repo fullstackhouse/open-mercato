@@ -5,8 +5,12 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveNotificationPreferenceService, type NotificationPreferenceScope } from '../../lib/notificationPreferenceService'
-import { runGuardedNotificationWrite, NOTIFICATION_PREFERENCE_RESOURCE_KIND } from '../../lib/routeHelpers'
-import { PREFERENCE_UPDATED_EVENT } from '../../events'
+import {
+  runGuardedNotificationWrite,
+  notificationValidationErrorResponse,
+  NOTIFICATION_PREFERENCE_RESOURCE_KIND,
+} from '../../lib/routeHelpers'
+import { PREFERENCE_UPDATED_EVENT, emitNotificationEvent } from '../../events'
 import { updatePreferencesSchema, notificationPreferenceItemSchema } from '../../data/validators'
 import { errorResponseSchema } from '../openapi'
 
@@ -42,17 +46,11 @@ export async function GET(req: Request) {
 }
 
 export async function PUT(req: Request) {
-  const { t } = await resolveTranslations()
   const auth = await getAuthFromRequest(req)
   if (!auth?.sub || !auth.tenantId) return await unauthorized()
 
   const parsed = updatePreferencesSchema.safeParse(await readJsonSafe(req, {}))
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: t('api.errors.invalidPayload', 'Invalid request body') },
-      { status: 400 },
-    )
-  }
+  if (!parsed.success) return notificationValidationErrorResponse(parsed.error)
 
   const container = await createRequestContainer()
   try {
@@ -82,14 +80,11 @@ export async function PUT(req: Request) {
 
     // Skip the event on no-op writes (nothing actually changed).
     if (guarded.result > 0) {
-      const eventBus = container.resolve('eventBus') as {
-        emit: (event: string, payload: unknown, options?: unknown) => Promise<void>
-      }
-      await eventBus.emit(
-        PREFERENCE_UPDATED_EVENT,
-        { tenantId: auth.tenantId, userId: auth.sub },
-        { tenantId: auth.tenantId, organizationId: auth.orgId ?? null },
-      )
+      await emitNotificationEvent(PREFERENCE_UPDATED_EVENT, {
+        tenantId: auth.tenantId,
+        organizationId: auth.orgId ?? null,
+        userId: auth.sub,
+      })
     }
 
     return NextResponse.json({ ok: true })
