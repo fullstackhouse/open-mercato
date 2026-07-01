@@ -20,6 +20,14 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
   retries are exhausted (vs `failed` for terminal errors); on the `unregistered` sentinel soft-deletes the device.
 - **Queue** (`lib/queue.ts`) mirrors the webhooks queue: `createModuleQueue` + `enqueuePushDelivery` +
   a local-worker bootstrap for dev/test (`QUEUE_STRATEGY !== 'async'`).
+- **Reaper** (`lib/push-reaper.ts` → `workers/reclaim-stuck.worker.ts`) recovers rows stranded in
+  `sending` by a crashed worker — the send-path claim only matches `pending`, so such a row has no
+  outstanding job and would never terminate. A per-tenant `@open-mercato/scheduler` interval entry
+  (registered best-effort in `setup.ts`, mirroring the `communication_channels` poll-tick) fires the
+  tick; rows still in `sending` past `OM_PUSH_STUCK_RECLAIM_MINUTES` (default 5) are re-opened +
+  re-enqueued when attempts remain, else finalized `expired`. Each transition is an atomic
+  `nativeUpdate` guarded on `status='sending'` + still-stale `updated_at`, so overlapping ticks or a
+  worker that re-claimed the row never re-open an active delivery.
 
 ## Always
 

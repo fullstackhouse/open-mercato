@@ -8,6 +8,10 @@ export interface PushDeliveryJob {
 }
 
 export const PUSH_DELIVERIES_QUEUE = 'push-deliveries'
+// Scheduler-driven tick that recovers rows stranded in `sending` by a crashed worker (see
+// lib/push-reaper.ts). The `@open-mercato/scheduler` interval entry registered in setup.ts enqueues
+// one tick per tenant onto this queue; the reclaim-stuck worker processes it.
+export const PUSH_STUCK_RECLAIM_QUEUE = 'push-stuck-reclaim'
 
 const queues = new Map<string, Queue<PushDeliveryJob>>()
 const LOCAL_WORKER_PROMISE_KEY = '__openMercatoPushLocalWorkerPromise__'
