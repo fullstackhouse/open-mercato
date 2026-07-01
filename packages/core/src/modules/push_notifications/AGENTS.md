@@ -50,6 +50,6 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
 ## Validation
 
 ```bash
-yarn workspace @open-mercato/core test -- push-delivery
+yarn workspace @open-mercato/core test -- push_notifications
 yarn workspace @open-mercato/core build
 ```
