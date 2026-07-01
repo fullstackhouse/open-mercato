@@ -10,7 +10,7 @@ import { PushNotificationDelivery } from '../data/entities'
 import { emitPushNotificationsEvent } from '../events'
 import { enqueuePushDelivery, type PushDeliveryJob } from './queue'
 
-const MAX_ATTEMPTS = 3
+export const MAX_ATTEMPTS = 3
 
 type Resolve = <T = unknown>(name: string) => T
 
