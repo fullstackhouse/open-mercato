@@ -32,19 +32,15 @@ const RECLAIM_TICK_INTERVAL_SECONDS = Math.max(
 )
 
 /**
- * `scheduled_jobs.id` is a uuid column, so a module-owned schedule needs a stable uuid registration
- * key (hashed from a stable string) for `schedulerService.register()` to upsert idempotently across
- * re-runs of seedDefaults.
- *
- * The hash is folded into a *valid* RFC-4122 v5-style (name-based) UUID, not merely a uuid-shaped
- * string: the version nibble is forced to `5` and the variant nibble to `8..b`. Postgres' uuid type is
- * lenient, but the scheduler (and other openmercato surfaces) validate ids with zod's strict `z.uuid()`,
- * which rejects a bad version/variant — so the raw sha256 slices must be normalized.
+ * `scheduled_jobs.id` is a uuid column, so a module-owned schedule's stable
+ * registration key must be hashed into a uuid rather than used verbatim — this
+ * keeps `schedulerService.register()` an idempotent upsert across re-runs of
+ * seedDefaults instead of trying to insert a raw string into the uuid PK.
+ * Mirrors the communication_channels poll-tick registration.
  */
-export function stableScheduleUuid(stableKey: string): string {
+function stableScheduleUuid(stableKey: string): string {
   const hex = createHash('sha256').update(stableKey).digest('hex')
-  const variantNibble = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16)
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variantNibble}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
 export const setup: ModuleSetupConfig = {
