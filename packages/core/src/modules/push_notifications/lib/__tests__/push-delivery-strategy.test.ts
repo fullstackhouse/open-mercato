@@ -16,6 +16,18 @@ jest.mock('../queue', () => ({
   PUSH_DELIVERIES_QUEUE: 'push-deliveries',
 }))
 
+// The fan-out persists the payload as `sql`${JSON.stringify(payload)}::jsonb`` so the interpolated
+// JSON stays a raw jsonb literal. Capture that JSON string here so payload-content assertions can
+// decode it; everything else in kysely is preserved.
+jest.mock('kysely', () => ({
+  ...jest.requireActual('kysely'),
+  sql: (_strings: TemplateStringsArray, ...values: unknown[]) => ({ __rawJson: values[0] }),
+}))
+
+function decodePayload(row: Record<string, unknown>): { data: Record<string, string>; options?: Record<string, unknown>; silent?: boolean } {
+  return JSON.parse((row.payload as { __rawJson: string }).__rawJson)
+}
+
 const getTypeMock = getNotificationType as jest.MockedFunction<typeof getNotificationType>
 const resolvePrefsMock = resolveNotificationPreferenceService as jest.MockedFunction<typeof resolveNotificationPreferenceService>
 const enqueueMock = enqueuePushDelivery as jest.MockedFunction<typeof enqueuePushDelivery>
@@ -77,6 +89,7 @@ function makeCtx(opts: {
   channels?: Array<Record<string, unknown>>
   devices?: Array<Record<string, unknown>>
   insertResult?: Array<{ id: string }>
+  notification?: Record<string, unknown>
 }) {
   const { db, captured } = makeKysely(opts.insertResult)
   const em = {
@@ -98,19 +111,24 @@ function makeCtx(opts: {
     tenantId: TENANT,
     organizationId: null,
     linkHref: '/orders/1',
+    ...(opts.notification ?? {}),
   }
   const ctx = { notification, title: 'Shipped', body: 'Your order shipped', resolve } as never
   return { ctx, em, captured }
 }
+
+const isChannelEnabledMock = jest.fn(async () => true)
 
 beforeEach(() => {
   getTypeMock.mockReset()
   resolvePrefsMock.mockReset()
   enqueueMock.mockClear()
   enqueueMock.mockResolvedValue('job-id')
+  isChannelEnabledMock.mockClear()
+  isChannelEnabledMock.mockResolvedValue(true)
   // Default: known type, push enabled.
   getTypeMock.mockReturnValue({ type: 'orders.shipped' } as never)
-  resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => true) } as never)
+  resolvePrefsMock.mockReturnValue({ isChannelEnabled: isChannelEnabledMock } as never)
 })
 
 describe('mobilePushDeliveryStrategy', () => {
@@ -124,13 +142,13 @@ describe('mobilePushDeliveryStrategy', () => {
   })
 
   it('skips when the recipient opted out of push for the type', async () => {
-    resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => false) } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
     const { ctx, em } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // The cheap per-tenant channel check runs first; on opt-out we never insert rows or enqueue.
+    // The opt-out gate short-circuits the visible-notification path before any insert or enqueue.
     expect(em.getKysely).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
@@ -218,7 +236,25 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(captured.updates).toHaveLength(1)
     expect(captured.updates[0].set).toMatchObject({ status: 'failed' })
     expect(String((captured.updates[0].set as Record<string, unknown>).last_error)).toContain('enqueue_failed')
-    expect(captured.updates[0].where).toEqual(['id', '=', 'del-1'])
+    // Failed enqueues are batched into one UPDATE per reason via `where id in (...)`.
+    expect(captured.updates[0].where).toEqual(['id', 'in', ['del-1']])
+  })
+
+  it('batches multiple same-reason enqueue failures into a single UPDATE', async () => {
+    enqueueMock.mockRejectedValue(new Error('queue down'))
+    const { ctx, captured } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [
+        { id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' },
+        { id: 'dev-2', pushToken: 'token-bbbbbbbb', pushProvider: 'fcm' },
+      ],
+      insertResult: [{ id: 'del-1' }, { id: 'del-2' }],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Both rows share the same failure reason ⇒ one UPDATE targeting both ids.
+    expect(captured.updates).toHaveLength(1)
+    expect(captured.updates[0].set).toMatchObject({ status: 'failed' })
+    expect(captured.updates[0].where).toEqual(['id', 'in', ['del-1', 'del-2']])
   })
 
   it('routes each device to the push channel matching its provider', async () => {
@@ -240,5 +276,52 @@ describe('mobilePushDeliveryStrategy', () => {
       captured.insertRows!.map((row) => [row.user_device_id, row.provider]),
     )
     expect(providersByDevice).toEqual({ 'ios-1': 'apns', 'android-1': 'fcm' })
+  })
+
+  it('threads caller data + pushOptions into the delivery payload', async () => {
+    const { ctx, captured } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { data: { orderId: 'o-1' }, pushOptions: { sound: 'chime.caf', badge: 3 } },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    const row = captured.insertRows![0]
+    const payload = decodePayload(row)
+    expect(payload.data).toMatchObject({ orderId: 'o-1', notificationId: 'notif-1', type: 'orders.shipped' })
+    expect(payload.options).toEqual({ sound: 'chime.caf', badge: 3 })
+    expect(payload.silent).toBe(false)
+    expect(row.silent).toBe(false)
+  })
+
+  it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {
+    getTypeMock.mockReturnValue({ type: 'auth.account.locked', nonOptOut: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, captured } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { type: 'auth.account.locked' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Forced types never consult the opt-out gate and always fan out.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(captured.insertRows).toHaveLength(1)
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    // A forced visible notification is not silent.
+    expect(captured.insertRows![0].silent).toBe(false)
+  })
+
+  it('delivers a silent-typed notification without consulting preferences', async () => {
+    getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
+    const { ctx, captured } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Silent (background) pushes are type-derived and bypass the user opt-out gate.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    const row = captured.insertRows![0]
+    expect(row.silent).toBe(true)
+    expect(decodePayload(row).silent).toBe(true)
   })
 })

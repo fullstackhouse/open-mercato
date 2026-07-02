@@ -8,6 +8,7 @@ import {
   deviceUnregisteredResult,
   readPushToken,
 } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
+import { readPushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import {
   hasChannelAdapter,
   registerChannelAdapter,
@@ -48,10 +49,18 @@ class PushStubChannelAdapter extends BasePushChannelAdapter {
     if (token.includes('fail')) {
       return { externalMessageId: '', status: 'failed', error: 'push_stub_forced_failure', metadata: { stub: true } }
     }
+    // Surface the resolved envelope (silent flag, custom data, mapped options) so
+    // integration tests can assert what the worker handed the adapter per delivery.
+    const envelope = readPushEnvelope(input.content)
     return {
       externalMessageId: `push-stub-${token.slice(-8) || 'token'}`,
       status: 'sent',
-      metadata: { stub: true },
+      metadata: {
+        stub: true,
+        silent: envelope.silent,
+        data: envelope.data,
+        options: envelope.options,
+      },
     }
   }
 }

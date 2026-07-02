@@ -47,7 +47,8 @@ export type SyncNotificationTypesResult = {
 /**
  * Reconcile the in-memory catalogue into the `notification_types` table.
  * Code-registered types are system-wide, so rows are written with
- * `tenant_id IS NULL`. Idempotent: updates `label_key`/`description_key` only on
+ * `tenant_id IS NULL`. Idempotent: updates the mirrored columns
+ * (`label_key`/`description_key`/`category`/`silent`/`non_opt_out`) only on
  * drift, and prunes system-wide rows no longer in the catalogue. Guarded by a
  * once-per-process flag on the lazy path; pass `force` to bypass it (used by the
  * explicit `notifications.type_registry.sync` subscriber).
@@ -71,19 +72,35 @@ export async function syncNotificationTypes(
   // the route's subsequent em.find reflects exactly what this function just wrote.
   const existing = (await db
     .selectFrom('notification_types')
-    .select(['id', 'label_key', 'description_key'])
+    .select(['id', 'label_key', 'description_key', 'category', 'silent', 'non_opt_out'])
     .where('tenant_id', 'is', null)
-    .execute()) as Array<{ id: string; label_key: string; description_key: string | null }>
+    .execute()) as Array<{
+    id: string
+    label_key: string
+    description_key: string | null
+    category: string | null
+    silent: boolean
+    non_opt_out: boolean
+  }>
   const byId = new Map(existing.map((row) => [row.id, row]))
 
   const labelKeyFor = (def: NotificationTypeDefinition) => def.labelKey ?? def.titleKey
   const descKeyFor = (def: NotificationTypeDefinition) => def.descriptionKey ?? null
+  const categoryFor = (def: NotificationTypeDefinition) => def.category ?? null
+  const silentFor = (def: NotificationTypeDefinition) => def.silent === true
+  const nonOptOutFor = (def: NotificationTypeDefinition) => def.nonOptOut === true
 
   const toCreate = definitions.filter((def) => !byId.has(def.type))
   const toUpdate = definitions.filter((def) => {
     const row = byId.get(def.type)
     if (!row) return false
-    return row.label_key !== labelKeyFor(def) || (row.description_key ?? null) !== descKeyFor(def)
+    return (
+      row.label_key !== labelKeyFor(def) ||
+      (row.description_key ?? null) !== descKeyFor(def) ||
+      (row.category ?? null) !== categoryFor(def) ||
+      row.silent !== silentFor(def) ||
+      row.non_opt_out !== nonOptOutFor(def)
+    )
   })
 
   let created = 0
@@ -99,6 +116,9 @@ export async function syncNotificationTypes(
           tenant_id: null,
           label_key: labelKeyFor(def),
           description_key: descKeyFor(def),
+          category: categoryFor(def),
+          silent: silentFor(def),
+          non_opt_out: nonOptOutFor(def),
           created_at: sql`now()`,
           updated_at: sql`now()`,
         })),
@@ -112,7 +132,14 @@ export async function syncNotificationTypes(
   for (const def of toUpdate) {
     await db
       .updateTable('notification_types')
-      .set({ label_key: labelKeyFor(def), description_key: descKeyFor(def), updated_at: sql`now()` })
+      .set({
+        label_key: labelKeyFor(def),
+        description_key: descKeyFor(def),
+        category: categoryFor(def),
+        silent: silentFor(def),
+        non_opt_out: nonOptOutFor(def),
+        updated_at: sql`now()`,
+      })
       .where('id', '=', def.type)
       .where('tenant_id', 'is', null)
       .execute()

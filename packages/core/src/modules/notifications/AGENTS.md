@@ -21,6 +21,8 @@ In-app notifications plus two channel-agnostic surfaces that every delivery chan
 - The in-memory `NotificationTypeDefinition` registry is the source of truth for code. `notification_types` is a **read-through DB mirror** so remote clients (mobile apps) can enumerate types over HTTP without shipping the catalogue.
 - `syncNotificationTypes(em)` reconciles the registry into the table (idempotent, `tenant_id IS NULL`). It runs lazily on the first `GET /api/notifications/types` per process and on the `notifications.type_registry.sync` event (emitted from `setup.ts` `seedDefaults`; handled by `subscribers/sync-notification-types.ts`).
 - Field map: `id ← def.type`, `label_key ← def.labelKey ?? def.titleKey`, `description_key ← def.descriptionKey ?? null`. Give a type a distinct preferences-screen label by adding optional `labelKey`/`descriptionKey` to its `NotificationTypeDefinition` (additive — falls back to `titleKey`).
+- Mark a type `silent: true` on its `NotificationTypeDefinition` to make its pushes content-available wake-ups (no banner, data-only, bypass the per-channel push preference). This is the gate for `push_notifications` `sendSilentPush`; the flag lives only in the in-memory registry (not mirrored to `notification_types`).
+- A create call may carry an optional `data` (arbitrary app-readable string map — persisted on the row, exposed in the notification DTO, and delivered in the push data payload) and `pushOptions` (flat `sound`/`badge`/`image`/`priority`/`channelId`/`body` map — persisted, push-only, mapped per provider by the push adapters). Both are additive optional fields on the create/batch/role/feature schemas.
 
 ## Preferences & optimistic locking
 
