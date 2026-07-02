@@ -1,5 +1,6 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Plus, X } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
@@ -31,11 +32,14 @@ type FormValues = {
 }
 
 const DELIVERIES_HREF = '/backend/push_notifications'
+const FORM_ID = 'push-custom-send-form'
 // Radix Select forbids an empty-string item value, so "all devices" uses a sentinel that we map
 // back to '' (the form value that means "fan out to every push-capable device").
 const ALL_DEVICES = '__all__'
 
 type DeviceOption = { id: string; label: string; platform: string }
+// Reported up to the page so the (custom) submit button can disable when there is nothing to send to.
+type DeviceState = { userId: string; count: number; loading: boolean }
 
 // Dependent picker: loads the *selected recipient's* push-capable devices (admin devices API,
 // filtered by userId) so an admin can target one device or all of them. Reads the live form values,
@@ -43,13 +47,19 @@ type DeviceOption = { id: string; label: string; platform: string }
 // `showChannelId` (Android channel id is Android-only + visible-only) so the channelId field can hide
 // itself for a selected iOS device or in silent mode. Degrades to "All devices" when the admin lacks
 // devices.admin or the recipient has no push-capable device.
-function DeviceField({ value, setValue, setFormValue, values }: CrudCustomFieldRenderProps) {
+function DeviceField({ value, setValue, setFormValue, values, onState }: CrudCustomFieldRenderProps & { onState?: (s: DeviceState) => void }) {
   const t = useT()
   const userId = typeof values?.userId === 'string' ? values.userId : ''
   const mode = typeof values?.mode === 'string' ? values.mode : 'visible'
   const selected = typeof value === 'string' && value ? value : ''
   const [devices, setDevices] = React.useState<DeviceOption[]>([])
   const [loading, setLoading] = React.useState(false)
+
+  // Report the recipient + push-capable device count up so the page can disable "Send" when there is
+  // nowhere to deliver (no recipient, or the recipient has zero push-capable devices).
+  React.useEffect(() => {
+    onState?.({ userId, count: devices.length, loading })
+  }, [userId, devices.length, loading, onState])
 
   React.useEffect(() => {
     if (!userId) {
@@ -94,16 +104,16 @@ function DeviceField({ value, setValue, setFormValue, values }: CrudCustomFieldR
     <div className="space-y-1">
       <Select value={selected || ALL_DEVICES} onValueChange={(v) => setValue(v === ALL_DEVICES ? '' : v)} disabled={!userId}>
         <SelectTrigger>
-          <SelectValue placeholder={t('push_notifications.send.deviceAll')} />
+          <SelectValue placeholder={`${t('push_notifications.send.deviceAll')} (${devices.length})`} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL_DEVICES}>{t('push_notifications.send.deviceAll')}</SelectItem>
+          <SelectItem value={ALL_DEVICES}>{`${t('push_notifications.send.deviceAll')} (${devices.length})`}</SelectItem>
           {devices.map((d) => (
             <SelectItem key={d.id} value={d.id}>{d.label}</SelectItem>
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">
+      <p className={`text-xs ${userId && !loading && devices.length === 0 ? 'text-status-warning-text' : 'text-muted-foreground'}`}>
         {!userId
           ? t('push_notifications.send.deviceSelectUserFirst')
           : loading
@@ -160,6 +170,14 @@ function DataField({ value, setValue }: CrudCustomFieldRenderProps) {
 export default function PushCustomSendPage() {
   const router = useRouter()
   const t = useT()
+  const [deviceState, setDeviceState] = React.useState<DeviceState>({ userId: '', count: 0, loading: false })
+  const [submitting, setSubmitting] = React.useState(false)
+
+  // Stable reporter for the device picker → bails when unchanged so it can't loop the render.
+  const reportDeviceState = React.useCallback((next: DeviceState) => {
+    setDeviceState((prev) =>
+      prev.userId === next.userId && prev.count === next.count && prev.loading === next.loading ? prev : next)
+  }, [])
 
   // Recipient search by name/email via /api/auth/users (mirrors the devices list + admin
   // notification-preferences picker). Return results only — the combobox retains them internally, so
@@ -188,7 +206,7 @@ export default function PushCustomSendPage() {
 
   const fields = React.useMemo<CrudField[]>(() => [
     { id: 'userId', label: t('push_notifications.send.userId'), type: 'combobox', required: true, description: t('push_notifications.send.userIdHint'), loadOptions: loadUserOptions },
-    { id: 'deviceId', label: t('push_notifications.send.device'), type: 'custom', component: (props) => <DeviceField {...props} /> },
+    { id: 'deviceId', label: t('push_notifications.send.device'), type: 'custom', component: (props) => <DeviceField {...props} onState={reportDeviceState} /> },
     {
       id: 'mode',
       label: t('push_notifications.send.mode'),
@@ -217,7 +235,7 @@ export default function PushCustomSendPage() {
       ],
     },
     { id: 'channelId', label: t('push_notifications.send.channelId'), type: 'text', visibleWhen: { field: 'showChannelId', equals: true } },
-  ], [t, loadUserOptions])
+  ], [t, loadUserOptions, reportDeviceState])
 
   // NOTE: intentionally a flat field list (no `groups`). CrudForm only applies `visibleWhen` in the
   // ungrouped render path — grouped fields ignore it — and this form relies on mode/platform-driven
@@ -229,11 +247,14 @@ export default function PushCustomSendPage() {
         <CrudForm<FormValues>
           title={t('push_notifications.send.pageTitle')}
           backHref={DELIVERIES_HREF}
-          cancelHref={DELIVERIES_HREF}
+          formId={FORM_ID}
+          hideFooterActions
           fields={fields}
           initialValues={{ userId: '', deviceId: '', mode: 'visible', title: '', body: '', data: [], sound: '', badge: '', image: '', priority: '', channelId: '', showChannelId: true }}
           submitLabel={t('push_notifications.send.submit')}
           onSubmit={async (values) => {
+            setSubmitting(true)
+            try {
             const silent = values.mode === 'silent'
             const body = (values.body ?? '').trim()
 
@@ -274,8 +295,32 @@ export default function PushCustomSendPage() {
             })
             flash(t('push_notifications.send.success'), 'success')
             router.push(DELIVERIES_HREF)
+            } finally {
+              setSubmitting(false)
+            }
           }}
         />
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="text-xs">
+            {!deviceState.userId ? (
+              <span className="text-muted-foreground">{t('push_notifications.send.deviceSelectUserFirst')}</span>
+            ) : deviceState.count === 0 && !deviceState.loading ? (
+              <span className="text-status-warning-text">{t('push_notifications.send.deviceNone')}</span>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link href={DELIVERIES_HREF}>{t('common.cancel', 'Cancel')}</Link>
+            </Button>
+            <Button
+              type="submit"
+              form={FORM_ID}
+              disabled={!deviceState.userId || deviceState.count === 0 || deviceState.loading || submitting}
+            >
+              {t('push_notifications.send.submit')}
+            </Button>
+          </div>
+        </div>
       </PageBody>
     </Page>
   )
