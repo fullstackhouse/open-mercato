@@ -37,6 +37,10 @@ test.describe('TC-CHANNEL-PUSH-003: Expo provider registration', () => {
     )
     expect(response.status(), 'route should not 5xx').toBeLessThan(500)
     expect(response.status(), 'Expo provider should be registered (never 404 no_adapter)').not.toBe(404)
+    // A 422 proves the request reached the registered adapter and ran its
+    // validateCredentials (wrong-typed accessToken rejected) — not just that auth
+    // short-circuited. 401 would satisfy "not 404" without proving registration.
+    expect(response.status(), 'wrong-typed credentials should reach the adapter and 422').toBe(422)
   })
 
   test('POST connect/credentials with providerKey=expo and malformed credentials returns 422', async ({ request }) => {

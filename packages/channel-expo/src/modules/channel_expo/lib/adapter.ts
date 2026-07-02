@@ -53,7 +53,9 @@ export function setExpoClientFactory(factory: ExpoClientFactory | null): void {
   clientFactory = factory
 }
 
-const clientCache = new Map<string, ExpoClientLike>()
+type ExpoInstance = InstanceType<ExpoModule['Expo']>
+
+const expoInstanceCache = new Map<string, Promise<ExpoInstance>>()
 
 let expoModulePromise: Promise<ExpoModule> | null = null
 
@@ -67,23 +69,27 @@ function loadExpoModule(): Promise<ExpoModule> {
   return expoModulePromise
 }
 
+function getExpoInstance(accessToken: string | undefined): Promise<ExpoInstance> {
+  const cacheKey = accessToken ?? ''
+  let instance = expoInstanceCache.get(cacheKey)
+  if (!instance) {
+    instance = loadExpoModule().then(({ Expo }) => new Expo({ accessToken }))
+    expoInstanceCache.set(cacheKey, instance)
+  }
+  return instance
+}
+
 function defaultClientFactory(credentials: ExpoCredentials): ExpoClientLike {
-  const cacheKey = credentials.accessToken ?? ''
-  const cached = clientCache.get(cacheKey)
-  if (cached) return cached
-  const client: ExpoClientLike = {
+  return {
     async isExpoPushToken(token: string): Promise<boolean> {
       const { Expo } = await loadExpoModule()
       return Expo.isExpoPushToken(token)
     },
     async send(messages: ExpoPushMessage[]): Promise<ExpoPushTicket[]> {
-      const { Expo } = await loadExpoModule()
-      const expo = new Expo({ accessToken: credentials.accessToken })
+      const expo = await getExpoInstance(credentials.accessToken)
       return expo.sendPushNotificationsAsync(messages)
     },
   }
-  clientCache.set(cacheKey, client)
-  return client
 }
 
 class ExpoChannelAdapter extends BasePushChannelAdapter {
