@@ -74,15 +74,18 @@ function makeKysely(insertResult?: Array<{ id: string }>) {
 }
 
 function makeCtx(opts: {
-  channel?: Record<string, unknown> | null
+  channels?: Array<Record<string, unknown>>
   devices?: Array<Record<string, unknown>>
   insertResult?: Array<{ id: string }>
 }) {
   const { db, captured } = makeKysely(opts.insertResult)
   const em = {
     getKysely: jest.fn(() => db),
-    findOne: jest.fn(async (entity: unknown) => (entity === channelRef ? (opts.channel ?? null) : null)),
-    find: jest.fn(async (entity: unknown) => (entity === deviceRef ? (opts.devices ?? []) : [])),
+    // Channels and devices are both loaded via em.find; devices go through findWithDecryption, which
+    // forwards to em.find (a no-op decrypt when encryption is disabled, as in this suite).
+    find: jest.fn(async (entity: unknown) =>
+      entity === channelRef ? (opts.channels ?? []) : entity === deviceRef ? (opts.devices ?? []) : [],
+    ),
   }
   const resolve = (<T,>(name: string): T => {
     const map: Record<string, unknown> = { em, UserDevice: deviceRef, CommunicationChannel: channelRef }
@@ -115,28 +118,43 @@ describe('mobilePushDeliveryStrategy', () => {
     getTypeMock.mockReturnValue(undefined)
     const { ctx, em } = makeCtx({})
     await mobilePushDeliveryStrategy.deliver(ctx)
-    expect(em.findOne).not.toHaveBeenCalled()
+    expect(em.find).not.toHaveBeenCalled()
+    expect(em.getKysely).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('skips when the recipient opted out of push for the type', async () => {
     resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => false) } as never)
-    const { ctx, em } = makeCtx({ channel: { providerKey: 'push_stub' }, devices: [{ id: 'dev-1', pushToken: 'tok' }] })
+    const { ctx, em } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }],
+    })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // The cheap per-tenant channel check runs first; on opt-out we never load devices or enqueue.
-    expect(em.find).not.toHaveBeenCalled()
+    // The cheap per-tenant channel check runs first; on opt-out we never insert rows or enqueue.
+    expect(em.getKysely).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('skips when no push channel is configured for the tenant', async () => {
-    const { ctx, em } = makeCtx({ channel: null, devices: [{ id: 'dev-1', pushToken: 'tok' }] })
+    const { ctx, em } = makeCtx({ channels: [], devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }] })
     await mobilePushDeliveryStrategy.deliver(ctx)
     expect(em.getKysely).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('skips when the recipient has no push-capable devices', async () => {
-    const { ctx, em } = makeCtx({ channel: { providerKey: 'push_stub' }, devices: [] })
+    const { ctx, em } = makeCtx({ channels: [{ providerKey: 'fcm' }], devices: [] })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    expect(em.getKysely).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('skips when devices have no channel matching their provider', async () => {
+    // Devices exist but their provider has no configured channel ⇒ no rows to insert, no enqueue.
+    const { ctx, em } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'expo-1', pushToken: 'tok', pushProvider: 'expo' }],
+    })
     await mobilePushDeliveryStrategy.deliver(ctx)
     expect(em.getKysely).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
@@ -144,10 +162,10 @@ describe('mobilePushDeliveryStrategy', () => {
 
   it('inserts a pending delivery row per device and enqueues each', async () => {
     const { ctx, em, captured } = makeCtx({
-      channel: { providerKey: 'push_stub' },
+      channels: [{ providerKey: 'fcm' }],
       devices: [
-        { id: 'dev-1', pushToken: 'token-aaaaaaaa' },
-        { id: 'dev-2', pushToken: 'token-bbbbbbbb' },
+        { id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' },
+        { id: 'dev-2', pushToken: 'token-bbbbbbbb', pushProvider: 'fcm' },
       ],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
@@ -155,11 +173,18 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(enqueueMock).toHaveBeenCalledTimes(2)
     // Devices are loaded scoped to the notification's organization (null here), never tenant-wide,
     // so an org-scoped notification cannot fan out to a device registered under a different org.
-    expect(em.find).toHaveBeenCalledWith(deviceRef, expect.objectContaining({ organizationId: null }))
+    // The load routes through findWithDecryption (push_token is encrypted at rest), which forwards a
+    // third `options` arg (undefined here) to em.find.
+    expect(em.find).toHaveBeenCalledWith(
+      deviceRef,
+      expect.objectContaining({ organizationId: null }),
+      undefined,
+    )
     // provider snapshotted, last-8 token snapshot, never the full token.
     const firstRow = captured.insertRows![0]
-    expect(firstRow.provider).toBe('push_stub')
+    expect(firstRow.provider).toBe('fcm')
     expect(firstRow.token_snapshot).toBe('aaaaaaaa')
+    expect(firstRow).not.toHaveProperty('push_token')
     expect(firstRow).not.toHaveProperty('pushToken')
     expect(firstRow.notification_id).toBe('notif-1')
     expect(firstRow.organization_id).toBeNull()
@@ -169,10 +194,10 @@ describe('mobilePushDeliveryStrategy', () => {
     // Simulate a redelivered subscriber event: the second run's INSERT ... ON CONFLICT DO NOTHING
     // finds both (notification, device) rows already present, so nothing is inserted → nothing enqueued.
     const { ctx, captured } = makeCtx({
-      channel: { providerKey: 'push_stub' },
+      channels: [{ providerKey: 'fcm' }],
       devices: [
-        { id: 'dev-1', pushToken: 'token-aaaaaaaa' },
-        { id: 'dev-2', pushToken: 'token-bbbbbbbb' },
+        { id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' },
+        { id: 'dev-2', pushToken: 'token-bbbbbbbb', pushProvider: 'fcm' },
       ],
       insertResult: [],
     })
@@ -185,8 +210,8 @@ describe('mobilePushDeliveryStrategy', () => {
   it('marks a row failed when its enqueue throws (no orphan pending row)', async () => {
     enqueueMock.mockRejectedValueOnce(new Error('queue down'))
     const { ctx, captured } = makeCtx({
-      channel: { providerKey: 'push_stub' },
-      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa' }],
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
       insertResult: [{ id: 'del-1' }],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
@@ -194,5 +219,26 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(captured.updates[0].set).toMatchObject({ status: 'failed' })
     expect(String((captured.updates[0].set as Record<string, unknown>).last_error)).toContain('enqueue_failed')
     expect(captured.updates[0].where).toEqual(['id', '=', 'del-1'])
+  })
+
+  it('routes each device to the push channel matching its provider', async () => {
+    const { ctx, captured } = makeCtx({
+      channels: [{ providerKey: 'apns' }, { providerKey: 'fcm' }],
+      devices: [
+        { id: 'ios-1', pushToken: 'ios-token-1', pushProvider: 'apns' },
+        { id: 'android-1', pushToken: 'android-token-1', pushProvider: 'fcm' },
+        // No expo channel configured ⇒ this device is skipped.
+        { id: 'expo-1', pushToken: 'expo-token-1', pushProvider: 'expo' },
+        // No provider on the device ⇒ skipped.
+        { id: 'unknown-1', pushToken: 'unknown-token-1', pushProvider: null },
+      ],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    expect(captured.insertRows).toHaveLength(2)
+    expect(enqueueMock).toHaveBeenCalledTimes(2)
+    const providersByDevice = Object.fromEntries(
+      captured.insertRows!.map((row) => [row.user_device_id, row.provider]),
+    )
+    expect(providersByDevice).toEqual({ 'ios-1': 'apns', 'android-1': 'fcm' })
   })
 })
