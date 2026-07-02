@@ -51,6 +51,8 @@ type ApnsProviderLike = {
     sent?: Array<{ device: string }>
     failed?: Array<{ device: string; status?: string | number; error?: Error; response?: { reason?: string } }>
   }>
+  /** node-apn's Provider exposes `shutdown()` to close its HTTP/2 socket to Apple. */
+  shutdown?(): void
 }
 
 function credentialsHash(credentials: ApnsResolvedCredentials): string {
@@ -60,23 +62,46 @@ function credentialsHash(credentials: ApnsResolvedCredentials): string {
     .slice(0, 16)
 }
 
+/**
+ * Bounds the number of live HTTP/2 providers cached at once. Each entry holds an
+ * open socket to Apple, so an unbounded cache would leak a connection every time a
+ * tenant rotates their `.p8` key or toggles `production` (the hash changes → a new
+ * entry, while the stale provider never shuts down). LRU-evicting the least-recently
+ * used provider and calling `shutdown()` keeps the connection count bounded.
+ */
+const PROVIDER_CACHE_MAX = 32
 const providerCache = new Map<string, Promise<ApnsProviderLike>>()
 
 async function getProvider(credentials: ApnsResolvedCredentials): Promise<ApnsProviderLike> {
   const key = credentialsHash(credentials)
-  let pending = providerCache.get(key)
-  if (!pending) {
-    pending = (async () => {
-      const apnModule = await import('@parse/node-apn')
-      const apn = (apnModule as { default?: unknown }).default ?? apnModule
-      const Provider = (apn as { Provider: new (options: unknown) => ApnsProviderLike }).Provider
-      return new Provider({
-        token: { key: credentials.p8Key, keyId: credentials.keyId, teamId: credentials.teamId },
-        production: credentials.production,
-      })
-    })()
-    providerCache.set(key, pending)
+  const existing = providerCache.get(key)
+  if (existing) {
+    // Refresh recency: delete + re-insert moves the key to the newest position.
+    providerCache.delete(key)
+    providerCache.set(key, existing)
+    return existing
   }
+
+  const pending = (async () => {
+    const apnModule = await import('@parse/node-apn')
+    const apn = (apnModule as { default?: unknown }).default ?? apnModule
+    const Provider = (apn as { Provider: new (options: unknown) => ApnsProviderLike }).Provider
+    return new Provider({
+      token: { key: credentials.p8Key, keyId: credentials.keyId, teamId: credentials.teamId },
+      production: credentials.production,
+    })
+  })()
+  providerCache.set(key, pending)
+
+  if (providerCache.size > PROVIDER_CACHE_MAX) {
+    const oldestKey = providerCache.keys().next().value as string | undefined
+    if (oldestKey != null) {
+      const evicted = providerCache.get(oldestKey)
+      providerCache.delete(oldestKey)
+      void evicted?.then((provider) => provider.shutdown?.()).catch(() => {})
+    }
+  }
+
   return pending
 }
 
