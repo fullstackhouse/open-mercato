@@ -122,8 +122,8 @@ export default function PushDeliveriesListPage() {
       options: userOptions,
       loadOptions: loadUserOptions,
     },
-    { id: 'from', label: t('push_notifications.deliveries.filters.from'), type: 'text' },
-    { id: 'to', label: t('push_notifications.deliveries.filters.to'), type: 'text' },
+    // A single created-at range picker (ISO `yyyy-MM-dd`) that maps to the ?from/?to query params.
+    { id: 'createdRange', label: t('push_notifications.deliveries.filters.created'), type: 'dateRange' },
   ], [t, userOptions, loadUserOptions])
 
   React.useEffect(() => {
@@ -136,8 +136,9 @@ export default function PushDeliveriesListPage() {
         params.set('pageSize', '50')
         const status = typeof filterValues.status === 'string' ? filterValues.status.trim() : ''
         const userId = typeof filterValues.userId === 'string' ? filterValues.userId.trim() : ''
-        const from = typeof filterValues.from === 'string' ? filterValues.from.trim() : ''
-        const to = typeof filterValues.to === 'string' ? filterValues.to.trim() : ''
+        const createdRange = (filterValues.createdRange ?? {}) as { from?: string; to?: string }
+        const from = typeof createdRange.from === 'string' ? createdRange.from.trim() : ''
+        const to = typeof createdRange.to === 'string' ? createdRange.to.trim() : ''
         if (status) params.set('status', status)
         if (userId) params.set('userId', userId)
         if (from) params.set('from', from)
