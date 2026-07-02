@@ -12,6 +12,8 @@ export interface SendCustomPushArgs {
   tenantId: string
   userId: string
   organizationId?: string | null
+  /** Restrict delivery to one of the user's devices (`UserDevice.id`). Omit to send to all. */
+  deviceId?: string
   /** Literal, already-authored push title (free text — not an i18n key, so not translated). */
   title: string
   /** Optional literal push body. */
@@ -54,6 +56,7 @@ export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueu
     tenantId,
     userId,
     organizationId = null,
+    deviceId,
     title,
     body = null,
     data,
@@ -77,6 +80,7 @@ export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueu
     resolve,
     scope: { tenantId, organizationId },
     userId,
+    userDeviceId: deviceId,
     notificationId: null,
     notificationTypeId: type,
     payload: {

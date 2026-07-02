@@ -31,6 +31,12 @@ export interface FanOutPushDeliveriesArgs {
   resolve: Resolve
   scope: { tenantId: string; organizationId: string | null }
   userId: string
+  /**
+   * Restrict the fan-out to a single one of the user's devices (`UserDevice.id`). Still scoped to the
+   * same (tenant, org, user), so an id that isn't the user's own matches nothing. Omit to fan out to
+   * all of the user's push-capable devices (the default).
+   */
+  userDeviceId?: string
   /** Source in-app notification id, or `null` for a silent push (no Notification row). */
   notificationId: string | null
   notificationTypeId: string
@@ -58,7 +64,7 @@ function tokenSnapshot(token: string): string {
  * so this stays decoupled from those modules' internals. Returns the number of jobs enqueued.
  */
 export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Promise<{ enqueued: number }> {
-  const { em, resolve, scope, userId, notificationId, notificationTypeId, payload, copy } = args
+  const { em, resolve, scope, userId, userDeviceId, notificationId, notificationTypeId, payload, copy } = args
   const { tenantId, organizationId } = scope
   const silent = payload.silent === true
 
@@ -97,6 +103,8 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
       tenantId,
       organizationId,
       userId,
+      // Optionally restrict to a single device; still scoped to this user so a foreign id matches none.
+      ...(userDeviceId ? { id: userDeviceId } : {}),
       deletedAt: null,
       pushToken: { $ne: null },
     },

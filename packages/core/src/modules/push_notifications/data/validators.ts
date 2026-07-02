@@ -12,6 +12,8 @@ const rangeDateFilter = z.union([z.string().datetime({ offset: true }), z.string
 export const customSendSchema = z
   .object({
     recipientUserId: z.string().uuid(),
+    // Optional: target one of the recipient's devices; omit to send to all their devices.
+    deviceId: z.string().uuid().optional(),
     title: z.string().trim().min(1).max(500),
     body: z.string().trim().max(2000).nullish(),
     data: z.record(z.string(), z.string()).optional(),
