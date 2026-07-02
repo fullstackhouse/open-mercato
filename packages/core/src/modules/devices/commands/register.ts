@@ -5,6 +5,7 @@ import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { emitCrudSideEffects, emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { UserDevice } from '../data/entities'
 import { registerDeviceCommandSchema, type RegisterDeviceCommandInput } from '../data/validators'
@@ -134,7 +135,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
   },
   captureAfter: async (_input, result, ctx) => {
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: result.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: result.id })
     return device ? serializeDevice(device) : null
   },
   buildLog: async ({ result, snapshots }) => {

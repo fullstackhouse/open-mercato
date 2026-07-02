@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { AwilixContainer } from 'awilix'
 import { resolveRequestContext } from '@open-mercato/shared/lib/api/context'
+import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import {
   runCrudMutationGuardAfterSuccess,
@@ -72,11 +73,22 @@ export function notificationCrudErrorResponse(error: unknown): Response | null {
  */
 export async function resolveNotificationContext(req: Request): Promise<NotificationRequestContext> {
   const { ctx } = await resolveRequestContext(req)
+  // Derive the organization the same way every org-scoped write does (see the
+  // `devices` registration route and the Phase 6 push custom-send route): the
+  // selected-org cookie first, then the caller's own org. `resolveRequestContext`
+  // never populates `selectedOrganizationId`, so relying on it alone made every
+  // notification tenant-level (org=null) — which then never matched org-scoped
+  // devices, push channels, or their org-scoped encryption maps.
+  const orgScope = await resolveOrganizationScopeForRequest({
+    container: ctx.container,
+    auth: ctx.auth,
+    request: req,
+  })
   return {
     service: resolveNotificationService(ctx.container),
     scope: {
       tenantId: ctx.auth?.tenantId ?? '',
-      organizationId: ctx.selectedOrganizationId ?? null,
+      organizationId: orgScope?.selectedId ?? ctx.auth?.orgId ?? null,
       userId: ctx.auth?.sub ?? null,
     },
     ctx,
