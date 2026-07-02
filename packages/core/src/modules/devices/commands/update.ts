@@ -26,12 +26,12 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.
     ensureTenantScope(ctx, parsed.tenantId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
+    // No fallback decryption scope: `UserDevice` always carries its own organization_id, which
+    // `decryptEntitiesWithFallbackScope` resolves first — matching the scope-less lookup in execute().
     const device = await findOneWithDecryption(
       em,
       UserDevice,
       { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null },
-      undefined,
-      { tenantId: parsed.tenantId, organizationId: null },
     )
     return device ? { before: serializeDevice(device) } : {}
   },
