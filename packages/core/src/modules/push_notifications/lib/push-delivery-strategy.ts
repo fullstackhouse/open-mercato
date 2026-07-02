@@ -50,12 +50,18 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     //    runs before the per-recipient preference lookup. Channels are indexed by providerKey so each
     //    device can be routed to its matching provider in step 5 (ios→apns, android→fcm, expo→expo).
     const ChannelRef = ctx.resolve('CommunicationChannel') as EntityName<CommunicationChannel>
-    const channels = await em.find(ChannelRef, {
-      tenantId,
-      channelType: PUSH_CHANNEL,
-      isActive: true,
-      deletedAt: null,
-    })
+    const channels = await em.find(
+      ChannelRef,
+      {
+        tenantId,
+        channelType: PUSH_CHANNEL,
+        isActive: true,
+        deletedAt: null,
+      },
+      // Oldest-first so that when a tenant has more than one active channel for the same
+      // provider, the channel picked below is deterministic across requests.
+      { orderBy: { createdAt: 'asc' } },
+    )
     if (channels.length === 0) return
     const channelsByProvider = new Map<string, CommunicationChannel>()
     for (const channel of channels) {
@@ -128,6 +134,18 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
         updated_at: sql`now()`,
       }]
     })
+    // A registered device whose pushProvider has no matching active channel (e.g. an Expo device on
+    // an FCM-only tenant) is correctly skipped above — but it produces no delivery row and would
+    // otherwise be an invisible no-op. Surface a count so a provider-config gap is diagnosable.
+    const skippedNoChannel = devices.length - rows.length
+    if (skippedNoChannel > 0) {
+      console.warn('[push_notifications] Skipped devices with no matching push channel', {
+        tenantId,
+        userId,
+        notificationId: notification.id,
+        skipped: skippedNoChannel,
+      })
+    }
     if (rows.length === 0) return
     const db = em.getKysely<any>()
     const inserted = (await db
