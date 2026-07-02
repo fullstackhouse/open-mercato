@@ -86,13 +86,13 @@ describe('FcmChannelAdapter', () => {
     expect(result.metadata?.unregistered).toBeUndefined()
   })
 
-  it('maps a credentials factory throw (schema-valid but unusable) to invalid_fcm_credentials', async () => {
+  it('preserves the real error message when the messaging factory throws (transient init faults must not masquerade as bad credentials)', async () => {
     setFcmMessagingFactory(() => {
       throw new Error('failed to initialize firebase-admin app')
     })
     const result = await getFcmChannelAdapter().sendMessage(buildInput())
     expect(result.status).toBe('failed')
-    expect(result.error).toBe('invalid_fcm_credentials')
+    expect(result.error).toBe('failed to initialize firebase-admin app')
   })
 
   it('validateCredentials accepts a well-formed service account', async () => {

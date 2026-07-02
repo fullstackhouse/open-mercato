@@ -101,8 +101,9 @@ class FcmChannelAdapter extends BasePushChannelAdapter {
     let messaging: FirebaseMessaging
     try {
       messaging = await resolveMessaging(parseFcmServiceAccount(parsedCredentials.data))
-    } catch {
-      return { externalMessageId: '', status: 'failed', error: 'invalid_fcm_credentials' }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return { externalMessageId: '', status: 'failed', error: message }
     }
 
     try {
