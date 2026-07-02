@@ -3,7 +3,7 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, X } from 'lucide-react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { CrudForm, type CrudField, type CrudFormGroup, type CrudFieldOption, type CrudCustomFieldRenderProps } from '@open-mercato/ui/backend/CrudForm'
+import { CrudForm, type CrudField, type CrudFieldOption, type CrudCustomFieldRenderProps } from '@open-mercato/ui/backend/CrudForm'
 import { apiCall, apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@open-mercato/ui/primitives/select'
@@ -219,10 +219,9 @@ export default function PushCustomSendPage() {
     { id: 'channelId', label: t('push_notifications.send.channelId'), type: 'text', visibleWhen: { field: 'showChannelId', equals: true } },
   ], [t, loadUserOptions])
 
-  const groups = React.useMemo<CrudFormGroup[]>(() => ([
-    { id: 'message', title: t('push_notifications.send.message'), column: 1, fields: ['userId', 'deviceId', 'mode', 'title', 'body', 'data'] },
-    { id: 'options', title: t('push_notifications.send.options'), description: t('push_notifications.send.optionsHint'), column: 1, fields: ['sound', 'badge', 'image', 'priority', 'channelId'] },
-  ]), [t])
+  // NOTE: intentionally a flat field list (no `groups`). CrudForm only applies `visibleWhen` in the
+  // ungrouped render path — grouped fields ignore it — and this form relies on mode/platform-driven
+  // field visibility (silent hides title/body/options; iOS hides channelId).
 
   return (
     <Page>
@@ -232,7 +231,6 @@ export default function PushCustomSendPage() {
           backHref={DELIVERIES_HREF}
           cancelHref={DELIVERIES_HREF}
           fields={fields}
-          groups={groups}
           initialValues={{ userId: '', deviceId: '', mode: 'visible', title: '', body: '', data: [], sound: '', badge: '', image: '', priority: '', channelId: '', showChannelId: true }}
           submitLabel={t('push_notifications.send.submit')}
           onSubmit={async (values) => {
