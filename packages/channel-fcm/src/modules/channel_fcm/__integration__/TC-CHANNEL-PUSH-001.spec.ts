@@ -11,9 +11,9 @@ import { readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixt
  * them through the shared credential-connect flow, so that route is where hub
  * registration is observable: an UNregistered provider returns 404 (`no_adapter`),
  * a registered one runs the adapter's `validateCredentials` and returns 422 on bad
- * credentials (see api/post/channels/connect/credentials/route.ts). Asserting
- * "not 404" therefore proves the adapter is registered and reachable; real send
- * paths are covered network-free by lib/__tests__/adapter.test.ts.
+ * credentials (see api/post/channels/connect/credentials/route.ts). Asserting an
+ * authenticated request gets 422 therefore proves the adapter is registered and
+ * reached; real send paths are covered network-free by lib/__tests__/adapter.test.ts.
  */
 test.describe('TC-CHANNEL-PUSH-001: FCM provider registration', () => {
   test('POST connect/credentials with providerKey=fcm reaches the registered adapter', async ({ request }) => {
@@ -30,7 +30,14 @@ test.describe('TC-CHANNEL-PUSH-001: FCM provider registration', () => {
       },
     )
     expect(response.status(), 'route should not 5xx').toBeLessThan(500)
-    expect(response.status(), 'FCM provider should be registered (never 404 no_adapter)').not.toBe(404)
+    // 422 proves the request authenticated AND reached the registered adapter's
+    // validateCredentials (which rejects the missing serviceAccountJson). A bare
+    // "not 404" would also pass on a 401 auth failure that never hits the adapter,
+    // so the whole spec could go green without exercising registration.
+    expect(
+      response.status(),
+      'authenticated request should reach the registered FCM adapter and be rejected by validateCredentials',
+    ).toBe(422)
   })
 
   test('POST connect/credentials with providerKey=fcm and malformed credentials returns 422', async ({ request }) => {

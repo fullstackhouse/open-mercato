@@ -23,7 +23,7 @@ Firebase Cloud Messaging push provider for the Communications Hub (`communicatio
 Implements the push-adapter contract shared with the `push_stub`, `channel-apns`, and `channel-expo` adapters:
 - reads `metadata.pushToken` + the push envelope from `content.raw` (`@open-mercato/core/.../push-envelope`)
 - capabilities come from the shared `pushChannelCapabilities` baseline
-- a permanently-invalid token returns the **uniform** `device_unregistered` sentinel (`error:'device_unregistered'`, `metadata.unregistered:true`) so the worker soft-deletes the device. FCM codes mapped: `messaging/registration-token-not-registered`, `messaging/invalid-registration-token`, `messaging/invalid-argument`.
+- a permanently-invalid token returns the **uniform** `device_unregistered` sentinel (`error:'device_unregistered'`, `metadata.unregistered:true`) so the worker soft-deletes the device. FCM codes mapped: `messaging/registration-token-not-registered`, `messaging/invalid-registration-token`. `messaging/invalid-argument` is **deliberately excluded** — FCM returns it for any malformed request field (oversized payload, bad data key), so mapping it would let a single payload-shape bug soft-delete every targeted device tenant-wide; it falls through to the generic retryable `failed` path instead.
 - one firebase-admin app is cached per service-account hash (re-init per send is wasteful + errors on duplicate app names).
 
 ## Credentials
