@@ -32,6 +32,11 @@ export interface SendCustomPushArgs {
  * visible push cannot target a silent type). Because the copy is literal free text, it is delivered
  * verbatim (no per-device locale translation). The actual provider send happens in the `send-push`
  * worker; the returned `enqueued` is the number of per-device jobs scheduled.
+ *
+ * Note: delivery here is forced by the direct fan-out itself — this path never consults the
+ * preference service, so the default `admin.custom_message` type's `nonOptOut: true` is not
+ * load-bearing on this route (it matters only if that type is ever routed through the normal
+ * preference-gated `notificationService.create()` strategy).
  */
 export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueued: number }> {
   const {
