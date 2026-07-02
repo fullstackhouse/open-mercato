@@ -149,21 +149,36 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
     .execute()) as Array<{ id: string }>
 
   // Enqueue one send job per inserted row (per-device retry isolation, idempotent on delivery id).
-  // If enqueue fails, mark that row failed instead of leaving it orphaned in `pending` forever
-  // (the worker only ever processes rows it receives a job for).
+  // Enqueue all rows concurrently — the jobs are independent, so there is no reason to serialize the
+  // queue round-trips. If an enqueue fails, mark that row failed instead of leaving it orphaned in
+  // `pending` forever (the worker only ever processes rows it receives a job for). Failed rows are
+  // grouped by reason and marked in one UPDATE per reason to keep DB round-trips minimal.
+  const outcomes = await Promise.allSettled(
+    inserted.map((row) => enqueuePushDelivery({ deliveryId: row.id, tenantId, organizationId })),
+  )
+  const failedIdsByReason = new Map<string, string[]>()
   let enqueued = 0
-  for (const row of inserted) {
-    try {
-      await enqueuePushDelivery({ deliveryId: row.id, tenantId, organizationId })
+  outcomes.forEach((outcome, index) => {
+    if (outcome.status === 'fulfilled') {
       enqueued += 1
-    } catch (error) {
-      const reason = error instanceof Error ? `enqueue_failed: ${error.message}` : 'enqueue_failed'
-      await db
-        .updateTable('push_notification_deliveries')
-        .set({ status: 'failed', last_error: reason, updated_at: sql`now()` })
-        .where('id', '=', row.id)
-        .execute()
+      return
     }
+    const error = outcome.reason
+    const reason = error instanceof Error ? `enqueue_failed: ${error.message}` : 'enqueue_failed'
+    const ids = failedIdsByReason.get(reason) ?? []
+    ids.push(inserted[index].id)
+    failedIdsByReason.set(reason, ids)
+  })
+  if (failedIdsByReason.size > 0) {
+    await Promise.allSettled(
+      Array.from(failedIdsByReason.entries()).map(([reason, ids]) =>
+        db
+          .updateTable('push_notification_deliveries')
+          .set({ status: 'failed', last_error: reason, updated_at: sql`now()` })
+          .where('id', 'in', ids)
+          .execute(),
+      ),
+    )
   }
   return { enqueued }
 }
