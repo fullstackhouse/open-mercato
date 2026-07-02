@@ -85,13 +85,13 @@ types in a `notifications.ts` file. A type carries:
 
 - `titleKey` / `bodyKey` — i18n keys for the text
 - `category` — grouping for UI (e.g. `orders`, `security`)
-- `silent` — if `true`, it's a **background wake-up** (no visible message, no preference check)
-- `nonOptOut` — if `true`, the user **cannot turn it off** (e.g. security alerts)
+- `silent` — if `true`, it's a **background wake-up** (delivery *style* only: no visible message). It still respects the user's preferences — a silent type that must always fire must **also** be `nonOptOut`.
+- `nonOptOut` — if `true`, the user **cannot turn it off** (e.g. security alerts); this is the *only* flag that bypasses the preference gate
 
 ### User preferences (opt-out)
 Users can disable a type per channel (in-app, push, …):
 - `GET /api/notifications/preferences` / `PUT /api/notifications/preferences`
-- `silent` and `nonOptOut` types ignore preferences — they always go through.
+- Only `nonOptOut` types ignore preferences — they always go through. `silent` types **do** respect opt-out (silent controls delivery style, not enforcement), so a silent type that must always fire must also be `nonOptOut`.
 
 ### Creating a notification (this is what triggers a push)
 ```http
@@ -123,7 +123,7 @@ await notificationService.create(input, { tenantId, organizationId })
 You usually **don't call this directly**. When a notification is created, a *delivery strategy*
 runs automatically and:
 
-1. Checks the user's preferences (unless the type is `silent`/`nonOptOut`).
+1. Checks the user's preferences (unless the type is `nonOptOut`; `silent` types are still preference-gated).
 2. Loads the recipient's devices that have a push token.
 3. Writes a `PushNotificationDelivery` row (status `pending`) per device.
 4. Enqueues a background job.
@@ -135,15 +135,22 @@ Observability for admins:
 - Tokens are never shown — only the last 8 characters for debugging.
 
 ### Silent / background push
-For data-only wake-ups (no banner), declare the type with `silent: true` and send via:
+There is **no** dedicated silent-push primitive. A silent push is just a normal notification whose
+**type** is declared `silent: true` — create it through the ordinary `notificationService.create()`
+path and the push delivery strategy sends a data-only, content-available wake-up (no banner):
 ```ts
-const pushService = ctx.resolve('pushNotificationService')
-await pushService.sendSilentPush({
-  resolve: ctx.resolve, tenantId, userId,
-  type: 'system.security.new_login',   // must be registered with silent: true
-  data: { ipAddress: '203.0.113.42' },
-})
+// type declaration (module notifications.ts): { type: 'system.security.new_login', silent: true, nonOptOut: true, ... }
+const notificationService = ctx.resolve('notificationService')
+await notificationService.create({
+  recipientUserId: userId,
+  type: 'system.security.new_login',   // registered with silent: true
+  title: 'New login',                   // required; not shown for a silent push
+  data: { ipAddress: '203.0.113.42' },  // delivered inside the push payload
+}, { tenantId, organizationId })
 ```
+Because silent types respect preferences, mark the type `nonOptOut: true` if it must always fire.
+For an admin one-off *visible* push, use `pushNotificationService.sendCustomPush(...)` (or the
+**Send Push** admin page).
 
 ---
 

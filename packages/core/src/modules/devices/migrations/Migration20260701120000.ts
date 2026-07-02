@@ -1,6 +1,6 @@
 import { Migration } from '@mikro-orm/migrations';
 
-export class Migration20260629120000 extends Migration {
+export class Migration20260701120000 extends Migration {
 
   override async up(): Promise<void> {
     this.addSql(`alter table "user_devices" add column "locale" text null;`);

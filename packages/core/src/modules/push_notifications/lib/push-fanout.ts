@@ -109,14 +109,24 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
   // locale, an unsupported one, or already speaks the default) reuses the copy already resolved
   // upstream — no dictionary load. Other locales translate via the shared notification-copy helper
   // (dictionaries are memoized by loadDictionary). Silent pushes carry no copy and skip this.
-  async function resolveLocalizedPayload(deviceLocale?: string | null): Promise<PushFanoutPayload> {
-    if (!copy) return payload
+  // Memoized by resolved locale so a user with many same-locale devices derives copy once
+  // (O(distinct locales) instead of O(devices)).
+  const localizedByLocale = new Map<string, Promise<PushFanoutPayload>>()
+  function resolveLocalizedPayload(deviceLocale?: string | null): Promise<PushFanoutPayload> {
+    if (!copy) return Promise.resolve(payload)
     const locale = resolveSupportedLocale(deviceLocale) ?? defaultLocale
-    if (locale === defaultLocale) {
-      return { ...payload, title: copy.title, body: copy.body ?? null }
+    let cached = localizedByLocale.get(locale)
+    if (!cached) {
+      cached = (async () => {
+        if (locale === defaultLocale) {
+          return { ...payload, title: copy.title, body: copy.body ?? null }
+        }
+        const { title, body } = await resolveNotificationCopy(copy, locale)
+        return { ...payload, title, body }
+      })()
+      localizedByLocale.set(locale, cached)
     }
-    const { title, body } = await resolveNotificationCopy(copy, locale)
-    return { ...payload, title, body }
+    return cached
   }
 
   // Insert one pending delivery row per device, routing each device to the push channel whose
