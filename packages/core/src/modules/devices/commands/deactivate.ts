@@ -27,12 +27,12 @@ const deactivateDeviceCommand: CommandHandler<DeactivateDeviceCommandInput, { id
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.
     ensureTenantScope(ctx, parsed.tenantId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
+    // No fallback decryption scope: `UserDevice` always carries its own organization_id, which
+    // `decryptEntitiesWithFallbackScope` resolves first — matching loadExistingDevice in shared.ts.
     const device = await findOneWithDecryption(
       em,
       UserDevice,
       { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null },
-      undefined,
-      { tenantId: parsed.tenantId, organizationId: null },
     )
     return device ? { before: serializeDevice(device) } : {}
   },

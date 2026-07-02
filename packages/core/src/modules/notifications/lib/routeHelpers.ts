@@ -85,6 +85,11 @@ export async function resolveNotificationContext(req: Request): Promise<Notifica
     service: resolveNotificationService(ctx.container),
     scope: {
       tenantId: ctx.auth?.tenantId ?? '',
+      // This is the *creator's* org, and the push strategy later scopes the recipient's device
+      // lookup to it. Same-org and self-notify (the common paths) match; a cross-org notify — an
+      // admin in org A notifying a user whose devices live in org B — won't match the recipient's
+      // devices, so push is silently dropped for that case. In-app delivery is unaffected. If
+      // cross-org push is ever required, scope device lookup by the recipient's org instead.
       organizationId: orgScope?.selectedId ?? ctx.auth?.orgId ?? null,
       userId: ctx.auth?.sub ?? null,
     },
