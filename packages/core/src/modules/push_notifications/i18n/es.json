@@ -40,8 +40,8 @@
   "push_notifications.send.submit": "Enviar push",
   "push_notifications.send.success": "Push en cola para envío",
   "push_notifications.send.title": "Título",
-  "push_notifications.send.userId": "ID del usuario destinatario",
-  "push_notifications.send.userIdHint": "El usuario cuyos dispositivos reciben este push.",
+  "push_notifications.send.userId": "Destinatario",
+  "push_notifications.send.userIdHint": "Busca por nombre o correo — sus dispositivos reciben este push.",
   "push_notifications.types.admin_custom_message.body": "Tienes un mensaje nuevo.",
   "push_notifications.types.admin_custom_message.label": "Mensaje de administrador",
   "push_notifications.types.admin_custom_message.title": "Mensaje de administrador"
