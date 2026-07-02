@@ -87,6 +87,7 @@ export async function POST(req: Request) {
       tenantId: auth.tenantId,
       userId: body.recipientUserId,
       organizationId,
+      deviceId: body.deviceId,
       title: body.title,
       body: body.body ?? null,
       data: body.data,

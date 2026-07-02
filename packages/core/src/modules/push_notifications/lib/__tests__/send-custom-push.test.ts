@@ -41,6 +41,12 @@ describe('sendCustomPush', () => {
     expect(fanOutMock).not.toHaveBeenCalled()
   })
 
+  it('forwards deviceId to the fan-out as userDeviceId (single-device target)', async () => {
+    getTypeMock.mockReturnValue({ type: ADMIN_CUSTOM_MESSAGE_TYPE, silent: false } as never)
+    await sendCustomPush({ resolve, tenantId: TENANT, userId: 'u-1', title: 'Hi', deviceId: 'dev-9' })
+    expect(fanOutMock.mock.calls[0][0].userDeviceId).toBe('dev-9')
+  })
+
   it('fans out a silent, data-only payload under the silent type when silent is requested', async () => {
     getTypeMock.mockReturnValue({ type: ADMIN_CUSTOM_SILENT_TYPE, silent: true } as never)
     const result = await sendCustomPush({
