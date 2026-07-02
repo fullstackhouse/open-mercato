@@ -9,6 +9,13 @@ import type { NotificationTypeDefinition } from '@open-mercato/shared/modules/no
  */
 export const ADMIN_CUSTOM_MESSAGE_TYPE = 'admin.custom_message'
 
+/**
+ * Silent counterpart of {@link ADMIN_CUSTOM_MESSAGE_TYPE}: the type an admin "silent" one-off push is
+ * labelled with (see `lib/send-custom-push.ts`). Same hidden / non-opt-out semantics, but `silent`
+ * so the delivery is a data-only content-available wake-up rather than a visible banner.
+ */
+export const ADMIN_CUSTOM_SILENT_TYPE = 'admin.custom_silent'
+
 export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: ADMIN_CUSTOM_MESSAGE_TYPE,
@@ -22,6 +29,20 @@ export const notificationTypes: NotificationTypeDefinition[] = [
     category: 'system',
     nonOptOut: true,
     silent: false,
+    hiddenFromSettings: true,
+  },
+  {
+    type: ADMIN_CUSTOM_SILENT_TYPE,
+    module: 'push_notifications',
+    titleKey: 'push_notifications.types.admin_custom_silent.title',
+    bodyKey: 'push_notifications.types.admin_custom_silent.body',
+    labelKey: 'push_notifications.types.admin_custom_silent.label',
+    icon: 'megaphone',
+    severity: 'info',
+    actions: [],
+    category: 'system',
+    nonOptOut: true,
+    silent: true,
     hiddenFromSettings: true,
   },
 ]

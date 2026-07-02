@@ -9,8 +9,14 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 
 type FormValues = {
   userId: string
+  mode: string
   title: string
   body: string
+  sound: string
+  badge: number | string
+  image: string
+  priority: string
+  channelId: string
 }
 
 const DELIVERIES_HREF = '/backend/push_notifications'
@@ -48,12 +54,38 @@ export default function PushCustomSendPage() {
 
   const fields = React.useMemo<CrudField[]>(() => [
     { id: 'userId', label: t('push_notifications.send.userId'), type: 'combobox', required: true, description: t('push_notifications.send.userIdHint'), loadOptions: loadUserOptions },
+    {
+      id: 'mode',
+      label: t('push_notifications.send.mode'),
+      type: 'select',
+      required: true,
+      description: t('push_notifications.send.modeHint'),
+      options: [
+        { value: 'visible', label: t('push_notifications.send.modeVisible') },
+        { value: 'silent', label: t('push_notifications.send.modeSilent') },
+      ],
+    },
     { id: 'title', label: t('push_notifications.send.title'), type: 'text', required: true },
     { id: 'body', label: t('push_notifications.send.body'), type: 'textarea' },
+    { id: 'sound', label: t('push_notifications.send.sound'), type: 'text' },
+    { id: 'badge', label: t('push_notifications.send.badge'), type: 'number' },
+    { id: 'image', label: t('push_notifications.send.image'), type: 'text' },
+    {
+      id: 'priority',
+      label: t('push_notifications.send.priority'),
+      type: 'select',
+      options: [
+        { value: '', label: t('push_notifications.send.priorityDefault') },
+        { value: 'high', label: t('push_notifications.send.priorityHigh') },
+        { value: 'normal', label: t('push_notifications.send.priorityNormal') },
+      ],
+    },
+    { id: 'channelId', label: t('push_notifications.send.channelId'), type: 'text' },
   ], [t, loadUserOptions])
 
   const groups = React.useMemo<CrudFormGroup[]>(() => ([
-    { id: 'message', title: t('push_notifications.send.message'), column: 1, fields: ['userId', 'title', 'body'] },
+    { id: 'message', title: t('push_notifications.send.message'), column: 1, fields: ['userId', 'mode', 'title', 'body'] },
+    { id: 'options', title: t('push_notifications.send.options'), description: t('push_notifications.send.optionsHint'), column: 1, fields: ['sound', 'badge', 'image', 'priority', 'channelId'] },
   ]), [t])
 
   return (
@@ -65,17 +97,27 @@ export default function PushCustomSendPage() {
           cancelHref={DELIVERIES_HREF}
           fields={fields}
           groups={groups}
-          initialValues={{ userId: '', title: '', body: '' }}
+          initialValues={{ userId: '', mode: 'visible', title: '', body: '', sound: '', badge: '', image: '', priority: '', channelId: '' }}
           submitLabel={t('push_notifications.send.submit')}
           onSubmit={async (values) => {
-            const body = values.body.trim()
+            const body = (values.body ?? '').trim()
+            const pushOptions: Record<string, unknown> = {}
+            if (typeof values.sound === 'string' && values.sound.trim()) pushOptions.sound = values.sound.trim()
+            const badgeNum = typeof values.badge === 'number' ? values.badge : Number.parseInt(String(values.badge ?? ''), 10)
+            if (Number.isFinite(badgeNum) && badgeNum >= 0) pushOptions.badge = badgeNum
+            if (typeof values.image === 'string' && values.image.trim()) pushOptions.image = values.image.trim()
+            if (values.priority === 'high' || values.priority === 'normal') pushOptions.priority = values.priority
+            if (typeof values.channelId === 'string' && values.channelId.trim()) pushOptions.channelId = values.channelId.trim()
+            const hasOptions = Object.keys(pushOptions).length > 0
             await apiCallOrThrow('/api/push_notifications/custom-send', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                recipientUserId: values.userId.trim(),
-                title: values.title.trim(),
+                recipientUserId: (values.userId ?? '').trim(),
+                title: (values.title ?? '').trim(),
                 body: body.length > 0 ? body : undefined,
+                silent: values.mode === 'silent',
+                pushOptions: hasOptions ? pushOptions : undefined,
               }),
             })
             flash(t('push_notifications.send.success'), 'success')

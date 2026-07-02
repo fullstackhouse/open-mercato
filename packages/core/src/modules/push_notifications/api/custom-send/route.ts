@@ -91,6 +91,7 @@ export async function POST(req: Request) {
       body: body.body ?? null,
       data: body.data,
       pushOptions: body.pushOptions,
+      silent: body.silent ?? false,
     })
 
     for (const callback of guardResult.afterSuccessCallbacks) {

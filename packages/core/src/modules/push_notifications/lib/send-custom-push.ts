@@ -1,7 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
-import { ADMIN_CUSTOM_MESSAGE_TYPE } from '../notifications'
+import { ADMIN_CUSTOM_MESSAGE_TYPE, ADMIN_CUSTOM_SILENT_TYPE } from '../notifications'
 import { fanOutPushDeliveries } from './push-fanout'
 
 type Resolve = <T = unknown>(name: string) => T
@@ -20,23 +20,33 @@ export interface SendCustomPushArgs {
   data?: Record<string, string>
   /** Optional per-provider push customization (sound, badge, priority, …). */
   pushOptions?: PushOptions
-  /** Registered, non-silent notification type. Defaults to the admin custom-message type. */
+  /**
+   * When true, deliver as a **silent** data-only content-available wake-up (no visible banner)
+   * instead of a visible alert. Defaults to false (visible).
+   */
+  silent?: boolean
+  /**
+   * Registered notification type to label the delivery with. Defaults to the admin custom-message
+   * type (visible) or the admin custom-silent type when `silent` is set. Its `silent` flag MUST
+   * match the requested mode.
+   */
   type?: string
 }
 
 /**
- * Deliver an admin-composed, one-off **visible** push to all of a user's push-capable devices.
+ * Deliver an admin-composed, one-off push to all of a user's push-capable devices — **visible**
+ * (literal title/body banner) or **silent** (`silent: true` — a data-only content-available wake-up
+ * with no banner).
  *
- * A direct fan-out (no in-app `Notification` row, no email, no per-channel preference check) carrying
- * a visible payload with a literal title/body. The `type` MUST be registered and **not** silent (a
- * visible push cannot target a silent type). Because the copy is literal free text, it is delivered
- * verbatim (no per-device locale translation). The actual provider send happens in the `send-push`
- * worker; the returned `enqueued` is the number of per-device jobs scheduled.
+ * A direct fan-out (no in-app `Notification` row, no email, no per-channel preference check). The
+ * `type` MUST be registered and its `silent` flag MUST match the requested mode. Because the copy is
+ * literal free text, it is delivered verbatim (no per-device locale translation). The actual provider
+ * send happens in the `send-push` worker; the returned `enqueued` is the number of per-device jobs.
  *
  * Note: delivery here is forced by the direct fan-out itself — this path never consults the
- * preference service, so the default `admin.custom_message` type's `nonOptOut: true` is not
- * load-bearing on this route (it matters only if that type is ever routed through the normal
- * preference-gated `notificationService.create()` strategy).
+ * preference service, so the type's `nonOptOut: true` is not load-bearing on this route (it matters
+ * only if that type is ever routed through the normal preference-gated `notificationService.create()`
+ * strategy).
  */
 export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueued: number }> {
   const {
@@ -48,15 +58,16 @@ export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueu
     body = null,
     data,
     pushOptions,
-    type = ADMIN_CUSTOM_MESSAGE_TYPE,
+    silent = false,
+    type = silent ? ADMIN_CUSTOM_SILENT_TYPE : ADMIN_CUSTOM_MESSAGE_TYPE,
   } = args
 
   const definition = getNotificationType(type)
   if (!definition) {
     throw new Error(`[internal] sendCustomPush: notification type "${type}" is not registered`)
   }
-  if (definition.silent === true) {
-    throw new Error(`[internal] sendCustomPush: notification type "${type}" is declared silent`)
+  if ((definition.silent === true) !== silent) {
+    throw new Error(`[internal] sendCustomPush: type "${type}" silent=${definition.silent === true} does not match requested silent=${silent}`)
   }
 
   const em = resolve('em') as EntityManager
@@ -73,7 +84,7 @@ export async function sendCustomPush(args: SendCustomPushArgs): Promise<{ enqueu
       body,
       data: { ...(data ?? {}), type },
       options: pushOptions,
-      silent: false,
+      silent,
     },
   })
 }
