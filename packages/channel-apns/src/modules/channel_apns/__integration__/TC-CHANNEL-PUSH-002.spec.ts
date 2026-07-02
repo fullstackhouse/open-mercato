@@ -30,7 +30,11 @@ test.describe('TC-CHANNEL-PUSH-002: APNs provider registration', () => {
       },
     )
     expect(response.status(), 'route should not 5xx').toBeLessThan(500)
-    expect(response.status(), 'APNs provider should be registered (never 404 no_adapter)').not.toBe(404)
+    // A registered adapter runs validateCredentials on the empty payload and returns 422.
+    // Asserting 422 (not merely "not 404") proves the request authenticated AND reached
+    // the adapter — a 401 auth misconfig would otherwise let the spec pass vacuously.
+    expect(response.status(), 'authenticated request should not 401').not.toBe(401)
+    expect(response.status(), 'registered adapter should reject empty credentials with 422').toBe(422)
   })
 
   test('POST connect/credentials with providerKey=apns and malformed credentials returns 422', async ({ request }) => {
@@ -45,10 +49,11 @@ test.describe('TC-CHANNEL-PUSH-002: APNs provider registration', () => {
       },
     )
     expect(response.status()).toBeLessThan(500)
-    expect([401, 400, 422]).toContain(response.status())
-    if (response.status() === 422) {
-      const body = await readJsonSafe<{ error?: string; fieldErrors?: Record<string, string> }>(response)
-      expect(body?.fieldErrors ?? body?.error).toBeTruthy()
-    }
+    // Require the happy path: authenticated (not 401) and rejected by validateCredentials
+    // with 422, so an auth misconfig can't turn this into a false green.
+    expect(response.status(), 'authenticated request should not 401').not.toBe(401)
+    expect(response.status(), 'malformed credentials should be rejected with 422').toBe(422)
+    const body = await readJsonSafe<{ error?: string; fieldErrors?: Record<string, string> }>(response)
+    expect(body?.fieldErrors ?? body?.error).toBeTruthy()
   })
 })
