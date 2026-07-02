@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { EntityName } from '@mikro-orm/core'
 import { sql } from 'kysely'
+import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { NotificationDeliveryStrategy } from '@open-mercato/core/modules/notifications/lib/deliveryStrategies'
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
@@ -44,18 +45,28 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
 
     const em = ctx.resolve('em') as EntityManager
 
-    // 2. Require an active push CommunicationChannel for the tenant (push not configured ⇒ skip).
+    // 2. Require at least one active push CommunicationChannel for the tenant (push not configured ⇒ skip).
     //    This is the cheapest, most selective short-circuit (most tenants have no push channel), so it
-    //    runs before the per-recipient preference lookup. Phase 3 uses the first active push channel;
-    //    per-platform provider routing (apns vs fcm) is refined when the real adapters land in Phase 4.
+    //    runs before the per-recipient preference lookup. Channels are indexed by providerKey so each
+    //    device can be routed to its matching provider in step 5 (ios→apns, android→fcm, expo→expo).
     const ChannelRef = ctx.resolve('CommunicationChannel') as EntityName<CommunicationChannel>
-    const channel = await em.findOne(ChannelRef, {
-      tenantId,
-      channelType: PUSH_CHANNEL,
-      isActive: true,
-      deletedAt: null,
-    })
-    if (!channel) return
+    const channels = await em.find(
+      ChannelRef,
+      {
+        tenantId,
+        channelType: PUSH_CHANNEL,
+        isActive: true,
+        deletedAt: null,
+      },
+      // Oldest-first so that when a tenant has more than one active channel for the same
+      // provider, the channel picked below is deterministic across requests.
+      { orderBy: { createdAt: 'asc' } },
+    )
+    if (channels.length === 0) return
+    const channelsByProvider = new Map<string, CommunicationChannel>()
+    for (const channel of channels) {
+      if (!channelsByProvider.has(channel.providerKey)) channelsByProvider.set(channel.providerKey, channel)
+    }
 
     // 3. Respect the recipient's per-channel preference (default-on when unset).
     const preferences = resolveNotificationPreferenceService({ resolve: ctx.resolve })
@@ -67,14 +78,22 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     //    user registered under a different org — device identity is per (tenant, org, user, device)
     //    (see devices module), so this matches standard devices org scoping. A tenant-level
     //    (null-org) notification targets the user's tenant-level (null-org) devices.
+    //    `push_token` is encrypted at rest; decrypt on read (no-op when encryption is disabled) so
+    //    the per-row token snapshot below is taken from the plaintext value.
     const DeviceRef = ctx.resolve('UserDevice') as EntityName<UserDevice>
-    const devices = await em.find(DeviceRef, {
-      tenantId,
-      organizationId,
-      userId,
-      deletedAt: null,
-      pushToken: { $ne: null },
-    })
+    const devices = await findWithDecryption(
+      em,
+      DeviceRef,
+      {
+        tenantId,
+        organizationId,
+        userId,
+        deletedAt: null,
+        pushToken: { $ne: null },
+      },
+      undefined,
+      { tenantId, organizationId },
+    )
     if (devices.length === 0) return
 
     const data: Record<string, string> = {
@@ -85,28 +104,50 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
 
     const payload = { title: ctx.title, body: ctx.body, data }
 
-    // 5. Insert one pending delivery row per device (snapshotting provider + truncated token) via
-    //    INSERT ... ON CONFLICT DO NOTHING on the (notification_id, user_device_id) partial unique
-    //    index. This strategy runs inside the at-least-once persistent `notifications:deliver`
-    //    subscriber, so a redelivered event re-runs it — the conflict clause makes the re-fan-out a
-    //    no-op instead of inserting a duplicate set of rows (and duplicate pushes). Only the rows
-    //    actually inserted are returned, so exactly those are enqueued.
+    // 5. Insert one pending delivery row per device, routing each device to the push channel whose
+    //    providerKey matches the device's pushProvider (ios→apns, android→fcm, expo→expo). Devices
+    //    with no provider, or no matching configured channel, are skipped — so the row set can be
+    //    empty even when the user has devices. Insert via INSERT ... ON CONFLICT DO NOTHING on the
+    //    (notification_id, user_device_id) partial unique index: this strategy runs inside the
+    //    at-least-once persistent `notifications:deliver` subscriber, so a redelivered event re-runs
+    //    it — the conflict clause makes the re-fan-out a no-op instead of inserting a duplicate set of
+    //    rows (and duplicate pushes). Only the rows actually inserted are returned, so exactly those
+    //    are enqueued.
+    const rows = devices.flatMap((device) => {
+      const providerKey = device.pushProvider
+      if (!providerKey) return []
+      const channel = channelsByProvider.get(providerKey)
+      if (!channel) return []
+      return [{
+        tenant_id: tenantId,
+        organization_id: organizationId,
+        notification_id: notification.id,
+        notification_type_id: notification.type,
+        user_device_id: device.id,
+        user_id: userId,
+        provider: channel.providerKey,
+        token_snapshot: tokenSnapshot(device.pushToken as string),
+        status: 'pending',
+        attempts: 0,
+        payload: sql`${JSON.stringify(payload)}::jsonb`,
+        created_at: sql`now()`,
+        updated_at: sql`now()`,
+      }]
+    })
+    // A registered device whose pushProvider has no matching active channel (e.g. an Expo device on
+    // an FCM-only tenant) is correctly skipped above — but it produces no delivery row and would
+    // otherwise be an invisible no-op. Surface a count so a provider-config gap is diagnosable.
+    const skippedNoChannel = devices.length - rows.length
+    if (skippedNoChannel > 0) {
+      console.warn('[push_notifications] Skipped devices with no matching push channel', {
+        tenantId,
+        userId,
+        notificationId: notification.id,
+        skipped: skippedNoChannel,
+      })
+    }
+    if (rows.length === 0) return
     const db = em.getKysely<any>()
-    const rows = devices.map((device) => ({
-      tenant_id: tenantId,
-      organization_id: organizationId,
-      notification_id: notification.id,
-      notification_type_id: notification.type,
-      user_device_id: device.id,
-      user_id: userId,
-      provider: channel.providerKey,
-      token_snapshot: tokenSnapshot(device.pushToken as string),
-      status: 'pending',
-      attempts: 0,
-      payload: sql`${JSON.stringify(payload)}::jsonb`,
-      created_at: sql`now()`,
-      updated_at: sql`now()`,
-    }))
     const inserted = (await db
       .insertInto('push_notification_deliveries')
       .values(rows)

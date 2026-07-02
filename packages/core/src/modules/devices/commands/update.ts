@@ -5,6 +5,7 @@ import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { emitCrudSideEffects, emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { assertFound } from '@open-mercato/shared/lib/crud/errors'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { UserDevice } from '../data/entities'
 import { updateDeviceCommandSchema, type UpdateDeviceCommandInput } from '../data/validators'
@@ -25,14 +26,20 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.
     ensureTenantScope(ctx, parsed.tenantId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null })
+    // No fallback decryption scope: `UserDevice` always carries its own organization_id, which
+    // `decryptEntitiesWithFallbackScope` resolves first — matching the scope-less lookup in execute().
+    const device = await findOneWithDecryption(
+      em,
+      UserDevice,
+      { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null },
+    )
     return device ? { before: serializeDevice(device) } : {}
   },
   async execute(rawInput, ctx) {
     const parsed = updateDeviceCommandSchema.parse(rawInput)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const device = assertFound(
-      await em.findOne(UserDevice, { id: parsed.id, deletedAt: null }),
+      await findOneWithDecryption(em, UserDevice, { id: parsed.id, deletedAt: null }),
       'Device not found',
     )
     ensureTenantScope(ctx, device.tenantId)
@@ -84,7 +91,7 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
   },
   captureAfter: async (_input, result, ctx) => {
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: result.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: result.id })
     return device ? serializeDevice(device) : null
   },
   buildLog: async ({ snapshots }) => {

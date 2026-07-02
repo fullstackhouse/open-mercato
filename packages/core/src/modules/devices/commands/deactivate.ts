@@ -5,6 +5,7 @@ import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { emitCrudSideEffects, emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { assertFound } from '@open-mercato/shared/lib/crud/errors'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { UserDevice } from '../data/entities'
 import { deactivateDeviceCommandSchema, type DeactivateDeviceCommandInput } from '../data/validators'
@@ -26,7 +27,13 @@ const deactivateDeviceCommand: CommandHandler<DeactivateDeviceCommandInput, { id
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.
     ensureTenantScope(ctx, parsed.tenantId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null })
+    // No fallback decryption scope: `UserDevice` always carries its own organization_id, which
+    // `decryptEntitiesWithFallbackScope` resolves first — matching loadExistingDevice in shared.ts.
+    const device = await findOneWithDecryption(
+      em,
+      UserDevice,
+      { id: parsed.id, tenantId: parsed.tenantId, deletedAt: null },
+    )
     return device ? { before: serializeDevice(device) } : {}
   },
   async execute(rawInput, ctx) {
