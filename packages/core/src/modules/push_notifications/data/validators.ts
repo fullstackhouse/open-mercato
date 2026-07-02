@@ -16,6 +16,8 @@ export const customSendSchema = z
     body: z.string().trim().max(2000).nullish(),
     data: z.record(z.string(), z.string()).optional(),
     pushOptions: pushOptionsSchema.optional(),
+    // When true, deliver a silent data-only wake-up instead of a visible banner.
+    silent: z.boolean().optional(),
   })
   .strict()
 export type CustomSendInput = z.infer<typeof customSendSchema>

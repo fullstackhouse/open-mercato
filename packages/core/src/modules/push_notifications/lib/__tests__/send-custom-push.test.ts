@@ -1,7 +1,7 @@
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { fanOutPushDeliveries } from '../push-fanout'
 import { sendCustomPush } from '../send-custom-push'
-import { ADMIN_CUSTOM_MESSAGE_TYPE } from '../../notifications'
+import { ADMIN_CUSTOM_MESSAGE_TYPE, ADMIN_CUSTOM_SILENT_TYPE } from '../../notifications'
 
 jest.mock('@open-mercato/core/modules/notifications/lib/notification-type-registry', () => ({
   getNotificationType: jest.fn(),
@@ -32,12 +32,30 @@ describe('sendCustomPush', () => {
     expect(fanOutMock).not.toHaveBeenCalled()
   })
 
-  it('throws when the type is declared silent (a visible push must not target a silent type)', async () => {
+  it('throws when the type silent flag does not match the requested mode', async () => {
+    // A visible send (silent defaults false) must not target a silent-declared type.
     getTypeMock.mockReturnValue({ type: ADMIN_CUSTOM_MESSAGE_TYPE, silent: true } as never)
     await expect(
       sendCustomPush({ resolve, tenantId: TENANT, userId: 'u-1', title: 'Hi' }),
-    ).rejects.toThrow(/is declared silent/)
+    ).rejects.toThrow(/does not match requested silent/)
     expect(fanOutMock).not.toHaveBeenCalled()
+  })
+
+  it('fans out a silent, data-only payload under the silent type when silent is requested', async () => {
+    getTypeMock.mockReturnValue({ type: ADMIN_CUSTOM_SILENT_TYPE, silent: true } as never)
+    const result = await sendCustomPush({
+      resolve,
+      tenantId: TENANT,
+      userId: 'u-1',
+      title: 'wake',
+      silent: true,
+      data: { k: 'v' },
+    })
+    expect(result).toEqual({ enqueued: 2 })
+    const args = fanOutMock.mock.calls[0][0]
+    expect(args.notificationTypeId).toBe(ADMIN_CUSTOM_SILENT_TYPE)
+    expect(args.payload.silent).toBe(true)
+    expect(args.payload.data).toEqual({ k: 'v', type: ADMIN_CUSTOM_SILENT_TYPE })
   })
 
   it('fans out a visible payload with literal title/body, no notification id, and the type folded into data', async () => {
