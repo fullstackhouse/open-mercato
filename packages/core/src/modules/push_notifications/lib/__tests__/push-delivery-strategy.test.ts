@@ -236,7 +236,25 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(captured.updates).toHaveLength(1)
     expect(captured.updates[0].set).toMatchObject({ status: 'failed' })
     expect(String((captured.updates[0].set as Record<string, unknown>).last_error)).toContain('enqueue_failed')
-    expect(captured.updates[0].where).toEqual(['id', '=', 'del-1'])
+    // Failed enqueues are batched into one UPDATE per reason via `where id in (...)`.
+    expect(captured.updates[0].where).toEqual(['id', 'in', ['del-1']])
+  })
+
+  it('batches multiple same-reason enqueue failures into a single UPDATE', async () => {
+    enqueueMock.mockRejectedValue(new Error('queue down'))
+    const { ctx, captured } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [
+        { id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' },
+        { id: 'dev-2', pushToken: 'token-bbbbbbbb', pushProvider: 'fcm' },
+      ],
+      insertResult: [{ id: 'del-1' }, { id: 'del-2' }],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // Both rows share the same failure reason ⇒ one UPDATE targeting both ids.
+    expect(captured.updates).toHaveLength(1)
+    expect(captured.updates[0].set).toMatchObject({ status: 'failed' })
+    expect(captured.updates[0].where).toEqual(['id', 'in', ['del-1', 'del-2']])
   })
 
   it('routes each device to the push channel matching its provider', async () => {
