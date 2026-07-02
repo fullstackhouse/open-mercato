@@ -78,7 +78,8 @@ export function readPushEnvelope(content: MessageContent | undefined): PushEnvel
   }
 }
 
-/** The push body text after applying a `pushOptions.body` override, if present. */
+/** The push body text after applying a non-empty `pushOptions.body` override, if present. */
 export function resolvePushBody(envelope: PushEnvelope): string {
-  return typeof envelope.options.body === 'string' ? envelope.options.body : envelope.body
+  const override = envelope.options.body
+  return typeof override === 'string' && override.length > 0 ? override : envelope.body
 }

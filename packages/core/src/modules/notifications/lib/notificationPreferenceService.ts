@@ -64,8 +64,11 @@ export function createNotificationPreferenceService(
 
     async setPreferences(scope, items) {
       // nonOptOut types ignore stored preferences at delivery time; refuse to persist an opt-out
-      // row for them so the stored state can never contradict enforcement.
-      const writable = items.filter((item) => getNotificationType(item.typeId)?.nonOptOut !== true)
+      // row for them so the stored state can never contradict enforcement. An `enabled: true` write
+      // matches the forced-on state and is allowed through (a preferences UI can still confirm it).
+      const writable = items.filter(
+        (item) => item.enabled === true || getNotificationType(item.typeId)?.nonOptOut !== true,
+      )
       if (writable.length === 0) return 0
       const em = rootEm.fork()
       const existing = await em.find(NotificationPreference, {

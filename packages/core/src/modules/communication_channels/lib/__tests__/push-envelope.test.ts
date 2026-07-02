@@ -78,4 +78,8 @@ describe('resolvePushBody', () => {
   it('prefers options.body when provided', () => {
     expect(resolvePushBody(readPushEnvelope({ raw: { body: 'Body text', options: { body: 'override' } } }))).toBe('override')
   })
+
+  it('ignores an empty-string override and keeps the envelope body', () => {
+    expect(resolvePushBody(readPushEnvelope({ raw: { body: 'Body text', options: { body: '' } } }))).toBe('Body text')
+  })
 })
