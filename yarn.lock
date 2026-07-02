@@ -7616,6 +7616,7 @@ __metadata:
     "@open-mercato/ai-assistant": "workspace:*"
     "@open-mercato/cache": "workspace:*"
     "@open-mercato/channel-apns": "workspace:*"
+    "@open-mercato/channel-expo": "workspace:*"
     "@open-mercato/channel-fcm": "workspace:*"
     "@open-mercato/channel-gmail": "workspace:*"
     "@open-mercato/channel-imap": "workspace:*"
@@ -7722,6 +7723,24 @@ __metadata:
     "@parse/node-apn": "npm:^6.0.1"
     "@types/jest": "npm:^30.0.0"
     esbuild: "npm:^0.28.1"
+    glob: "npm:^13.0.6"
+    jest: "npm:^30.4.2"
+    ts-jest: "npm:^29.4.11"
+  peerDependencies:
+    "@mikro-orm/postgresql": ^7.0.14
+    "@open-mercato/shared": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
+"@open-mercato/channel-expo@workspace:*, @open-mercato/channel-expo@workspace:packages/channel-expo":
+  version: 0.0.0-use.local
+  resolution: "@open-mercato/channel-expo@workspace:packages/channel-expo"
+  dependencies:
+    "@open-mercato/core": "workspace:*"
+    "@open-mercato/shared": "workspace:*"
+    "@types/jest": "npm:^30.0.0"
+    esbuild: "npm:^0.28.1"
+    expo-server-sdk: "npm:^3.15.0"
     glob: "npm:^13.0.6"
     jest: "npm:^30.4.2"
     ts-jest: "npm:^29.4.11"
@@ -18124,6 +18143,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-server-sdk@npm:^3.15.0":
+  version: 3.15.0
+  resolution: "expo-server-sdk@npm:3.15.0"
+  dependencies:
+    node-fetch: "npm:^2.6.0"
+    promise-limit: "npm:^2.7.0"
+    promise-retry: "npm:^2.0.1"
+  checksum: 10/b2a5ff26647220eda19a5a6ad7d6973dcd91d6307ed9ccd44c90e8f7328db564f292f6d0fa6338d13d961180858a4669a4b79c26fee2841d0b3b1b0a54f534b5
+  languageName: node
+  linkType: hard
+
 "exponential-backoff@npm:^3.1.1":
   version: 3.1.3
   resolution: "exponential-backoff@npm:3.1.3"
@@ -24409,7 +24439,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"node-fetch@npm:^2.6.9, node-fetch@npm:^2.7.0":
+"node-fetch@npm:^2.6.0, node-fetch@npm:^2.6.9, node-fetch@npm:^2.7.0":
   version: 2.7.0
   resolution: "node-fetch@npm:2.7.0"
   dependencies:
@@ -26777,6 +26807,13 @@ __metadata:
   version: 0.11.10
   resolution: "process@npm:0.11.10"
   checksum: 10/dbaa7e8d1d5cf375c36963ff43116772a989ef2bb47c9bdee20f38fd8fc061119cf38140631cf90c781aca4d3f0f0d2c834711952b728953f04fd7d238f59f5b
+  languageName: node
+  linkType: hard
+
+"promise-limit@npm:^2.7.0":
+  version: 2.7.0
+  resolution: "promise-limit@npm:2.7.0"
+  checksum: 10/9756d35a7042fa8495c456925f92dea0262e8ec2321b38e631aeef3afb5c024a9aa83f4458798ac1e763a9885c684149684172dd866e4dbbc0fef5cc79e0a84b
   languageName: node
   linkType: hard
 

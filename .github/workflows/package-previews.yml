@@ -97,6 +97,7 @@ jobs:
           './packages/channel-gmail'
           './packages/channel-imap'
           './packages/channel-apns'
+          './packages/channel-expo'
           './packages/channel-fcm'
           './packages/checkout'
           './packages/cli'
