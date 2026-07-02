@@ -52,6 +52,19 @@ describe('notificationPreferenceService.setPreferences', () => {
     expect(fork.create).not.toHaveBeenCalled()
   })
 
+  it('allows an enabled: true row for a nonOptOut type (matches the forced-on state)', async () => {
+    getTypeMock.mockImplementation((type) =>
+      type === 'auth.account.locked' ? ({ type, nonOptOut: true } as never) : undefined,
+    )
+    const { em, fork } = makeEm()
+    const service = createNotificationPreferenceService({ em } as never)
+    await service.setPreferences(scope, [{ typeId: 'auth.account.locked', channel: 'push', enabled: true }])
+    expect(fork.create).toHaveBeenCalledTimes(1)
+    const created = fork.create.mock.calls[0][1] as Record<string, unknown>
+    expect(created.notificationTypeId).toBe('auth.account.locked')
+    expect(created.enabled).toBe(true)
+  })
+
   it('drops only the nonOptOut items from a mixed batch', async () => {
     getTypeMock.mockImplementation((type) =>
       type === 'auth.account.locked' ? ({ type, nonOptOut: true } as never) : undefined,

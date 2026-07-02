@@ -69,7 +69,7 @@ test.describe('TC-NOTIF-011: Notification type catalogue + channel preferences',
       expect(item.id.length).toBeGreaterThan(0)
       expect(typeof item.labelKey).toBe('string')
       expect(item.labelKey.length).toBeGreaterThan(0)
-      // Phase 6 metadata: every item exposes the silent flag and the opt-out
+      // Phase 5 metadata: every item exposes the silent flag and the opt-out
       // lock as booleans, and category as a string or null (never undefined).
       expect(typeof item.silent).toBe('boolean')
       expect(typeof item.nonOptOut).toBe('boolean')
