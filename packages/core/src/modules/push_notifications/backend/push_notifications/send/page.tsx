@@ -2,8 +2,8 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { CrudForm, type CrudField, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
-import { apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { CrudForm, type CrudField, type CrudFormGroup, type CrudFieldOption } from '@open-mercato/ui/backend/CrudForm'
+import { apiCall, apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 
@@ -18,12 +18,42 @@ const DELIVERIES_HREF = '/backend/push_notifications'
 export default function PushCustomSendPage() {
   const router = useRouter()
   const t = useT()
+  const [userOptions, setUserOptions] = React.useState<CrudFieldOption[]>([])
+
+  // Pick the recipient by name/email instead of a raw UUID. Search server-side via /api/auth/users
+  // (mirrors the devices list + admin notification-preferences picker). Admins without auth.users.list
+  // degrade gracefully to no options — they can still paste an id.
+  const loadUserOptions = React.useCallback(async (query?: string): Promise<CrudFieldOption[]> => {
+    const params = new URLSearchParams()
+    params.set('page', '1')
+    params.set('pageSize', '20')
+    if (query && query.trim().length > 0) params.set('search', query.trim())
+    const call = await apiCall<{ items?: { id: string; name?: string | null; email?: string | null }[] }>(
+      `/api/auth/users?${params.toString()}`,
+      { headers: { 'x-om-forbidden-redirect': '0' } },
+      { fallback: null },
+    ).catch(() => null)
+    if (!call || !call.ok) return []
+    const next = (call.result?.items ?? []).flatMap((item): CrudFieldOption[] => {
+      if (!item || typeof item.id !== 'string' || !item.id.trim()) return []
+      const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : null
+      const email = typeof item.email === 'string' && item.email.trim() ? item.email.trim() : null
+      const label = name && email ? `${name} — ${email}` : email ?? name ?? item.id
+      return [{ value: item.id, label }]
+    })
+    setUserOptions((prev) => {
+      const map = new Map(prev.map((opt) => [opt.value, opt]))
+      for (const opt of next) map.set(opt.value, opt)
+      return Array.from(map.values())
+    })
+    return next
+  }, [])
 
   const fields = React.useMemo<CrudField[]>(() => [
-    { id: 'userId', label: t('push_notifications.send.userId'), type: 'text', required: true, description: t('push_notifications.send.userIdHint') },
+    { id: 'userId', label: t('push_notifications.send.userId'), type: 'combobox', required: true, description: t('push_notifications.send.userIdHint'), options: userOptions, loadOptions: loadUserOptions },
     { id: 'title', label: t('push_notifications.send.title'), type: 'text', required: true },
     { id: 'body', label: t('push_notifications.send.body'), type: 'textarea' },
-  ], [t])
+  ], [t, userOptions, loadUserOptions])
 
   const groups = React.useMemo<CrudFormGroup[]>(() => ([
     { id: 'message', title: t('push_notifications.send.message'), column: 1, fields: ['userId', 'title', 'body'] },

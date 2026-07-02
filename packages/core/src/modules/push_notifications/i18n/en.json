@@ -40,8 +40,8 @@
   "push_notifications.send.submit": "Send push",
   "push_notifications.send.success": "Push queued for delivery",
   "push_notifications.send.title": "Title",
-  "push_notifications.send.userId": "Recipient user ID",
-  "push_notifications.send.userIdHint": "The user whose devices receive this push.",
+  "push_notifications.send.userId": "Recipient",
+  "push_notifications.send.userIdHint": "Search by name or email — their devices receive this push.",
   "push_notifications.types.admin_custom_message.body": "You have a new message.",
   "push_notifications.types.admin_custom_message.label": "Admin message",
   "push_notifications.types.admin_custom_message.title": "Admin message"
