@@ -119,6 +119,7 @@ export const enabledModules: ModuleEntry[] = [
   // `push` ChannelAdapter at import time; the push delivery strategy routes each
   // device to the channel whose providerKey matches its push_provider.
   { id: 'channel_apns', from: '@open-mercato/channel-apns' },
+  { id: 'channel_fcm', from: '@open-mercato/channel-fcm' },
   { id: 'sync_akeneo', from: '@open-mercato/sync-akeneo' },
   { id: 'shipping_carriers', from: '@open-mercato/core' },
   { id: 'webhooks', from: '@open-mercato/webhooks' },
