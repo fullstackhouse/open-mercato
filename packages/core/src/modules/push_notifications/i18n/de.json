@@ -16,6 +16,7 @@
   "push_notifications.deliveries.detail.tokenSnapshot": "Token (letzte 8)",
   "push_notifications.deliveries.empty": "Noch keine Push-Zustellungen",
   "push_notifications.deliveries.error.loadFailed": "Push-Zustellungen konnten nicht geladen werden",
+  "push_notifications.deliveries.filters.created": "Erstellt",
   "push_notifications.deliveries.filters.from": "Von",
   "push_notifications.deliveries.filters.to": "Bis",
   "push_notifications.deliveries.noValue": "—",

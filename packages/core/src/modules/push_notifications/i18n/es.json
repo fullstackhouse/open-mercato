@@ -16,6 +16,7 @@
   "push_notifications.deliveries.detail.tokenSnapshot": "Token (últimos 8)",
   "push_notifications.deliveries.empty": "Aún no hay envíos push",
   "push_notifications.deliveries.error.loadFailed": "No se pudieron cargar los envíos push",
+  "push_notifications.deliveries.filters.created": "Creado",
   "push_notifications.deliveries.filters.from": "Desde",
   "push_notifications.deliveries.filters.to": "Hasta",
   "push_notifications.deliveries.noValue": "—",

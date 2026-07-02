@@ -16,6 +16,7 @@
   "push_notifications.deliveries.detail.tokenSnapshot": "Token (ostatnie 8)",
   "push_notifications.deliveries.empty": "Brak dostarczeń push",
   "push_notifications.deliveries.error.loadFailed": "Nie udało się wczytać dostarczeń push",
+  "push_notifications.deliveries.filters.created": "Utworzono",
   "push_notifications.deliveries.filters.from": "Od",
   "push_notifications.deliveries.filters.to": "Do",
   "push_notifications.deliveries.noValue": "—",
