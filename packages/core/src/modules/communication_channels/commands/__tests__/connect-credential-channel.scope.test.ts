@@ -35,7 +35,7 @@ function buildCtx(adapter: Record<string, unknown>) {
 describe('connect-credential-channel scope', () => {
   beforeEach(() => jest.clearAllMocks())
 
-  it('stores a tenant-scoped provider with user_id null even when a user connected it', async () => {
+  it('refuses a tenant-scoped provider that arrives with a per-user id (no channel minted)', async () => {
     const adapter = {
       providerKey: 'fcm',
       channelType: 'push',
@@ -49,8 +49,35 @@ describe('connect-credential-channel scope', () => {
         providerKey: 'fcm',
         displayName: 'FCM',
         credentials: { serviceAccountJson: '{}' },
-        // Defensive: a per-user session id is supplied, but the adapter is tenant-scoped.
+        // A per-user session id on a tenant-scoped provider = the per-user route.
+        // Must be refused, not silently downgraded (privilege-escalation guard).
         userId: USER_ID,
+        scope: { tenantId: TENANT_ID, organizationId: ORG_ID },
+      },
+      ctx,
+    )
+
+    expect(result.status).toBe('wrong_scope_for_route')
+    expect(save).not.toHaveBeenCalled()
+    expect(createConnectedChannelRow as jest.Mock).not.toHaveBeenCalled()
+  })
+
+  it('connects a tenant-scoped provider via the tenant route (user_id null, creds pinned to tenantId)', async () => {
+    const adapter = {
+      providerKey: 'fcm',
+      channelType: 'push',
+      channelScope: 'tenant',
+      capabilities: {},
+      validateCredentials: async () => ({ ok: true }),
+    }
+    const { ctx, save } = buildCtx(adapter)
+    const result = await connectCredentialChannelCommand.execute(
+      {
+        providerKey: 'fcm',
+        displayName: 'FCM',
+        credentials: { serviceAccountJson: '{}' },
+        // Tenant route passes userId: null; org is the connecting admin's org.
+        userId: null,
         scope: { tenantId: TENANT_ID, organizationId: ORG_ID },
       },
       ctx,
@@ -59,10 +86,18 @@ describe('connect-credential-channel scope', () => {
     expect(result.status).toBe('connected')
     const savedScope = save.mock.calls[0][2] as SavedScope
     expect(savedScope.userId).toBeNull()
+    // Credentials pinned to tenantId (not the connecting org) so a cross-org
+    // reconnect overwrites the one row delivery reads.
+    expect(savedScope.organizationId).toBe(TENANT_ID)
     const savedPayload = save.mock.calls[0][1] as Record<string, unknown>
     expect(savedPayload.userId).toBeUndefined()
-    const rowArgs = (createConnectedChannelRow as jest.Mock).mock.calls[0][0] as { userId: string | null }
+    const rowArgs = (createConnectedChannelRow as jest.Mock).mock.calls[0][0] as {
+      userId: string | null
+      scope: { organizationId: string | null }
+    }
     expect(rowArgs.userId).toBeNull()
+    // Channel row stored org-agnostic (NULL) so the heal key stays stable.
+    expect(rowArgs.scope.organizationId).toBeNull()
   })
 
   it('keeps user_id for a per-user provider', async () => {

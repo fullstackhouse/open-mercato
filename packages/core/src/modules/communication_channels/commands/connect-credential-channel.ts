@@ -34,6 +34,7 @@ export type ConnectCredentialChannelResult =
   | { status: 'validation_failed'; errors: Record<string, string> }
   | { status: 'no_adapter'; reason: string }
   | { status: 'duplicate_mailbox'; externalIdentifier: string; existingProviderKey: string }
+  | { status: 'wrong_scope_for_route'; providerKey: string }
 
 export const COMMUNICATION_CHANNELS_CONNECT_CREDENTIAL_CHANNEL_COMMAND_ID =
   'communication_channels.channel.connect_credential'
@@ -86,10 +87,20 @@ const connectCredentialChannelCommand: CommandHandler<
     }
 
     // Tenant-wide providers (push: FCM/APNs/Expo) store one shared channel +
-    // credential row per tenant with `user_id = NULL`, regardless of who clicked
-    // connect. Per-user providers (Gmail/IMAP) keep the connecting user's id.
-    // Defensive: this holds even if the per-user route ever runs a push provider.
+    // credential row per tenant with `user_id = NULL`; per-user providers
+    // (Gmail/IMAP) keep the connecting user's id.
+    //
+    // SECURITY: a tenant-scoped provider must only be connected through the
+    // admin-gated tenant route (which passes `userId: null`). If it arrives with
+    // a non-null `userId` it came from the per-user route (feature
+    // `connect_user_channel`, granted to manager/employee) — refuse rather than
+    // silently minting a privileged tenant-wide channel that bypasses the
+    // admin-only `connect_tenant_channel` gate. The tenant route passes
+    // `userId: null`, so legitimate tenant connects still pass.
     const tenantScoped = adapter.channelScope === 'tenant'
+    if (tenantScoped && input.userId !== null) {
+      return { status: 'wrong_scope_for_route', providerKey: input.providerKey }
+    }
     const effectiveUserId = tenantScoped ? null : input.userId
 
     // Optional credential validation.
@@ -126,9 +137,20 @@ const connectCredentialChannelCommand: CommandHandler<
     // (see review R2-C1 / N1, 2026-05-26). Tenant-wide providers pass `null`
     // here so the service writes/reads the shared `user_id = NULL` row (same
     // pattern as Stripe/Akeneo tenant-wide credentials).
+    //
+    // `organizationId` for tenant scope is pinned to `tenantId` (not the
+    // connecting admin's selected org). The channel dedup/heal is org-agnostic
+    // (index + heal key ignore org) and the channel row is stored with
+    // `organization_id = NULL`, so push-delivery resolves credentials at
+    // `channel.organizationId ?? tenantId` = `tenantId`. Pinning the write to the
+    // same key keeps a cross-org reconnect (e.g. key rotation from another org)
+    // overwriting the one credential row the delivery path actually reads, rather
+    // than orphaning it under a per-org key.
     const credentialsScope = {
       tenantId: input.scope.tenantId,
-      organizationId: input.scope.organizationId ?? input.scope.tenantId,
+      organizationId: tenantScoped
+        ? input.scope.tenantId
+        : input.scope.organizationId ?? input.scope.tenantId,
       userId: effectiveUserId,
     }
     let credentialsRefId: string | null = null
@@ -202,7 +224,13 @@ const connectCredentialChannelCommand: CommandHandler<
         externalIdentifier,
         credentialsRefId,
         userId: effectiveUserId,
-        scope: { tenantId: input.scope.tenantId, organizationId: input.scope.organizationId ?? null },
+        // Tenant-wide channels store `organization_id = NULL` (truly tenant-scoped,
+        // matching the entity's `user_id NULL` semantics) so the org-agnostic heal
+        // key stays stable across orgs and delivery reads creds at `?? tenantId`.
+        scope: {
+          tenantId: input.scope.tenantId,
+          organizationId: tenantScoped ? null : input.scope.organizationId ?? null,
+        },
         pollIntervalSeconds: input.pollIntervalSeconds,
       })
     } catch (err) {
