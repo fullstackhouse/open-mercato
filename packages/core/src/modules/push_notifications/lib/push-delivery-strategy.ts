@@ -3,6 +3,7 @@ import type { NotificationDeliveryStrategy } from '@open-mercato/core/modules/no
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
+import type { NotificationCopySource } from '@open-mercato/core/modules/notifications/lib/notificationCopy'
 import { fanOutPushDeliveries, PUSH_CHANNEL, type PushFanoutPayload } from './push-fanout'
 
 export { PUSH_CHANNEL } from './push-fanout'
@@ -16,11 +17,14 @@ export { PUSH_CHANNEL } from './push-fanout'
  * `send-push` worker, so a slow/unavailable provider never blocks notification creation.
  *
  * Whether a push is silent (content-available wake-up) is a property of the registered
- * notification TYPE (`NotificationTypeDefinition.silent`), never a per-call flag. Silent types
- * bypass the per-channel user preference (background pushes are not user-facing opt-outs).
+ * notification TYPE (`NotificationTypeDefinition.silent`), never a per-call flag. `silent`
+ * controls only HOW the device is notified (background wake-up vs visible alert); it does not
+ * imply the push is non-opt-out. Silent types still respect the recipient's per-channel
+ * preference unless the type is `nonOptOut` — to force a silent push, mark the type
+ * `nonOptOut: true`. A silent push is therefore just a notification created through the normal
+ * `notificationService.create()` flow whose type is `silent: true`; there is no separate helper.
  *
- * The shared device/channel fan-out lives in {@link fanOutPushDeliveries} and is reused by
- * `sendSilentPush` (which delivers the same silent payload without an in-app notification).
+ * The shared device/channel fan-out lives in {@link fanOutPushDeliveries}.
  */
 export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
   id: PUSH_CHANNEL,
@@ -41,10 +45,10 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     const em = ctx.resolve('em') as EntityManager
     const silent = type.silent === true
 
-    // Respect the recipient's per-channel preference for visible notifications (default-on when
-    // unset). Two type-level bypasses skip the opt-out check: silent pushes (background wake-ups,
-    // not user-facing) and nonOptOut types (security/account alerts the user cannot disable).
-    if (!silent && type.nonOptOut !== true) {
+    // Respect the recipient's per-channel preference (default-on when unset). Only `nonOptOut`
+    // types skip the opt-out check (security/account alerts the user cannot disable). `silent`
+    // pushes are opt-out-able like any other: silent controls delivery style, not enforcement.
+    if (type.nonOptOut !== true) {
       const preferences = resolveNotificationPreferenceService({ resolve: ctx.resolve })
       const enabled = await preferences.isChannelEnabled({ tenantId, userId }, notification.type, PUSH_CHANNEL)
       if (!enabled) return
@@ -57,12 +61,24 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     if (notification.linkHref) data.linkHref = notification.linkHref
 
     const payload: PushFanoutPayload = {
-      title: ctx.title,
-      body: ctx.body,
       data,
       options: (notification.pushOptions ?? undefined) as PushOptions | undefined,
       silent,
     }
+
+    // For visible notifications, hand the raw copy down so the fan-out can translate title/body per
+    // device locale. `ctx.title`/`ctx.body` are already resolved in the default locale and serve as
+    // the fallback. Silent pushes carry no user-facing copy, so they skip translation entirely.
+    const copy: NotificationCopySource | undefined = silent
+      ? undefined
+      : {
+          titleKey: notification.titleKey ?? null,
+          bodyKey: notification.bodyKey ?? null,
+          titleVariables: notification.titleVariables ?? null,
+          bodyVariables: notification.bodyVariables ?? null,
+          title: ctx.title,
+          body: ctx.body,
+        }
 
     await fanOutPushDeliveries({
       em,
@@ -72,6 +88,7 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
       notificationId: notification.id,
       notificationTypeId: notification.type,
       payload,
+      copy,
     })
   },
 }

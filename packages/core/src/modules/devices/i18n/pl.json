@@ -18,7 +18,7 @@
   "devices.form.platform": "Platforma",
   "devices.form.pushProvider": "Dostawca push",
   "devices.form.pushToken": "Token push",
-  "devices.form.pushTokenHint": "Opcjonalne. Przechowywane bezpiecznie i nigdy więcej nie pokazywane.",
+  "devices.form.pushTokenHint": "Opcjonalne. Token jest przechowywany bezpiecznie i nigdy więcej niewyświetlany.",
   "devices.form.success.created": "Urządzenie zarejestrowane",
   "devices.form.success.updated": "Urządzenie zaktualizowane",
   "devices.form.userId": "ID użytkownika",

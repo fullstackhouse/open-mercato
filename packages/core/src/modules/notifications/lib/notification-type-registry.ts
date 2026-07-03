@@ -90,8 +90,14 @@ export async function syncNotificationTypes(
   const silentFor = (def: NotificationTypeDefinition) => def.silent === true
   const nonOptOutFor = (def: NotificationTypeDefinition) => def.nonOptOut === true
 
-  const toCreate = definitions.filter((def) => !byId.has(def.type))
-  const toUpdate = definitions.filter((def) => {
+  // Internal/admin-only types (`hiddenFromSettings`) are never exposed to the client catalogue: they
+  // are excluded from create/update, and — because they drop out of `validIds` below — any stale row
+  // for a type that was flipped to hidden gets pruned. They remain in the in-memory registry for
+  // delivery logic. GET /api/notifications/types therefore never lists them.
+  const visibleDefinitions = definitions.filter((def) => def.hiddenFromSettings !== true)
+
+  const toCreate = visibleDefinitions.filter((def) => !byId.has(def.type))
+  const toUpdate = visibleDefinitions.filter((def) => {
     const row = byId.get(def.type)
     if (!row) return false
     return (
@@ -151,7 +157,7 @@ export async function syncNotificationTypes(
   // empty registry can never wipe the table. Caveat: multiple apps with different module sets sharing
   // one DB would prune each other's types — out of scope for the standard one-app-per-DB deployment.
   if (definitions.length > 0) {
-    const validIds = new Set(definitions.map((def) => def.type))
+    const validIds = new Set(visibleDefinitions.map((def) => def.type))
     const staleIds = existing.filter((row) => !validIds.has(row.id)).map((row) => row.id)
     if (staleIds.length) {
       await db

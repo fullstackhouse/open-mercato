@@ -14,6 +14,7 @@ export type DeviceSnapshot = {
   platform: string
   clientAppVersion: string | null
   osVersion: string | null
+  locale: string | null
   pushToken: string | null
   pushProvider: string | null
   pushTokenUpdatedAt: string | null
@@ -57,6 +58,7 @@ export function serializeDevice(device: UserDevice): DeviceSnapshot {
     platform: device.platform,
     clientAppVersion: device.clientAppVersion ?? null,
     osVersion: device.osVersion ?? null,
+    locale: device.locale ?? null,
     pushToken: device.pushToken ?? null,
     pushProvider: device.pushProvider ?? null,
     pushTokenUpdatedAt: device.pushTokenUpdatedAt ? device.pushTokenUpdatedAt.toISOString() : null,
@@ -78,6 +80,7 @@ export function applySnapshot(device: UserDevice, snapshot: DeviceSnapshot): voi
   device.platform = snapshot.platform as UserDevice['platform']
   device.clientAppVersion = snapshot.clientAppVersion
   device.osVersion = snapshot.osVersion
+  device.locale = snapshot.locale
   device.pushToken = snapshot.pushToken
   device.pushProvider = snapshot.pushProvider
   device.pushTokenUpdatedAt = toDate(snapshot.pushTokenUpdatedAt)

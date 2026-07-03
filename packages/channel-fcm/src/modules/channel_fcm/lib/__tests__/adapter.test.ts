@@ -46,14 +46,14 @@ describe('FcmChannelAdapter', () => {
 
     const result = await getFcmChannelAdapter().sendMessage(
       buildInput({
-        content: { raw: { title: '', body: '', data: { type: 'esim.installation_data' }, silent: true } },
+        content: { raw: { title: '', body: '', data: { type: 'sync.data.updated' }, silent: true } },
       }),
     )
 
     expect(result.status).toBe('sent')
     const message = send.mock.calls[0][0]
     expect(message.notification).toBeUndefined()
-    expect(message.data).toEqual({ type: 'esim.installation_data' })
+    expect(message.data).toEqual({ type: 'sync.data.updated' })
     expect(message.apns.payload.aps['content-available']).toBe(1)
     expect(message.apns.headers['apns-push-type']).toBe('background')
   })

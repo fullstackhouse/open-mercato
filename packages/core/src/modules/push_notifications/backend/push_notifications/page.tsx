@@ -1,5 +1,6 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -62,6 +63,43 @@ export default function PushDeliveriesListPage() {
   const scopeVersion = useOrganizationScopeVersion()
   const t = useT()
   const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+  const [userOptions, setUserOptions] = React.useState<{ value: string; label: string; description?: string | null }[]>([])
+
+  // Filter deliveries by recipient picked via name/email search instead of a raw UUID (mirrors the
+  // devices list). Admins without auth.users.list degrade gracefully to no options.
+  const loadUserOptions = React.useCallback(async (query?: string) => {
+    const params = new URLSearchParams()
+    params.set('page', '1')
+    params.set('pageSize', '20')
+    if (query && query.trim().length > 0) params.set('search', query.trim())
+    const call = await apiCall<{ items?: { id: string; name?: string | null; email?: string | null }[] }>(
+      `/api/auth/users?${params.toString()}`,
+      { headers: { 'x-om-forbidden-redirect': '0' } },
+      { fallback: null },
+    ).catch(() => null)
+    if (!call || !call.ok) return []
+    const next = (call.result?.items ?? []).flatMap((item) => {
+      if (!item || typeof item.id !== 'string' || !item.id.trim()) return []
+      const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : null
+      const email = typeof item.email === 'string' && item.email.trim() ? item.email.trim() : null
+      const label = name ?? email ?? item.id
+      return [{ value: item.id, label, description: email && email !== label ? email : null }]
+    })
+    setUserOptions((prev) => {
+      const map = new Map(prev.map((opt) => [opt.value, opt]))
+      for (const opt of next) map.set(opt.value, opt)
+      return Array.from(map.values())
+    })
+    return next
+  }, [])
+
+  React.useEffect(() => { void loadUserOptions() }, [loadUserOptions, scopeVersion])
+
+  // Reuse the picker cache to label the User column; rows whose owner isn't cached still show the id.
+  const userLabelById = React.useMemo(
+    () => new Map(userOptions.map((opt) => [opt.value, opt.label])),
+    [userOptions],
+  )
 
   const filters = React.useMemo<FilterDef[]>(() => [
     {
@@ -77,10 +115,16 @@ export default function PushDeliveriesListPage() {
         { value: 'expired', label: t('push_notifications.deliveries.status.expired') },
       ],
     },
-    { id: 'userId', label: t('push_notifications.deliveries.columns.user'), type: 'text' },
-    { id: 'from', label: t('push_notifications.deliveries.filters.from'), type: 'text' },
-    { id: 'to', label: t('push_notifications.deliveries.filters.to'), type: 'text' },
-  ], [t])
+    {
+      id: 'userId',
+      label: t('push_notifications.deliveries.columns.user'),
+      type: 'combobox',
+      options: userOptions,
+      loadOptions: loadUserOptions,
+    },
+    // A single created-at range picker (ISO `yyyy-MM-dd`) that maps to the ?from/?to query params.
+    { id: 'createdRange', label: t('push_notifications.deliveries.filters.created'), type: 'dateRange' },
+  ], [t, userOptions, loadUserOptions])
 
   React.useEffect(() => {
     let cancelled = false
@@ -92,8 +136,9 @@ export default function PushDeliveriesListPage() {
         params.set('pageSize', '50')
         const status = typeof filterValues.status === 'string' ? filterValues.status.trim() : ''
         const userId = typeof filterValues.userId === 'string' ? filterValues.userId.trim() : ''
-        const from = typeof filterValues.from === 'string' ? filterValues.from.trim() : ''
-        const to = typeof filterValues.to === 'string' ? filterValues.to.trim() : ''
+        const createdRange = (filterValues.createdRange ?? {}) as { from?: string; to?: string }
+        const from = typeof createdRange.from === 'string' ? createdRange.from.trim() : ''
+        const to = typeof createdRange.to === 'string' ? createdRange.to.trim() : ''
         if (status) params.set('status', status)
         if (userId) params.set('userId', userId)
         if (from) params.set('from', from)
@@ -139,7 +184,20 @@ export default function PushDeliveriesListPage() {
     {
       accessorKey: 'user_id',
       header: t('push_notifications.deliveries.columns.user'),
-      cell: ({ row }) => <code className="text-xs">{row.original.user_id}</code>,
+      cell: ({ row }) => {
+        const userId = row.original.user_id
+        const label = userLabelById.get(userId)
+        return (
+          // Stop the click bubbling to the row, whose default action opens the delivery detail.
+          <Link
+            href={`/backend/users/${encodeURIComponent(userId)}/edit`}
+            className="text-primary hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {label ?? <code className="text-xs">{userId}</code>}
+          </Link>
+        )
+      },
     },
     { accessorKey: 'provider', header: t('push_notifications.deliveries.columns.provider') },
     {
@@ -156,7 +214,7 @@ export default function PushDeliveriesListPage() {
       header: t('push_notifications.deliveries.columns.sent'),
       cell: ({ row }) => formatDate(row.original.sent_at, t),
     },
-  ], [t])
+  ], [t, userLabelById])
 
   return (
     <Page>

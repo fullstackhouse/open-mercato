@@ -1,10 +1,30 @@
 import { z } from 'zod'
+import { pushOptionsSchema } from '@open-mercato/core/modules/notifications/data/validators'
 
 export const PUSH_DELIVERY_STATUSES = ['pending', 'sending', 'sent', 'failed', 'skipped', 'expired'] as const
 
 // A `created_at` range bound: an ISO-8601 date (`2026-07-01`) or datetime (`2026-07-01T00:00:00Z`).
 // Validated here so a malformed value fails with a 400 instead of reaching the query engine / Postgres.
 const rangeDateFilter = z.union([z.string().datetime({ offset: true }), z.string().date()])
+
+// POST /api/push_notifications/custom-send — admin composes a one-off visible push to a single user.
+// title/body are literal free text (not i18n keys). data/pushOptions reuse the notifications contract.
+export const customSendSchema = z
+  .object({
+    recipientUserId: z.string().uuid(),
+    // Optional: target one of the recipient's devices; omit to send to all their devices.
+    deviceId: z.string().uuid().optional(),
+    title: z.string().trim().min(1).max(500),
+    body: z.string().trim().max(2000).nullish(),
+    data: z.record(z.string(), z.string()).optional(),
+    pushOptions: pushOptionsSchema.optional(),
+    // When true, deliver a silent data-only wake-up instead of a visible banner.
+    silent: z.boolean().optional(),
+  })
+  .strict()
+export type CustomSendInput = z.infer<typeof customSendSchema>
+
+export const customSendResponseSchema = z.object({ enqueued: z.number() })
 
 // Read-only delivery-log list contract (admin observability). No full push token is ever exposed —
 // only `token_snapshot` (last 8 chars) and the `provider` snapshot.

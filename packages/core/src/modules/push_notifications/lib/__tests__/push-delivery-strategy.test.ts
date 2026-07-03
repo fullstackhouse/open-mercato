@@ -1,5 +1,10 @@
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
+import {
+  registerModules,
+  registerAppDictionaryLoader,
+  invalidateDictionaryCache,
+} from '@open-mercato/shared/lib/i18n/server'
 import { enqueuePushDelivery } from '../queue'
 import { mobilePushDeliveryStrategy } from '../push-delivery-strategy'
 
@@ -293,6 +298,42 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(row.silent).toBe(false)
   })
 
+  it('reuses the default-locale copy for a device without a locale (no translation)', async () => {
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { titleKey: 'orders.shipped.title', bodyKey: 'orders.shipped.body' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    const row = fork.create.mock.calls[0][1] as { payload: { title?: string; body?: string | null } }
+    // ctx.title/ctx.body are already resolved in the default locale upstream and reused verbatim.
+    expect(row.payload.title).toBe('Shipped')
+    expect(row.payload.body).toBe('Your order shipped')
+  })
+
+  it('translates the delivery copy into the device locale', async () => {
+    registerAppDictionaryLoader(async () => ({}))
+    registerModules([
+      { translations: { pl: { orders: { shipped: { title: 'Wysłano {orderNumber}', body: 'W drodze' } } } } },
+    ] as never)
+    invalidateDictionaryCache()
+
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      // `pl-PL` also exercises locale normalization (region subtag stripped to `pl`).
+      devices: [{ id: 'dev-pl', pushToken: 'token-pltoken1', pushProvider: 'fcm', locale: 'pl-PL' }],
+      notification: {
+        titleKey: 'orders.shipped.title',
+        bodyKey: 'orders.shipped.body',
+        titleVariables: { orderNumber: '42' },
+      },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    const row = fork.create.mock.calls[0][1] as { payload: { title?: string; body?: string | null } }
+    expect(row.payload.title).toBe('Wysłano 42')
+    expect(row.payload.body).toBe('W drodze')
+  })
+
   it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {
     getTypeMock.mockReturnValue({ type: 'auth.account.locked', nonOptOut: true } as never)
     isChannelEnabledMock.mockResolvedValue(false)
@@ -310,18 +351,47 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(captured.insertRows![0].silent).toBe(false)
   })
 
-  it('delivers a silent-typed notification without consulting preferences', async () => {
+  it('delivers a silent-typed notification as silent when the recipient has push enabled', async () => {
     getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
     const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // Silent (background) pushes are type-derived and bypass the user opt-out gate.
-    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    // Silent controls delivery style, not enforcement: the opt-out gate still runs.
+    expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
     expect(enqueueMock).toHaveBeenCalledTimes(1)
     const row = captured.insertRows![0]
     expect(row.silent).toBe(true)
     expect(decodePayload(row).silent).toBe(true)
+  })
+
+  it('skips a silent-typed notification when the recipient opted out of push', async () => {
+    getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
+    expect(fork.create).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('forces a silent nonOptOut-typed notification even when the recipient opted out', async () => {
+    getTypeMock.mockReturnValue({ type: 'orders.sync', silent: true, nonOptOut: true } as never)
+    isChannelEnabledMock.mockResolvedValue(false)
+    const { ctx, fork } = makeCtx({
+      channels: [{ providerKey: 'fcm' }],
+      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
+      notification: { type: 'orders.sync' },
+    })
+    await mobilePushDeliveryStrategy.deliver(ctx)
+    // nonOptOut still bypasses the gate; silent merely sets the delivery style.
+    expect(isChannelEnabledMock).not.toHaveBeenCalled()
+    expect(enqueueMock).toHaveBeenCalledTimes(1)
+    const row = fork.create.mock.calls[0][1] as { silent: boolean }
+    expect(row.silent).toBe(true)
   })
 })

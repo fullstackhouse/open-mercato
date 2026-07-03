@@ -5,6 +5,12 @@ import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
+import { defaultLocale } from '@open-mercato/shared/lib/i18n/config'
+import { resolveSupportedLocale } from '@open-mercato/shared/lib/i18n/locale'
+import {
+  resolveNotificationCopy,
+  type NotificationCopySource,
+} from '@open-mercato/core/modules/notifications/lib/notificationCopy'
 import { enqueuePushDelivery } from './queue'
 
 export const PUSH_CHANNEL = 'push'
@@ -25,10 +31,21 @@ export interface FanOutPushDeliveriesArgs {
   resolve: Resolve
   scope: { tenantId: string; organizationId: string | null }
   userId: string
+  /**
+   * Restrict the fan-out to a single one of the user's devices (`UserDevice.id`). Still scoped to the
+   * same (tenant, org, user), so an id that isn't the user's own matches nothing. Omit to fan out to
+   * all of the user's push-capable devices (the default).
+   */
+  userDeviceId?: string
   /** Source in-app notification id, or `null` for a silent push (no Notification row). */
   notificationId: string | null
   notificationTypeId: string
   payload: PushFanoutPayload
+  /**
+   * Per-device localizable copy for visible notifications. When present, `title`/`body` are
+   * resolved per device using its `locale`. Omit for silent pushes (no user-facing copy).
+   */
+  copy?: NotificationCopySource
 }
 
 function tokenSnapshot(token: string): string {
@@ -39,15 +56,15 @@ function tokenSnapshot(token: string): string {
 /**
  * Resolve a recipient's push-capable devices, route each to its provider's tenant push
  * `CommunicationChannel`, persist one `pending` push delivery row per device, and enqueue a send
- * job per row. Shared by the `push` delivery strategy (visible notifications) and `sendSilentPush`
- * (content-available wake-ups); it is preference-agnostic — the caller decides whether to consult
- * per-channel preferences before fanning out.
+ * job per row. Shared by the `push` delivery strategy (visible + silent notifications) and
+ * `sendCustomPush` (admin one-off pushes); it is preference-agnostic — the caller decides whether
+ * to consult per-channel preferences before fanning out.
  *
  * Cross-module entities are resolved via DI tokens (registered `asValue` by their owning modules)
  * so this stays decoupled from those modules' internals. Returns the number of jobs enqueued.
  */
 export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Promise<{ enqueued: number }> {
-  const { em, resolve, scope, userId, notificationId, notificationTypeId, payload } = args
+  const { em, resolve, scope, userId, userDeviceId, notificationId, notificationTypeId, payload, copy } = args
   const { tenantId, organizationId } = scope
   const silent = payload.silent === true
 
@@ -86,6 +103,8 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
       tenantId,
       organizationId,
       userId,
+      // Optionally restrict to a single device; still scoped to this user so a foreign id matches none.
+      ...(userDeviceId ? { id: userDeviceId } : {}),
       deletedAt: null,
       pushToken: { $ne: null },
     },
@@ -93,6 +112,30 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
     { tenantId, organizationId },
   )
   if (devices.length === 0) return { enqueued: 0 }
+
+  // Resolve the per-device localized copy. The default-locale case (the common one: device has no
+  // locale, an unsupported one, or already speaks the default) reuses the copy already resolved
+  // upstream — no dictionary load. Other locales translate via the shared notification-copy helper
+  // (dictionaries are memoized by loadDictionary). Silent pushes carry no copy and skip this.
+  // Memoized by resolved locale so a user with many same-locale devices derives copy once
+  // (O(distinct locales) instead of O(devices)).
+  const localizedByLocale = new Map<string, Promise<PushFanoutPayload>>()
+  function resolveLocalizedPayload(deviceLocale?: string | null): Promise<PushFanoutPayload> {
+    if (!copy) return Promise.resolve(payload)
+    const locale = resolveSupportedLocale(deviceLocale) ?? defaultLocale
+    let cached = localizedByLocale.get(locale)
+    if (!cached) {
+      cached = (async () => {
+        if (locale === defaultLocale) {
+          return { ...payload, title: copy.title, body: copy.body ?? null }
+        }
+        const { title, body } = await resolveNotificationCopy(copy, locale)
+        return { ...payload, title, body }
+      })()
+      localizedByLocale.set(locale, cached)
+    }
+    return cached
+  }
 
   // Insert one pending delivery row per device, routing each device to the push channel whose
   // providerKey matches the device's pushProvider. Devices with no provider, or no matching configured
@@ -102,28 +145,32 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
   // the re-fan-out a no-op instead of inserting a duplicate set of rows (and duplicate pushes). Silent
   // pushes carry a null notification_id and are excluded from the partial index (they are triggered
   // explicitly, not via at-least-once redelivery). Only the rows actually inserted are enqueued.
-  const rows = devices.flatMap((device) => {
-    const providerKey = device.pushProvider
-    if (!providerKey) return []
-    const channel = channelsByProvider.get(providerKey)
-    if (!channel) return []
-    return [{
-      tenant_id: tenantId,
-      organization_id: organizationId,
-      notification_id: notificationId,
-      notification_type_id: notificationTypeId,
-      user_device_id: device.id,
-      user_id: userId,
-      provider: channel.providerKey,
-      token_snapshot: tokenSnapshot(device.pushToken as string),
-      silent,
-      status: 'pending',
-      attempts: 0,
-      payload: sql`${JSON.stringify(payload)}::jsonb`,
-      created_at: sql`now()`,
-      updated_at: sql`now()`,
-    }]
-  })
+  const builtRows = await Promise.all(
+    devices.map(async (device) => {
+      const providerKey = device.pushProvider
+      if (!providerKey) return null
+      const channel = channelsByProvider.get(providerKey)
+      if (!channel) return null
+      const rowPayload = await resolveLocalizedPayload(device.locale)
+      return {
+        tenant_id: tenantId,
+        organization_id: organizationId,
+        notification_id: notificationId,
+        notification_type_id: notificationTypeId,
+        user_device_id: device.id,
+        user_id: userId,
+        provider: channel.providerKey,
+        token_snapshot: tokenSnapshot(device.pushToken as string),
+        silent,
+        status: 'pending',
+        attempts: 0,
+        payload: sql`${JSON.stringify(rowPayload)}::jsonb`,
+        created_at: sql`now()`,
+        updated_at: sql`now()`,
+      }
+    }),
+  )
+  const rows = builtRows.filter((row): row is NonNullable<typeof row> => row !== null)
   // A registered device whose pushProvider has no matching active channel (e.g. an Expo device on an
   // FCM-only tenant) is correctly skipped above — but it produces no delivery row and would otherwise
   // be an invisible no-op. Surface a count so a provider-config gap is diagnosable.
