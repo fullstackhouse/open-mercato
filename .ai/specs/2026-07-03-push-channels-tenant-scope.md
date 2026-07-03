@@ -36,8 +36,19 @@ connect/write path stamped a per-user id. This change fixes that path only.
    `tenantScoped = adapter.channelScope === 'tenant'` and `effectiveUserId = tenantScoped ? null : input.userId`,
    used for the credential scope, the credential payload (`userId` omitted when null —
    same shape as tenant-wide Stripe/Akeneo credentials), and the channel row. `userId`
-   input is now `string | null`. Defensive: a push provider is never stamped per-user even
-   if routed through the per-user endpoint.
+   input is now `string | null`.
+   - **Privilege-escalation guard.** A tenant-scoped provider that arrives with a non-null
+     `userId` came from the per-user route (feature `connect_user_channel`, granted to
+     manager/employee). The command refuses it (`wrong_scope_for_route` → 403) instead of
+     silently minting a privileged tenant-wide channel; the per-user route also
+     short-circuits tenant-scoped providers with 403 before dispatch (defense-in-depth).
+     The tenant route passes `userId: null`, so legitimate tenant connects still pass.
+   - **Org-agnostic scoping.** Tenant-scoped credentials are pinned to `organizationId =
+     tenantId` and the channel row is stored with `organization_id = NULL`. The dedup/heal
+     key ignores org, and push-delivery reads credentials at `channel.organizationId ?? tenantId`
+     = `tenantId`, so a cross-org reconnect (e.g. key rotation from a different org)
+     overwrites the one credential row delivery actually reads rather than orphaning it
+     under a per-org key.
 3. **Push dedup.** `createConnectedChannelRow` gains a heal key for identifier-less push
    channels — `{ tenantId, providerKey, channelType:'push', userId:null }` — so an admin
    reconnect updates the single shared row instead of inserting duplicates. Backed by a new
@@ -77,8 +88,9 @@ connect/write path stamped a per-user id. This change fixes that path only.
 - API `POST /api/communication_channels/channels/connect/tenant-credentials`:
   `channel-fcm/__integration__/TC-CHANNEL-PUSH-002.spec.ts` — 422 (tenant-scoped FCM adapter
   reached, empty creds rejected) and 400 (per-user IMAP rejected on the tenant route).
-- API `POST /api/communication_channels/channels/connect/credentials` (unchanged):
-  `TC-CHANNEL-PUSH-001.spec.ts` still green.
+- API `POST /api/communication_channels/channels/connect/credentials` (per-user):
+  `TC-CHANNEL-PUSH-001.spec.ts` — FCM (tenant-scoped) is refused with 403
+  `provider_is_tenant_scoped` (proves the adapter is registered and the privilege guard holds).
 - Unit — command scope: `communication_channels/commands/__tests__/connect-credential-channel.scope.test.ts`
   (tenant adapter → `user_id NULL` channel + credential row even when a user connected;
   per-user adapter keeps `user_id`).

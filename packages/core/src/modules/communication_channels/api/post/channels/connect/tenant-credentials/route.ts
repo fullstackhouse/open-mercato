@@ -118,6 +118,14 @@ export async function POST(req: Request): Promise<Response> {
   if (result.status === 'no_adapter') {
     return NextResponse.json({ error: result.reason }, { status: 404 })
   }
+  if (result.status === 'wrong_scope_for_route') {
+    // Unreachable in practice — this route always dispatches with userId: null —
+    // but handle it so the result union narrows and the invariant is explicit.
+    return NextResponse.json(
+      { error: 'Unexpected per-user scope on the tenant connect route.', code: 'wrong_scope_for_route' },
+      { status: 500 },
+    )
+  }
   if (result.status === 'validation_failed') {
     return NextResponse.json({ error: 'Credential validation failed', fieldErrors: result.errors }, { status: 422 })
   }
