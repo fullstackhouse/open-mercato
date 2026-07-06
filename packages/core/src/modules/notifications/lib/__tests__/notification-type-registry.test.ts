@@ -194,29 +194,18 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
 
   it('does not mirror a hiddenFromSettings type to the catalogue', async () => {
     registerNotificationTypes([def('admin.custom_message', { hiddenFromSettings: true, nonOptOut: true })])
-    const em = {
-      find: jest.fn(async () => [] as unknown[]),
-      create: jest.fn(),
-      persist: jest.fn(),
-      remove: jest.fn(),
-    }
+    const { em, recorded } = createFakeEm([])
     const result = await syncNotificationTypes(em as never, { force: true })
-    expect(em.create).not.toHaveBeenCalled()
+    expect(recorded.inserted).toHaveLength(0)
     expect(result.created).toBe(0)
   })
 
   it('drops a stale catalogue row when a type is flipped to hiddenFromSettings', async () => {
     registerNotificationTypes([def('admin.custom_message', { hiddenFromSettings: true })])
-    const row = { id: 'admin.custom_message' }
-    const em = {
-      find: jest.fn(async () => [row]),
-      create: jest.fn(),
-      persist: jest.fn(),
-      remove: jest.fn(),
-    }
+    const { em, recorded } = createFakeEm([{ id: 'admin.custom_message' }])
     const result = await syncNotificationTypes(em as never, { force: true })
-    expect(em.remove).toHaveBeenCalledWith(row)
-    expect(result.updated).toBe(1)
+    expect(recorded.deletedIds).toContain('admin.custom_message')
+    expect(result.deleted).toBe(1)
   })
 
   it('updates an existing row when category/silent drift', async () => {
