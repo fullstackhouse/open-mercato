@@ -3,6 +3,9 @@ import { Notification } from '../data/entities'
 import { NOTIFICATION_EVENTS } from '../lib/events'
 import { DEFAULT_NOTIFICATION_DELIVERY_CONFIG, resolveNotificationDeliveryConfig, resolveNotificationPanelUrl } from '../lib/deliveryConfig'
 import { getNotificationDeliveryStrategies, type NotificationDeliveryContext } from '../lib/deliveryStrategies'
+import { resolveEffectiveChannels } from '../lib/shouldDeliver'
+import { getNotificationType } from '../lib/notification-type-registry'
+import { resolveNotificationPreferenceService } from '../lib/notificationPreferenceService'
 import { resolveNotificationCopy } from '../lib/notificationCopy'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { User } from '../../auth/data/entities'
@@ -145,9 +148,19 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
       .filter((action): action is NonNullable<typeof action> => action !== null)
 
     const strategyConfigs = deliveryConfig.strategies.custom ?? {}
-    // Authoritative per-send target resolved at create time; null = every registered channel.
-    const targetChannels = notification.channels ?? null
     const strategies = getNotificationDeliveryStrategies()
+    // Authoritative per-send target resolved at create time. A null snapshot (legacy pre-Phase-7 row,
+    // or a create that ran before the delivery strategies were registered) would otherwise deliver
+    // every channel with no gate — so recompute the effective set from current preferences here,
+    // keeping the single `shouldDeliver` gate instead of re-checking opt-out inside each strategy.
+    const targetChannels = notification.channels ?? await resolveEffectiveChannels({
+      typeId: notification.type,
+      type: getNotificationType(notification.type),
+      scope: { tenantId: notification.tenantId, userId: notification.recipientUserId },
+      targetChannels: null,
+      registeredChannels: strategies.map((strategy) => strategy.id),
+      preferences: resolveNotificationPreferenceService({ resolve: ctx.resolve }),
+    })
     for (const strategy of strategies) {
       if (targetChannels && !targetChannels.includes(strategy.id)) {
         debug('channel not targeted', strategy.id)

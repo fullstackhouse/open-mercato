@@ -244,11 +244,15 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
   ): Promise<string[] | null> => {
     const registeredChannels = getNotificationDeliveryStrategies().map((strategy) => strategy.id)
     if (registeredChannels.length === 0) return null
+    // Treat an empty target as "no restriction" (all channels) rather than "no deliverable channel":
+    // a programmatic caller that computed an empty array should not silently black-hole the
+    // notification. The HTTP layer rejects an empty `channels` outright (see validators.ts).
+    const targetChannels = content.channels && content.channels.length > 0 ? content.channels : null
     return resolveEffectiveChannels({
       typeId: content.type,
       type: getNotificationType(content.type),
       scope: { tenantId: scopeCtx.tenantId, userId: recipientUserId },
-      targetChannels: content.channels ?? null,
+      targetChannels,
       registeredChannels,
       preferences,
     })

@@ -11,6 +11,9 @@ const sendEmailMock = jest.fn()
 const resolveNotificationDeliveryConfigMock = jest.fn()
 const resolveNotificationPanelUrlMock = jest.fn()
 const getNotificationDeliveryStrategiesMock = jest.fn()
+const resolveEffectiveChannelsMock = jest.fn()
+const getNotificationTypeMock = jest.fn()
+const resolveNotificationPreferenceServiceMock = jest.fn()
 
 jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
   findOneWithDecryption: (...args: unknown[]) => findOneWithDecryptionMock(...args),
@@ -40,6 +43,18 @@ jest.mock('../../lib/deliveryConfig', () => ({
 
 jest.mock('../../lib/deliveryStrategies', () => ({
   getNotificationDeliveryStrategies: () => getNotificationDeliveryStrategiesMock(),
+}))
+
+jest.mock('../../lib/shouldDeliver', () => ({
+  resolveEffectiveChannels: (...args: unknown[]) => resolveEffectiveChannelsMock(...args),
+}))
+
+jest.mock('../../lib/notification-type-registry', () => ({
+  getNotificationType: (...args: unknown[]) => getNotificationTypeMock(...args),
+}))
+
+jest.mock('../../lib/notificationPreferenceService', () => ({
+  resolveNotificationPreferenceService: (...args: unknown[]) => resolveNotificationPreferenceServiceMock(...args),
 }))
 
 jest.mock('../../emails/NotificationEmail', () => () => null)
@@ -84,6 +99,15 @@ describe('deliver-notification subscriber', () => {
     })
     resolveNotificationPanelUrlMock.mockReturnValue(null)
     getNotificationDeliveryStrategiesMock.mockReturnValue([])
+    // Default: a null-channels row recomputes to every registered channel (no opt-out), preserving
+    // pre-Phase-7 "deliver everywhere" behavior. Opt-out tests override this.
+    resolveEffectiveChannelsMock.mockImplementation(
+      async ({ registeredChannels }: { registeredChannels: string[] }) => registeredChannels,
+    )
+    getNotificationTypeMock.mockReturnValue(undefined)
+    resolveNotificationPreferenceServiceMock.mockReturnValue({
+      isChannelEnabled: jest.fn().mockResolvedValue(true),
+    })
     loadDictionaryMock.mockResolvedValue({})
     findOneWithDecryptionMock.mockImplementation(async (_em: unknown, entity: unknown) => {
       if (entity === Notification) return baseNotification
@@ -133,5 +157,61 @@ describe('deliver-notification subscriber', () => {
 
     await expect(handle(basePayload, buildCtx() as never)).resolves.toBeUndefined()
     expect(sendEmailMock).toHaveBeenCalledTimes(1)
+  })
+
+  describe('null channels snapshot (legacy / pre-bootstrap rows)', () => {
+    const pushDeliver = jest.fn()
+    const pushStrategy = { id: 'push', defaultEnabled: true, deliver: pushDeliver }
+
+    beforeEach(() => {
+      pushDeliver.mockReset()
+      getNotificationDeliveryStrategiesMock.mockReturnValue([pushStrategy])
+      findOneWithDecryptionMock.mockImplementation(async (_em: unknown, entity: unknown) => {
+        if (entity === Notification) return { ...baseNotification, type: 'orders.shipped', channels: null }
+        if (entity === User) return { email: 'user@example.com', name: 'User' }
+        return null
+      })
+    })
+
+    it('re-gates on current preferences and skips a channel the recipient opted out of', async () => {
+      resolveEffectiveChannelsMock.mockResolvedValue([]) // recipient opted out of push for this type
+
+      await handle(basePayload, buildCtx() as never)
+
+      expect(resolveEffectiveChannelsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          typeId: 'orders.shipped',
+          scope: { tenantId: 'tenant-1', userId: 'user-1' },
+          targetChannels: null,
+          registeredChannels: ['push'],
+        }),
+      )
+      expect(pushDeliver).not.toHaveBeenCalled()
+    })
+
+    it('delivers when the recipient has not opted out (recompute keeps the channel)', async () => {
+      resolveEffectiveChannelsMock.mockResolvedValue(['push'])
+
+      await handle(basePayload, buildCtx() as never)
+
+      expect(pushDeliver).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('honors a non-null channels snapshot without recomputing from preferences', async () => {
+    const pushDeliver = jest.fn()
+    getNotificationDeliveryStrategiesMock.mockReturnValue([
+      { id: 'push', defaultEnabled: true, deliver: pushDeliver },
+    ])
+    findOneWithDecryptionMock.mockImplementation(async (_em: unknown, entity: unknown) => {
+      if (entity === Notification) return { ...baseNotification, type: 'orders.shipped', channels: ['in_app'] }
+      if (entity === User) return { email: 'user@example.com', name: 'User' }
+      return null
+    })
+
+    await handle(basePayload, buildCtx() as never)
+
+    expect(resolveEffectiveChannelsMock).not.toHaveBeenCalled()
+    expect(pushDeliver).not.toHaveBeenCalled() // 'push' not in the ['in_app'] snapshot
   })
 })
