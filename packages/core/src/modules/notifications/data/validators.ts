@@ -61,8 +61,10 @@ const baseNotificationFieldsSchema = z.object({
   pushOptions: pushOptionsSchema.optional(),
   // Explicit per-send channel target. When present, delivery is restricted to these channels
   // (intersected with the type's eligibility, the registered strategies, and the recipient's
-  // preferences). Absent → all registered channels (pre-Phase-7 behavior).
-  channels: z.array(z.string().min(1).max(32)).optional(),
+  // preferences). Absent → all registered channels (pre-Phase-7 behavior). Must be non-empty when
+  // provided: an empty array would resolve to zero deliverable channels and silently black-hole the
+  // notification (invisible + undelivered) — omit the field instead to target every channel.
+  channels: z.array(z.string().min(1).max(32)).min(1).optional(),
 })
 
 const titleRequiredRefinement = {

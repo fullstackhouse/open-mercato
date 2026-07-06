@@ -8,6 +8,9 @@ const resolveNotificationDeliveryConfig = jest.fn()
 const resolveNotificationPanelUrl = jest.fn()
 const findOneWithDecryption = jest.fn()
 const NotificationEmail = jest.fn(() => 'notification-email')
+const resolveEffectiveChannels = jest.fn()
+const getNotificationType = jest.fn()
+const resolveNotificationPreferenceService = jest.fn()
 
 jest.mock('@open-mercato/shared/lib/email/send', () => ({
   sendEmail: (...args: unknown[]) => sendEmail(...args),
@@ -15,6 +18,18 @@ jest.mock('@open-mercato/shared/lib/email/send', () => ({
 
 jest.mock('../lib/deliveryStrategies', () => ({
   getNotificationDeliveryStrategies: (...args: unknown[]) => getNotificationDeliveryStrategies(...args),
+}))
+
+jest.mock('../lib/shouldDeliver', () => ({
+  resolveEffectiveChannels: (...args: unknown[]) => resolveEffectiveChannels(...args),
+}))
+
+jest.mock('../lib/notification-type-registry', () => ({
+  getNotificationType: (...args: unknown[]) => getNotificationType(...args),
+}))
+
+jest.mock('../lib/notificationPreferenceService', () => ({
+  resolveNotificationPreferenceService: (...args: unknown[]) => resolveNotificationPreferenceService(...args),
 }))
 
 // The real email strategy (its sendEmail + NotificationEmail deps are mocked above), so tests that
@@ -103,6 +118,15 @@ describe('deliver notification subscriber', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    // These fixtures carry no `channels` snapshot, so the dispatcher recomputes the target set. Default
+    // to a passthrough (every registered channel eligible) so the existing delivery assertions hold.
+    resolveEffectiveChannels.mockImplementation(
+      async ({ registeredChannels }: { registeredChannels: string[] }) => registeredChannels,
+    )
+    getNotificationType.mockReturnValue(undefined)
+    resolveNotificationPreferenceService.mockReturnValue({
+      isChannelEnabled: jest.fn().mockResolvedValue(true),
+    })
   })
 
   it('sends email notifications when enabled', async () => {
