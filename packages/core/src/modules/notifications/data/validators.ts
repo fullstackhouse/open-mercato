@@ -59,6 +59,10 @@ const baseNotificationFieldsSchema = z.object({
   data: z.record(z.string(), z.string()).optional(),
   // Per-provider push customization (sound, badge, image, priority, channelId, body override).
   pushOptions: pushOptionsSchema.optional(),
+  // Explicit per-send channel target. When present, delivery is restricted to these channels
+  // (intersected with the type's eligibility, the registered strategies, and the recipient's
+  // preferences). Absent → all registered channels (pre-Phase-7 behavior).
+  channels: z.array(z.string().min(1).max(32)).optional(),
 })
 
 const titleRequiredRefinement = {

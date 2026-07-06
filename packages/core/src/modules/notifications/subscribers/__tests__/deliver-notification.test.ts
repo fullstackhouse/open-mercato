@@ -1,6 +1,9 @@
 import handle from '../deliver-notification'
 import { Notification } from '../../data/entities'
 import { User } from '../../../auth/data/entities'
+// Real email strategy (sendEmail + NotificationEmail mocked below) — registered by tests that
+// exercise email, exactly as bootstrap would register it.
+import { emailDeliveryStrategy } from '../../lib/strategies/email-delivery-strategy'
 
 const findOneWithDecryptionMock = jest.fn()
 const loadDictionaryMock = jest.fn()
@@ -125,6 +128,7 @@ describe('deliver-notification subscriber', () => {
       },
     })
     resolveNotificationPanelUrlMock.mockReturnValue('https://app.example.com/notifications')
+    getNotificationDeliveryStrategiesMock.mockReturnValue([emailDeliveryStrategy])
     sendEmailMock.mockRejectedValue(new Error('SMTP connection refused'))
 
     await expect(handle(basePayload, buildCtx() as never)).resolves.toBeUndefined()

@@ -17,6 +17,10 @@ jest.mock('../lib/deliveryStrategies', () => ({
   getNotificationDeliveryStrategies: (...args: unknown[]) => getNotificationDeliveryStrategies(...args),
 }))
 
+// The real email strategy (its sendEmail + NotificationEmail deps are mocked above), so tests that
+// exercise email register it exactly like bootstrap would.
+import { emailDeliveryStrategy } from '../lib/strategies/email-delivery-strategy'
+
 jest.mock('../lib/deliveryConfig', () => ({
   DEFAULT_NOTIFICATION_DELIVERY_CONFIG: {
     panelPath: '/backend/notifications',
@@ -104,7 +108,7 @@ describe('deliver notification subscriber', () => {
   it('sends email notifications when enabled', async () => {
     resolveNotificationDeliveryConfig.mockResolvedValue(baseConfig)
     resolveNotificationPanelUrl.mockReturnValue('https://app.example.com/backend/notifications')
-    getNotificationDeliveryStrategies.mockReturnValue([])
+    getNotificationDeliveryStrategies.mockReturnValue([emailDeliveryStrategy])
     findOneWithDecryption
       .mockResolvedValueOnce(notification)
       .mockResolvedValueOnce({ email: 'user@example.com', name: 'User' })
@@ -206,7 +210,7 @@ describe('deliver notification subscriber', () => {
 
     resolveNotificationDeliveryConfig.mockResolvedValue(baseConfig)
     resolveNotificationPanelUrl.mockReturnValue('https://app.example.com/backend/notifications')
-    getNotificationDeliveryStrategies.mockReturnValue([])
+    getNotificationDeliveryStrategies.mockReturnValue([emailDeliveryStrategy])
     findOneWithDecryption
       .mockResolvedValueOnce(notificationWithActionHref)
       .mockResolvedValueOnce({ email: 'user@example.com', name: 'User' })
@@ -255,7 +259,7 @@ describe('deliver notification subscriber', () => {
 
     resolveNotificationDeliveryConfig.mockResolvedValue(configWithoutAppUrl)
     resolveNotificationPanelUrl.mockReturnValue(null)
-    getNotificationDeliveryStrategies.mockReturnValue([])
+    getNotificationDeliveryStrategies.mockReturnValue([emailDeliveryStrategy])
     findOneWithDecryption
       .mockResolvedValueOnce(notification)
       .mockResolvedValueOnce({ email: 'user@example.com', name: 'User' })

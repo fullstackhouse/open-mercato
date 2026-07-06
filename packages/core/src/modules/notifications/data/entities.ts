@@ -86,6 +86,12 @@ export class Notification {
   @Property({ name: 'push_options', type: 'json', nullable: true })
   pushOptions?: Record<string, unknown> | null
 
+  // Resolved delivery channels for this notification (target ∩ type-eligibility ∩ registered ∩ preference).
+  // Authoritative target filter the dispatcher loops over; `in_app` membership also gates bell/inbox visibility.
+  // NULL = legacy/all-channels (delivered and visible everywhere) — preserves pre-Phase-7 behavior.
+  @Property({ name: 'channels', type: 'json', nullable: true })
+  channels?: string[] | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
