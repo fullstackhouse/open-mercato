@@ -82,17 +82,18 @@ export default function ConnectApnsWidget({
     if (pending) return
     setPending(true)
     setFieldErrors({})
+    const displayName = form.displayName.trim() || 'Apple Push Notification service'
     try {
       const response = await runMutation({
         context: mutationContext,
-        mutationPayload: { providerKey: 'apns', displayName: form.displayName },
+        mutationPayload: { providerKey: 'apns', displayName },
         operation: () =>
           apiCall<ConnectResponse>('/api/communication_channels/channels/connect/tenant-credentials', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               providerKey: 'apns',
-              displayName: form.displayName.trim() || 'Apple Push Notification service',
+              displayName,
               credentials: {
                 p8Key: form.p8Key.trim(),
                 keyId: form.keyId.trim(),

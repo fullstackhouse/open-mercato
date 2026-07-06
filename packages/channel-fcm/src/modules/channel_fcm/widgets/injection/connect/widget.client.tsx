@@ -75,17 +75,18 @@ export default function ConnectFcmWidget({
     if (pending) return
     setPending(true)
     setFieldErrors({})
+    const displayName = form.displayName.trim() || 'Firebase Cloud Messaging'
     try {
       const response = await runMutation({
         context: mutationContext,
-        mutationPayload: { providerKey: 'fcm', displayName: form.displayName },
+        mutationPayload: { providerKey: 'fcm', displayName },
         operation: () =>
           apiCall<ConnectResponse>('/api/communication_channels/channels/connect/tenant-credentials', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               providerKey: 'fcm',
-              displayName: form.displayName.trim() || 'Firebase Cloud Messaging',
+              displayName,
               credentials: {
                 serviceAccountJson: form.serviceAccountJson.trim(),
                 ...(form.appName.trim() ? { appName: form.appName.trim() } : {}),
