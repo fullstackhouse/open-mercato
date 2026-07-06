@@ -1969,6 +1969,11 @@ function buildReusableEnvironment(
     OM_ENABLE_ENTERPRISE_MODULES_SECURITY: process.env.OM_ENABLE_ENTERPRISE_MODULES_SECURITY ?? enterpriseModulesFlag,
     OM_TEST_MODE: '1',
     OM_TEST_AUTH_RATE_LIMIT_MODE: 'opt-in',
+    // Register the test-only `push_stub` channel adapter in the reused Playwright
+    // process (and any drain/worker child it spawns) so push integration specs can
+    // drive real delivery. Production-safe + inert unless a delivery row carries
+    // `provider='push_stub'`. Mirrors the fresh-environment app server env below.
+    OM_ENABLE_PUSH_STUB_ADAPTER: process.env.OM_ENABLE_PUSH_STUB_ADAPTER ?? '1',
     // Tests assert on access_logs immediately after CRUD reads; keep the
     // blocking write path on inside the integration runtime so tests do
     // not have to call flushPendingCrudAccessLogs() explicitly.
@@ -3322,6 +3327,14 @@ export async function startEphemeralEnvironment(options: EphemeralRuntimeOptions
       OM_ENABLE_ENTERPRISE_MODULES_SECURITY: process.env.OM_ENABLE_ENTERPRISE_MODULES_SECURITY ?? enterpriseModulesFlag,
       OM_TEST_MODE: '1',
       OM_TEST_AUTH_RATE_LIMIT_MODE: 'opt-in',
+      // Register the network-free `push_stub` channel adapter so push integration
+      // specs (TC-PUSH-003) can drive the strategy → delivery-row → send-push worker
+      // → sendMessage chain end-to-end without a real FCM/APNs/Expo provider. The
+      // adapter is production-safe (registered only under this flag) and inert unless
+      // a delivery row carries `provider='push_stub'` — i.e. a test seeded a matching
+      // push channel + device. Applies to the app server, the Playwright process, and
+      // any drain/worker child that inherits this environment.
+      OM_ENABLE_PUSH_STUB_ADAPTER: process.env.OM_ENABLE_PUSH_STUB_ADAPTER ?? '1',
       OM_DISABLE_EMAIL_DELIVERY: '1',
       OM_WEBHOOKS_ALLOW_PRIVATE_URLS: process.env.OM_WEBHOOKS_ALLOW_PRIVATE_URLS ?? '1',
       ENABLE_CRUD_API_CACHE: 'true',

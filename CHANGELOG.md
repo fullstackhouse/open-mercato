@@ -1,4 +1,9 @@
 
+# Unreleased
+
+## ✨ Features
+- ✨ Devices & Push Notifications: `devices`, `notifications`, `push_notifications`, and `communication_channels` modules plus the `channel-fcm` / `channel-apns` / `channel-expo` provider packages deliver end-to-end mobile push. See the [Devices & Push Notifications getting-started guide](apps/docs/docs/tutorials/devices-and-push-getting-started.mdx).
+
 # 0.6.6 (2026-07-13)
 
 ## Highlights
