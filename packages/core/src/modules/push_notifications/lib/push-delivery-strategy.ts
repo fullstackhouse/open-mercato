@@ -1,7 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { NotificationDeliveryStrategy } from '@open-mercato/core/modules/notifications/lib/deliveryStrategies'
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
-import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import type { NotificationCopySource } from '@open-mercato/core/modules/notifications/lib/notificationCopy'
 import { fanOutPushDeliveries, PUSH_CHANNEL, type PushFanoutPayload } from './push-fanout'
@@ -45,14 +44,9 @@ export const mobilePushDeliveryStrategy: NotificationDeliveryStrategy = {
     const em = ctx.resolve('em') as EntityManager
     const silent = type.silent === true
 
-    // Respect the recipient's per-channel preference (default-on when unset). Only `nonOptOut`
-    // types skip the opt-out check (security/account alerts the user cannot disable). `silent`
-    // pushes are opt-out-able like any other: silent controls delivery style, not enforcement.
-    if (type.nonOptOut !== true) {
-      const preferences = resolveNotificationPreferenceService({ resolve: ctx.resolve })
-      const enabled = await preferences.isChannelEnabled({ tenantId, userId }, notification.type, PUSH_CHANNEL)
-      if (!enabled) return
-    }
+    // Per-channel opt-out / `nonOptOut` is enforced once, upstream, at create time: the dispatcher
+    // only invokes this strategy when `push ∈ notification.channels` (the resolved target snapshot).
+    // `silent` still controls delivery STYLE only (content-available wake-up vs visible alert).
 
     // App-readable data payload: caller-supplied custom fields plus the system identifiers.
     const data: Record<string, string> = { ...(notification.data ?? {}) }
