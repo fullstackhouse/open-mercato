@@ -2,9 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { Notification } from '../data/entities'
 import { NOTIFICATION_EVENTS } from '../lib/events'
 import { DEFAULT_NOTIFICATION_DELIVERY_CONFIG, resolveNotificationDeliveryConfig, resolveNotificationPanelUrl } from '../lib/deliveryConfig'
-import { getNotificationDeliveryStrategies } from '../lib/deliveryStrategies'
-import { sendEmail } from '@open-mercato/shared/lib/email/send'
-import NotificationEmail from '../emails/NotificationEmail'
+import { getNotificationDeliveryStrategies, type NotificationDeliveryContext } from '../lib/deliveryStrategies'
 import { resolveNotificationCopy } from '../lib/notificationCopy'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { User } from '../../auth/data/entities'
@@ -76,13 +74,18 @@ const resolveRecipient = async (
   }
 }
 
-
+/**
+ * Dispatches a created notification across every registered delivery channel. This is a pure
+ * "resolve copy → loop strategies" loop with NO channel-specific branches: in-app, email, and push
+ * are all first-class strategies on the seam. Per-channel opt-out / `nonOptOut` / `silent` /
+ * eligibility / per-send targeting were already resolved once at create time into
+ * `notification.channels` (see `shouldDeliver`); here we only replay that target set and apply each
+ * strategy's technical short-circuits (`supports`, `isConfigured`). `notification.channels === null`
+ * means "all channels" (legacy rows + pre-Phase-7 behavior).
+ */
 export default async function handle(payload: NotificationCreatedPayload, ctx: ResolverContext) {
   debug('deliver notification event', payload)
   const deliveryConfig = await resolveNotificationDeliveryConfig(ctx, { defaultValue: DEFAULT_NOTIFICATION_DELIVERY_CONFIG })
-  if (!deliveryConfig.strategies.email.enabled) {
-    debug('email delivery disabled')
-  }
 
   const em = ctx.resolve('em') as EntityManager
   const notification = await findOneWithDecryption(
@@ -141,61 +144,44 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
       })
       .filter((action): action is NonNullable<typeof action> => action !== null)
 
-    if (deliveryConfig.strategies.email.enabled && recipient?.email && panelLink) {
-      const subjectPrefix = deliveryConfig.strategies.email.subjectPrefix?.trim()
-      const subject = subjectPrefix ? `${subjectPrefix} ${title}` : title
-      const copy = {
-        preview: t('notifications.delivery.email.preview', 'New notification'),
-        heading: t('notifications.delivery.email.heading', 'You have a new notification'),
-        bodyIntro: t('notifications.delivery.email.bodyIntro', 'Review the notification details and take any required actions.'),
-        actionNotice: t('notifications.delivery.email.actionNotice', 'Actions are available in Open Mercato and are read-only in this email.'),
-        openCta: t('notifications.delivery.email.openCta', 'Open notification center'),
-        footer: t('notifications.delivery.email.footer', 'Open Mercato notifications'),
-      }
-
-      try {
-        debug('sending email', { to: recipient.email, from: deliveryConfig.strategies.email.from, subject })
-        await sendEmail({
-          to: recipient.email,
-          subject,
-          from: deliveryConfig.strategies.email.from,
-          replyTo: deliveryConfig.strategies.email.replyTo,
-          react: NotificationEmail({
-            title,
-            body,
-            actions: actionLinks,
-            panelUrl: panelLink,
-            copy,
-          }),
-        })
-      } catch (error) {
-        console.error('[notifications] email delivery failed', error)
-      }
-    }
-
     const strategyConfigs = deliveryConfig.strategies.custom ?? {}
+    // Authoritative per-send target resolved at create time; null = every registered channel.
+    const targetChannels = notification.channels ?? null
     const strategies = getNotificationDeliveryStrategies()
     for (const strategy of strategies) {
+      if (targetChannels && !targetChannels.includes(strategy.id)) {
+        debug('channel not targeted', strategy.id)
+        continue
+      }
       const strategyConfig = strategyConfigs[strategy.id]
       const enabled = strategyConfig?.enabled ?? strategy.defaultEnabled ?? false
       if (!enabled) {
-        debug('custom delivery disabled', strategy.id)
+        debug('delivery disabled', strategy.id)
         continue
       }
+      if (strategy.supports && !strategy.supports(notification)) {
+        debug('strategy does not support notification', strategy.id)
+        continue
+      }
+      const context: NotificationDeliveryContext = {
+        notification,
+        recipient,
+        title,
+        body,
+        panelUrl,
+        panelLink,
+        actionLinks,
+        deliveryConfig,
+        config: strategyConfig ?? {},
+        resolve: ctx.resolve,
+        t,
+      }
       try {
-        await strategy.deliver({
-          notification,
-          recipient,
-          title,
-          body,
-          panelUrl,
-          panelLink,
-          actionLinks,
-          deliveryConfig,
-          config: strategyConfig ?? {},
-          resolve: ctx.resolve,
-          t,
-        })
+        if (strategy.isConfigured && !(await strategy.isConfigured(context))) {
+          debug('strategy not configured', strategy.id)
+          continue
+        }
+        await strategy.deliver(context)
       } catch (error) {
         console.error(`[notifications] delivery strategy failed (${strategy.id})`, error)
       }
