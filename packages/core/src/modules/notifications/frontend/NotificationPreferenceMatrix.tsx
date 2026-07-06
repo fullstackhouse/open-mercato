@@ -24,6 +24,13 @@ export const PREFERENCE_CHANNELS: ChannelDef[] = [
     hintFallback: 'Notification center and bell.',
   },
   {
+    key: 'email',
+    labelKey: 'notifications.preferences.channels.email',
+    labelFallback: 'Email',
+    hintKey: 'notifications.preferences.channels.emailHint',
+    hintFallback: 'Sent to your account email address.',
+  },
+  {
     key: 'push',
     labelKey: 'notifications.preferences.channels.push',
     labelFallback: 'Push',
