@@ -73,17 +73,18 @@ export default function ConnectExpoWidget({
     if (pending) return
     setPending(true)
     setFieldErrors({})
+    const displayName = form.displayName.trim() || 'Expo Push'
     try {
       const response = await runMutation({
         context: mutationContext,
-        mutationPayload: { providerKey: 'expo', displayName: form.displayName },
+        mutationPayload: { providerKey: 'expo', displayName },
         operation: () =>
           apiCall<ConnectResponse>('/api/communication_channels/channels/connect/tenant-credentials', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               providerKey: 'expo',
-              displayName: form.displayName.trim() || 'Expo Push',
+              displayName,
               credentials: {
                 ...(form.accessToken.trim() ? { accessToken: form.accessToken.trim() } : {}),
               },
