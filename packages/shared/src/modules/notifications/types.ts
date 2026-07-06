@@ -104,6 +104,31 @@ export type NotificationTypeDefinition = {
    * lives in the in-memory registry for delivery logic (`getNotificationType`).
    */
   hiddenFromSettings?: boolean
+  /**
+   * Optional per-type channel eligibility: the delivery channels this type may EVER use
+   * (e.g. a marketing type restricted to `['push']` so it never lands in the in-app bell).
+   * The dispatcher intersects it with the per-send target, the registered strategies, and the
+   * recipient's preferences via `shouldDeliver`. Omit to make the type eligible for every
+   * registered channel (pre-Phase-7 behavior).
+   */
+  channels?: string[]
+}
+
+/**
+ * A delivery channel in the module-registered channel catalogue. Any module can contribute channels
+ * by exporting `notificationChannels: NotificationChannelDefinition[]` from a `notification-channels.ts`
+ * file (generator-discovered), so a preferences UI and the `/api/notifications/channels` endpoint stay
+ * in sync with the actual delivery paths without a hardcoded list. `id` matches the delivery-strategy id
+ * (`in_app`, `email`, `push`, …) — treat it as a FROZEN contract once shipped.
+ */
+export type NotificationChannelDefinition = {
+  id: string
+  /** i18n key for the channel's display name in a preferences UI. */
+  labelKey: string
+  /** Optional i18n key for helper text shown beside the channel. */
+  descriptionKey?: string
+  /** Ascending display order; entries without an order sort after ordered ones, then by id. */
+  order?: number
 }
 
 export type NotificationDto = {
@@ -132,6 +157,8 @@ export type NotificationDto = {
   linkHref?: string | null
   /** Arbitrary app-readable key/values attached at create time (also delivered with the push). */
   data?: Record<string, string> | null
+  /** Resolved delivery channels for this notification. `null` = all channels (legacy/untargeted). */
+  channels?: string[] | null
   createdAt: string
   readAt?: string | null
   actionTaken?: string | null
