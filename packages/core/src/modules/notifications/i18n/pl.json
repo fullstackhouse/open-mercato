@@ -31,6 +31,8 @@
   "notifications.preferences.admin.searching": "Wyszukiwanie...",
   "notifications.preferences.channels.inApp": "W aplikacji",
   "notifications.preferences.channels.inAppHint": "Centrum powiadomień i dzwonek.",
+  "notifications.preferences.channels.email": "E-mail",
+  "notifications.preferences.channels.emailHint": "Wysyłane na adres e-mail Twojego konta.",
   "notifications.preferences.channels.push": "Push",
   "notifications.preferences.channels.pushHint": "Powiadomienia push (aktywne po podłączeniu kanału push).",
   "notifications.preferences.columns.type": "Typ powiadomienia",

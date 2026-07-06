@@ -9,15 +9,19 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import {
   NotificationPreferenceMatrix,
+  PREFERENCE_CHANNELS,
   buildPreferenceMap,
   diffPreferenceItems,
   preferenceKey,
+  toChannelDef,
+  type ChannelDef,
   type NotificationTypeItem,
   type PreferenceItem,
 } from './NotificationPreferenceMatrix'
 
 type TypesResponse = { items?: NotificationTypeItem[] }
 type PreferencesResponse = { items?: PreferenceItem[] }
+type ChannelsResponse = { items?: Array<{ id: string; labelKey: string; descriptionKey?: string | null }> }
 type SaveResponse = { ok?: boolean; error?: string }
 
 const PREFERENCES_CONTEXT_ID = 'notifications-preferences'
@@ -25,6 +29,7 @@ const PREFERENCES_CONTEXT_ID = 'notifications-preferences'
 export function NotificationPreferencesPageClient() {
   const t = useT()
   const [types, setTypes] = React.useState<NotificationTypeItem[] | null>(null)
+  const [channels, setChannels] = React.useState<ChannelDef[]>(PREFERENCE_CHANNELS)
   const [prefs, setPrefs] = React.useState<Record<string, boolean>>({})
   // The state as last loaded/saved; saves send only the entries that differ from this.
   const initialPrefs = React.useRef<Record<string, boolean>>({})
@@ -45,7 +50,7 @@ export function NotificationPreferencesPageClient() {
     setLoading(true)
     setError(null)
     try {
-      const [typesBody, prefsBody] = await Promise.all([
+      const [typesBody, prefsBody, channelsBody] = await Promise.all([
         readApiResultOrThrow<TypesResponse>('/api/notifications/types', undefined, {
           errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'),
           allowNullResult: true,
@@ -54,10 +59,16 @@ export function NotificationPreferencesPageClient() {
           errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'),
           allowNullResult: true,
         }),
+        readApiResultOrThrow<ChannelsResponse>('/api/notifications/channels', undefined, {
+          errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'),
+          allowNullResult: true,
+        }),
       ])
       const typeItems = typesBody?.items ?? []
       setTypes(typeItems)
-      const map = buildPreferenceMap(typeItems, prefsBody?.items ?? [])
+      const channelDefs = channelsBody?.items?.length ? channelsBody.items.map(toChannelDef) : PREFERENCE_CHANNELS
+      setChannels(channelDefs)
+      const map = buildPreferenceMap(typeItems, prefsBody?.items ?? [], channelDefs)
       initialPrefs.current = map
       setPrefs(map)
     } catch (err) {
@@ -81,7 +92,7 @@ export function NotificationPreferencesPageClient() {
     if (!types) return
     setSaving(true)
     try {
-      const preferences = diffPreferenceItems(types, initialPrefs.current, prefs)
+      const preferences = diffPreferenceItems(types, initialPrefs.current, prefs, channels)
       // Nothing changed since load/last save — skip the no-op write entirely.
       if (preferences.length === 0) {
         flash(t('notifications.preferences.saveSuccess', 'Notification preferences saved'), 'success')
@@ -128,7 +139,7 @@ export function NotificationPreferencesPageClient() {
         </p>
       </div>
 
-      <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} />
+      <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} channels={channels} />
 
       {error && <ErrorMessage label={error} />}
 
