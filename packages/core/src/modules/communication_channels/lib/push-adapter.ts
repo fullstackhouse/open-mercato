@@ -59,6 +59,10 @@ export function readPushToken(input: SendMessageInput): string | null {
 export abstract class BasePushChannelAdapter implements ChannelAdapter {
   abstract readonly providerKey: string
   readonly channelType = 'push'
+  // Push credentials (service account / signing key) serve every device in the
+  // tenant, so a push channel is tenant-wide (user_id = NULL), connected by an
+  // admin — never a per-user channel. Covers fcm/apns/expo + the test stub.
+  readonly channelScope = 'tenant' as const
   readonly capabilities: ChannelCapabilities = pushChannelCapabilities
 
   /** Zod schema for this provider's tenant-level credentials; drives `validateCredentials`. */
