@@ -29,7 +29,7 @@ jest.mock('kysely', () => ({
   sql: (_strings: TemplateStringsArray, ...values: unknown[]) => ({ __rawJson: values[0] }),
 }))
 
-function decodePayload(row: Record<string, unknown>): { data: Record<string, string>; options?: Record<string, unknown>; silent?: boolean } {
+function decodePayload(row: Record<string, unknown>): { title?: string; body?: string | null; data: Record<string, string>; options?: Record<string, unknown>; silent?: boolean } {
   return JSON.parse((row.payload as { __rawJson: string }).__rawJson)
 }
 
@@ -299,16 +299,16 @@ describe('mobilePushDeliveryStrategy', () => {
   })
 
   it('reuses the default-locale copy for a device without a locale (no translation)', async () => {
-    const { ctx, fork } = makeCtx({
+    const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
       notification: { titleKey: 'orders.shipped.title', bodyKey: 'orders.shipped.body' },
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    const row = fork.create.mock.calls[0][1] as { payload: { title?: string; body?: string | null } }
+    const payload = decodePayload(captured.insertRows![0])
     // ctx.title/ctx.body are already resolved in the default locale upstream and reused verbatim.
-    expect(row.payload.title).toBe('Shipped')
-    expect(row.payload.body).toBe('Your order shipped')
+    expect(payload.title).toBe('Shipped')
+    expect(payload.body).toBe('Your order shipped')
   })
 
   it('translates the delivery copy into the device locale', async () => {
@@ -318,7 +318,7 @@ describe('mobilePushDeliveryStrategy', () => {
     ] as never)
     invalidateDictionaryCache()
 
-    const { ctx, fork } = makeCtx({
+    const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       // `pl-PL` also exercises locale normalization (region subtag stripped to `pl`).
       devices: [{ id: 'dev-pl', pushToken: 'token-pltoken1', pushProvider: 'fcm', locale: 'pl-PL' }],
@@ -329,9 +329,9 @@ describe('mobilePushDeliveryStrategy', () => {
       },
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    const row = fork.create.mock.calls[0][1] as { payload: { title?: string; body?: string | null } }
-    expect(row.payload.title).toBe('Wysłano 42')
-    expect(row.payload.body).toBe('W drodze')
+    const payload = decodePayload(captured.insertRows![0])
+    expect(payload.title).toBe('Wysłano 42')
+    expect(payload.body).toBe('W drodze')
   })
 
   it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {
@@ -369,20 +369,20 @@ describe('mobilePushDeliveryStrategy', () => {
   it('skips a silent-typed notification when the recipient opted out of push', async () => {
     getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
     isChannelEnabledMock.mockResolvedValue(false)
-    const { ctx, fork } = makeCtx({
+    const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
     expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
-    expect(fork.create).not.toHaveBeenCalled()
+    expect(captured.insertRows).toBeNull()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
   it('forces a silent nonOptOut-typed notification even when the recipient opted out', async () => {
     getTypeMock.mockReturnValue({ type: 'orders.sync', silent: true, nonOptOut: true } as never)
     isChannelEnabledMock.mockResolvedValue(false)
-    const { ctx, fork } = makeCtx({
+    const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
       notification: { type: 'orders.sync' },
@@ -391,7 +391,7 @@ describe('mobilePushDeliveryStrategy', () => {
     // nonOptOut still bypasses the gate; silent merely sets the delivery style.
     expect(isChannelEnabledMock).not.toHaveBeenCalled()
     expect(enqueueMock).toHaveBeenCalledTimes(1)
-    const row = fork.create.mock.calls[0][1] as { silent: boolean }
+    const row = captured.insertRows![0]
     expect(row.silent).toBe(true)
   })
 })
