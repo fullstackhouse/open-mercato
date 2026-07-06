@@ -10,9 +10,18 @@ In-app notifications plus two channel-agnostic surfaces that every delivery chan
 - Keep API URLs **STABLE**: `/api/notifications/types`, `/api/notifications/preferences` are additive-only.
 - Wire custom write routes through the mutation guard via `runGuardedNotificationWrite(...)` in `lib/routeHelpers.ts` (the preferences `PUT` does this).
 
+## Delivery channels & the gate (Phase 7)
+
+- **Every channel is a strategy on one seam.** `in_app`, `email`, and `push` are all `NotificationDeliveryStrategy` objects (`lib/deliveryStrategies.ts`), registered via a `notifications.delivery-strategies.ts` convention file discovered by the `delivery-strategies` generator plugin. `in_app` is a no-op strategy — the durable `Notification` row IS the in-app delivery; its bell/inbox **visibility** is `in_app ∈ notification.channels` (see `lib/notificationVisibility.ts`), applied at the read layer, not by the strategy.
+- **One gate, at create time.** `notificationService.create*` calls `resolveEffectiveChannels` (`lib/shouldDeliver.ts`) once per recipient — composing per-send target (`input.channels`) ∩ per-type eligibility (`NotificationTypeDefinition.channels`) ∩ registered strategies ∩ the recipient's per-channel preference (`nonOptOut` bypasses opt-out; `silent` is orthogonal) — and snapshots the result on `Notification.channels`. The dispatch subscriber then just loops the registered strategies filtered by that set (`NULL ⇒ all channels`, legacy/BC). **Do not** re-implement opt-out logic inside a strategy — the gate already ran. Use `isConfigured(ctx)`/`supports(notification)` only for technical deliverability.
+- **Absent `channels` on a create call ⇒ all channels** (unchanged behavior). Pass `channels: ['push']` (etc.) to target a subset.
+- **Channel catalogue.** Add a channel's UI metadata by exporting `notificationChannels: NotificationChannelDefinition[]` from a `notification-channels.ts` (generator-discovered → `getNotificationChannels()` → `GET /api/notifications/channels`; the preferences UI reads it). Keep each delivery-strategy `id` and its channel-definition `id` in sync — behavior layer (strategy registry) + metadata layer (channel registry), same id.
+- **When adding an in-app read surface** (a new bell/inbox/count query), AND-in `inAppVisibleFilter()` so suppressed rows stay hidden.
+
 ## Never
 
 - Never create a cross-module ORM relationship to `notification_types` / `notification_preferences`. `NotificationPreference.notificationTypeId` is a **soft string ref** to a type id, not a FK relation.
+- Never gate per-user opt-out inside a delivery strategy — enforcement is centralized in the create-time gate (`shouldDeliver`). A strategy that re-checks preferences double-counts and drifts.
 - Never write per-tenant rows into `notification_types`. Code-registered types are **system-wide** (`tenant_id IS NULL`); the column is nullable only to leave room for future tenant-defined types.
 - Never expose another tenant's preferences — all reads/writes are scoped by `(tenantId, userId)`.
 

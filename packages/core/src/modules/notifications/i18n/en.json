@@ -31,6 +31,8 @@
   "notifications.preferences.admin.searching": "Searching...",
   "notifications.preferences.channels.inApp": "In-app",
   "notifications.preferences.channels.inAppHint": "Notification center and bell.",
+  "notifications.preferences.channels.email": "Email",
+  "notifications.preferences.channels.emailHint": "Sent to your account email address.",
   "notifications.preferences.channels.push": "Push",
   "notifications.preferences.channels.pushHint": "Mobile push (active once a push channel is connected).",
   "notifications.preferences.columns.type": "Notification type",

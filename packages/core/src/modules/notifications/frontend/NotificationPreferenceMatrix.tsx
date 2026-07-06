@@ -9,6 +9,12 @@ export type PreferenceItem = { notificationTypeId: string; channel: string; enab
 
 export type ChannelDef = { key: string; labelKey: string; labelFallback: string; hintKey: string; hintFallback: string }
 
+/**
+ * Resilient fallback channel list used only while the `/api/notifications/channels` catalogue is
+ * loading or when the fetch fails. The authoritative source is the module-registered channel
+ * catalogue (see `notification-channels.ts`); callers pass the fetched channels into the helpers
+ * and the component. Keep this list minimal — it is a safety net, not the source of truth.
+ */
 export const PREFERENCE_CHANNELS: ChannelDef[] = [
   {
     key: 'in_app',
@@ -16,6 +22,13 @@ export const PREFERENCE_CHANNELS: ChannelDef[] = [
     labelFallback: 'In-app',
     hintKey: 'notifications.preferences.channels.inAppHint',
     hintFallback: 'Notification center and bell.',
+  },
+  {
+    key: 'email',
+    labelKey: 'notifications.preferences.channels.email',
+    labelFallback: 'Email',
+    hintKey: 'notifications.preferences.channels.emailHint',
+    hintFallback: 'Sent to your account email address.',
   },
   {
     key: 'push',
@@ -26,6 +39,17 @@ export const PREFERENCE_CHANNELS: ChannelDef[] = [
   },
 ]
 
+/** Map a `/api/notifications/channels` item to the UI channel shape. */
+export function toChannelDef(item: { id: string; labelKey: string; descriptionKey?: string | null }): ChannelDef {
+  return {
+    key: item.id,
+    labelKey: item.labelKey,
+    labelFallback: item.id,
+    hintKey: item.descriptionKey ?? '',
+    hintFallback: '',
+  }
+}
+
 export function preferenceKey(typeId: string, channel: string): string {
   return `${typeId}::${channel}`
 }
@@ -34,11 +58,12 @@ export function preferenceKey(typeId: string, channel: string): string {
 export function buildPreferenceMap(
   types: NotificationTypeItem[],
   stored: PreferenceItem[],
+  channels: ChannelDef[] = PREFERENCE_CHANNELS,
 ): Record<string, boolean> {
   const storedMap = new Map(stored.map((item) => [preferenceKey(item.notificationTypeId, item.channel), item.enabled]))
   const next: Record<string, boolean> = {}
   for (const type of types) {
-    for (const channel of PREFERENCE_CHANNELS) {
+    for (const channel of channels) {
       const key = preferenceKey(type.id, channel.key)
       next[key] = storedMap.get(key) ?? true
     }
@@ -55,10 +80,11 @@ export function diffPreferenceItems(
   types: NotificationTypeItem[],
   initial: Record<string, boolean>,
   current: Record<string, boolean>,
+  channels: ChannelDef[] = PREFERENCE_CHANNELS,
 ): PreferenceItem[] {
   const items: PreferenceItem[] = []
   for (const type of types) {
-    for (const channel of PREFERENCE_CHANNELS) {
+    for (const channel of channels) {
       const key = preferenceKey(type.id, channel.key)
       const before = initial[key] ?? true
       const after = current[key] ?? true
@@ -75,9 +101,16 @@ export type NotificationPreferenceMatrixProps = {
   prefs: Record<string, boolean>
   onToggle: (typeId: string, channel: string, enabled: boolean) => void
   disabled?: boolean
+  channels?: ChannelDef[]
 }
 
-export function NotificationPreferenceMatrix({ types, prefs, onToggle, disabled }: NotificationPreferenceMatrixProps) {
+export function NotificationPreferenceMatrix({
+  types,
+  prefs,
+  onToggle,
+  disabled,
+  channels = PREFERENCE_CHANNELS,
+}: NotificationPreferenceMatrixProps) {
   const t = useT()
 
   if (types.length === 0) {
@@ -94,7 +127,7 @@ export function NotificationPreferenceMatrix({ types, prefs, onToggle, disabled 
         <thead>
           <tr className="border-b border-border bg-muted/50 text-left">
             <th className="px-4 py-3 font-medium">{t('notifications.preferences.columns.type', 'Notification type')}</th>
-            {PREFERENCE_CHANNELS.map((channel) => (
+            {channels.map((channel) => (
               <th key={channel.key} className="px-4 py-3 font-medium">
                 <div>{t(channel.labelKey, channel.labelFallback)}</div>
                 <div className="text-xs font-normal text-muted-foreground">{t(channel.hintKey, channel.hintFallback)}</div>
@@ -111,7 +144,7 @@ export function NotificationPreferenceMatrix({ types, prefs, onToggle, disabled 
                   <div className="text-xs text-muted-foreground">{t(type.descriptionKey, '')}</div>
                 ) : null}
               </td>
-              {PREFERENCE_CHANNELS.map((channel) => (
+              {channels.map((channel) => (
                 <td key={channel.key} className="px-4 py-3">
                   <Switch
                     checked={prefs[preferenceKey(type.id, channel.key)] ?? true}

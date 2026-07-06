@@ -10,15 +10,19 @@ import { LoadingMessage } from '@open-mercato/ui/backend/detail'
 import { LookupSelect, type LookupSelectItem } from '@open-mercato/ui/backend/inputs'
 import {
   NotificationPreferenceMatrix,
+  PREFERENCE_CHANNELS,
   buildPreferenceMap,
   diffPreferenceItems,
   preferenceKey,
+  toChannelDef,
+  type ChannelDef,
   type NotificationTypeItem,
   type PreferenceItem,
 } from './NotificationPreferenceMatrix'
 
 type TypesResponse = { items?: NotificationTypeItem[] }
 type PreferencesResponse = { items?: PreferenceItem[] }
+type ChannelsResponse = { items?: Array<{ id: string; labelKey: string; descriptionKey?: string | null }> }
 type SaveResponse = { ok?: boolean; error?: string }
 
 type UserRow = { id: string; name?: string | null; email?: string | null }
@@ -33,6 +37,7 @@ function userLabel(user: UserRow): string {
 export function NotificationUserPreferencesAdminPageClient() {
   const t = useT()
   const [types, setTypes] = React.useState<NotificationTypeItem[]>([])
+  const [channels, setChannels] = React.useState<ChannelDef[]>(PREFERENCE_CHANNELS)
   const [typesLoading, setTypesLoading] = React.useState(true)
   const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null)
   // id -> display label, populated as options are fetched so the heading can name the selected user.
@@ -57,11 +62,20 @@ export function NotificationUserPreferencesAdminPageClient() {
     ;(async () => {
       setTypesLoading(true)
       try {
-        const body = await readApiResultOrThrow<TypesResponse>('/api/notifications/types', undefined, {
-          errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'),
-          allowNullResult: true,
-        })
-        if (!cancelled) setTypes(body?.items ?? [])
+        const [body, channelsBody] = await Promise.all([
+          readApiResultOrThrow<TypesResponse>('/api/notifications/types', undefined, {
+            errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'),
+            allowNullResult: true,
+          }),
+          readApiResultOrThrow<ChannelsResponse>('/api/notifications/channels', undefined, {
+            errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'),
+            allowNullResult: true,
+          }),
+        ])
+        if (!cancelled) {
+          setTypes(body?.items ?? [])
+          setChannels(channelsBody?.items?.length ? channelsBody.items.map(toChannelDef) : PREFERENCE_CHANNELS)
+        }
       } catch (err) {
         if (!cancelled) flash(err instanceof Error ? err.message : t('notifications.preferences.loadError', 'Failed to load notification preferences'), 'error')
       } finally {
@@ -99,7 +113,7 @@ export function NotificationUserPreferencesAdminPageClient() {
         undefined,
         { errorMessage: t('notifications.preferences.loadError', 'Failed to load notification preferences'), allowNullResult: true },
       )
-      const map = buildPreferenceMap(types, body?.items ?? [])
+      const map = buildPreferenceMap(types, body?.items ?? [], channels)
       initialPrefs.current = map
       setPrefs(map)
     } catch (err) {
@@ -108,7 +122,7 @@ export function NotificationUserPreferencesAdminPageClient() {
     } finally {
       setPrefsLoading(false)
     }
-  }, [t, types])
+  }, [t, types, channels])
 
   const handleSelectUser = (userId: string | null) => {
     setSelectedUserId(userId)
@@ -123,7 +137,7 @@ export function NotificationUserPreferencesAdminPageClient() {
     if (!selectedUserId) return
     setSaving(true)
     try {
-      const preferences = diffPreferenceItems(types, initialPrefs.current, prefs)
+      const preferences = diffPreferenceItems(types, initialPrefs.current, prefs, channels)
       // Nothing changed for this user since load/last save — skip the no-op write.
       if (preferences.length === 0) {
         flash(t('notifications.preferences.saveSuccess', 'Notification preferences saved'), 'success')
@@ -183,7 +197,7 @@ export function NotificationUserPreferencesAdminPageClient() {
             <LoadingMessage label={t('notifications.preferences.loading', 'Loading notification preferences...')} />
           ) : (
             <>
-              <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} />
+              <NotificationPreferenceMatrix types={types} prefs={prefs} onToggle={togglePref} channels={channels} />
               <div>
                 <Button type="button" onClick={handleSave} disabled={saving}>
                   {saving ? t('notifications.preferences.saving', 'Saving...') : t('notifications.preferences.save', 'Save preferences')}
