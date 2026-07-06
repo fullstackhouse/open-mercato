@@ -14,15 +14,11 @@
  * device is never matched and no push is ever enqueued.
  */
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
-import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
 import { enqueuePushDelivery } from '../queue'
 import { mobilePushDeliveryStrategy } from '../push-delivery-strategy'
 
 jest.mock('@open-mercato/core/modules/notifications/lib/notification-type-registry', () => ({
   getNotificationType: jest.fn(),
-}))
-jest.mock('@open-mercato/core/modules/notifications/lib/notificationPreferenceService', () => ({
-  resolveNotificationPreferenceService: jest.fn(),
 }))
 jest.mock('../queue', () => ({
   enqueuePushDelivery: jest.fn(async () => 'job-id'),
@@ -30,9 +26,6 @@ jest.mock('../queue', () => ({
 }))
 
 const getTypeMock = getNotificationType as jest.MockedFunction<typeof getNotificationType>
-const resolvePrefsMock = resolveNotificationPreferenceService as jest.MockedFunction<
-  typeof resolveNotificationPreferenceService
->
 const enqueueMock = enqueuePushDelivery as jest.MockedFunction<typeof enqueuePushDelivery>
 
 const TENANT = '00000000-0000-0000-0000-000000000001'
@@ -97,10 +90,8 @@ function makeCtx(opts: { notificationOrg: string | null; device: DeviceRow }) {
 
 beforeEach(() => {
   getTypeMock.mockReset()
-  resolvePrefsMock.mockReset()
   enqueueMock.mockClear()
   getTypeMock.mockReturnValue({ type: 'messages.new' } as never)
-  resolvePrefsMock.mockReturnValue({ isChannelEnabled: jest.fn(async () => true) } as never)
 })
 
 describe('push delivery org scoping', () => {

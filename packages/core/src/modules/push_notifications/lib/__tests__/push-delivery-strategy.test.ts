@@ -1,5 +1,4 @@
 import { getNotificationType } from '@open-mercato/core/modules/notifications/lib/notification-type-registry'
-import { resolveNotificationPreferenceService } from '@open-mercato/core/modules/notifications/lib/notificationPreferenceService'
 import {
   registerModules,
   registerAppDictionaryLoader,
@@ -10,10 +9,6 @@ import { mobilePushDeliveryStrategy } from '../push-delivery-strategy'
 
 jest.mock('@open-mercato/core/modules/notifications/lib/notification-type-registry', () => ({
   getNotificationType: jest.fn(),
-}))
-
-jest.mock('@open-mercato/core/modules/notifications/lib/notificationPreferenceService', () => ({
-  resolveNotificationPreferenceService: jest.fn(),
 }))
 
 jest.mock('../queue', () => ({
@@ -34,7 +29,6 @@ function decodePayload(row: Record<string, unknown>): { title?: string; body?: s
 }
 
 const getTypeMock = getNotificationType as jest.MockedFunction<typeof getNotificationType>
-const resolvePrefsMock = resolveNotificationPreferenceService as jest.MockedFunction<typeof resolveNotificationPreferenceService>
 const enqueueMock = enqueuePushDelivery as jest.MockedFunction<typeof enqueuePushDelivery>
 
 const TENANT = '00000000-0000-0000-0000-000000000001'
@@ -122,18 +116,14 @@ function makeCtx(opts: {
   return { ctx, em, captured }
 }
 
-const isChannelEnabledMock = jest.fn(async () => true)
-
 beforeEach(() => {
   getTypeMock.mockReset()
-  resolvePrefsMock.mockReset()
   enqueueMock.mockClear()
   enqueueMock.mockResolvedValue('job-id')
-  isChannelEnabledMock.mockClear()
-  isChannelEnabledMock.mockResolvedValue(true)
-  // Default: known type, push enabled.
+  // Default: known type. Per-channel opt-out is enforced upstream at create time (via the resolved
+  // `notification.channels` set), so this strategy no longer consults preferences at delivery time —
+  // the dispatcher only invokes it when `push` is in the resolved set.
   getTypeMock.mockReturnValue({ type: 'orders.shipped' } as never)
-  resolvePrefsMock.mockReturnValue({ isChannelEnabled: isChannelEnabledMock } as never)
 })
 
 describe('mobilePushDeliveryStrategy', () => {
@@ -142,18 +132,6 @@ describe('mobilePushDeliveryStrategy', () => {
     const { ctx, em } = makeCtx({})
     await mobilePushDeliveryStrategy.deliver(ctx)
     expect(em.find).not.toHaveBeenCalled()
-    expect(em.getKysely).not.toHaveBeenCalled()
-    expect(enqueueMock).not.toHaveBeenCalled()
-  })
-
-  it('skips when the recipient opted out of push for the type', async () => {
-    isChannelEnabledMock.mockResolvedValue(false)
-    const { ctx, em } = makeCtx({
-      channels: [{ providerKey: 'fcm' }],
-      devices: [{ id: 'dev-1', pushToken: 'tok', pushProvider: 'fcm' }],
-    })
-    await mobilePushDeliveryStrategy.deliver(ctx)
-    // The opt-out gate short-circuits the visible-notification path before any insert or enqueue.
     expect(em.getKysely).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
@@ -334,64 +312,31 @@ describe('mobilePushDeliveryStrategy', () => {
     expect(payload.body).toBe('W drodze')
   })
 
-  it('delivers a nonOptOut-typed notification even when the recipient opted out', async () => {
+  it('fans out a nonOptOut-typed notification (opt-out already resolved upstream)', async () => {
     getTypeMock.mockReturnValue({ type: 'auth.account.locked', nonOptOut: true } as never)
-    isChannelEnabledMock.mockResolvedValue(false)
     const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
       notification: { type: 'auth.account.locked' },
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // Forced types never consult the opt-out gate and always fan out.
-    expect(isChannelEnabledMock).not.toHaveBeenCalled()
     expect(captured.insertRows).toHaveLength(1)
     expect(enqueueMock).toHaveBeenCalledTimes(1)
     // A forced visible notification is not silent.
     expect(captured.insertRows![0].silent).toBe(false)
   })
 
-  it('delivers a silent-typed notification as silent when the recipient has push enabled', async () => {
+  it('delivers a silent-typed notification as silent', async () => {
     getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
     const { ctx, captured } = makeCtx({
       channels: [{ providerKey: 'fcm' }],
       devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
     })
     await mobilePushDeliveryStrategy.deliver(ctx)
-    // Silent controls delivery style, not enforcement: the opt-out gate still runs.
-    expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
+    // Silent controls delivery STYLE only; enforcement happened upstream at create time.
     expect(enqueueMock).toHaveBeenCalledTimes(1)
     const row = captured.insertRows![0]
     expect(row.silent).toBe(true)
     expect(decodePayload(row).silent).toBe(true)
-  })
-
-  it('skips a silent-typed notification when the recipient opted out of push', async () => {
-    getTypeMock.mockReturnValue({ type: 'orders.shipped', silent: true } as never)
-    isChannelEnabledMock.mockResolvedValue(false)
-    const { ctx, captured } = makeCtx({
-      channels: [{ providerKey: 'fcm' }],
-      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
-    })
-    await mobilePushDeliveryStrategy.deliver(ctx)
-    expect(isChannelEnabledMock).toHaveBeenCalledTimes(1)
-    expect(captured.insertRows).toBeNull()
-    expect(enqueueMock).not.toHaveBeenCalled()
-  })
-
-  it('forces a silent nonOptOut-typed notification even when the recipient opted out', async () => {
-    getTypeMock.mockReturnValue({ type: 'orders.sync', silent: true, nonOptOut: true } as never)
-    isChannelEnabledMock.mockResolvedValue(false)
-    const { ctx, captured } = makeCtx({
-      channels: [{ providerKey: 'fcm' }],
-      devices: [{ id: 'dev-1', pushToken: 'token-aaaaaaaa', pushProvider: 'fcm' }],
-      notification: { type: 'orders.sync' },
-    })
-    await mobilePushDeliveryStrategy.deliver(ctx)
-    // nonOptOut still bypasses the gate; silent merely sets the delivery style.
-    expect(isChannelEnabledMock).not.toHaveBeenCalled()
-    expect(enqueueMock).toHaveBeenCalledTimes(1)
-    const row = captured.insertRows![0]
-    expect(row.silent).toBe(true)
   })
 })
