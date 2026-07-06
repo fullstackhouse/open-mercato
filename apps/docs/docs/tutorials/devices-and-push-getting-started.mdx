@@ -1,3 +1,8 @@
+---
+title: Devices & Push Notifications — Getting Started
+description: Register devices, connect a push provider, and send your first push notification end-to-end.
+---
+
 # Devices & Push Notifications — Getting Started
 
 A friendly guide for someone who has never touched these modules. It explains *what they are*,
@@ -164,6 +169,21 @@ Push tokens are useless without credentials. Credentials live **per tenant** in 
 | **Firebase (FCM)** — Android | Service-account JSON | Firebase Console → Project settings → Service accounts → Generate key |
 | **Apple (APNs)** — iOS | `.p8` key + Key ID + Team ID + Bundle ID + production flag | Apple Developer → Keys → APNs key |
 | **Expo** | (optional) access token | expo.dev → Account → Tokens |
+
+### Existing tenants: sync the new ACL grants
+
+These modules ship new ACL features (`devices.*`, `push_notifications.view_deliveries`, and the
+`channel_fcm` / `channel_apns` / `channel_expo` grants). New tenants pick them up automatically
+during setup, but **existing** tenants only receive newly declared grants after you run the
+idempotent sync command once:
+
+```bash
+yarn mercato auth sync-role-acls
+```
+
+Without it, an admin on an existing tenant may not see the push delivery log or the provider
+connect UI because their role is missing the freshly added grants. Use `--tenant <tenantId>` to
+target a single tenant.
 
 ---
 
