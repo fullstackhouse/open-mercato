@@ -78,6 +78,46 @@ describe('POST /api/communication_channels/channels/connect/tenant-credentials (
     expect(mockExecute).not.toHaveBeenCalled()
   })
 
+  it('returns 409 with mailbox_already_connected when the command reports a duplicate', async () => {
+    mockExecute.mockResolvedValueOnce({
+      result: { status: 'duplicate_mailbox', existingProviderKey: 'expo' },
+    })
+
+    const response = await POST(
+      connectRequest({ providerKey: 'fcm', displayName: 'FCM', credentials: { serviceAccountJson: '{}' } }),
+    )
+
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as { code?: string }
+    expect(body.code).toBe('mailbox_already_connected')
+  })
+
+  it('returns 422 with field errors when credential validation fails', async () => {
+    mockExecute.mockResolvedValueOnce({
+      result: { status: 'validation_failed', errors: { serviceAccountJson: 'Required' } },
+    })
+
+    const response = await POST(
+      connectRequest({ providerKey: 'fcm', displayName: 'FCM', credentials: {} }),
+    )
+
+    expect(response.status).toBe(422)
+    const body = (await response.json()) as { fieldErrors?: Record<string, string> }
+    expect(body.fieldErrors).toEqual({ serviceAccountJson: 'Required' })
+  })
+
+  it('returns 500 with wrong_scope_for_route if the command reports a per-user scope', async () => {
+    mockExecute.mockResolvedValueOnce({ result: { status: 'wrong_scope_for_route' } })
+
+    const response = await POST(
+      connectRequest({ providerKey: 'fcm', displayName: 'FCM', credentials: { serviceAccountJson: '{}' } }),
+    )
+
+    expect(response.status).toBe(500)
+    const body = (await response.json()) as { code?: string }
+    expect(body.code).toBe('wrong_scope_for_route')
+  })
+
   it('dispatches a tenant-scoped provider with userId: null and returns 201', async () => {
     const response = await POST(
       connectRequest({ providerKey: 'fcm', displayName: 'FCM', credentials: { serviceAccountJson: '{}' } }),

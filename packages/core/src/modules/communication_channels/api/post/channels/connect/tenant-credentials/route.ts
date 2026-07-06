@@ -85,6 +85,7 @@ export async function POST(req: Request): Promise<Response> {
   if ('response' in guard) return guard.response
 
   const commandBus = container.resolve('commandBus') as CommandBus
+  const orgId = (auth as { orgId?: string | null }).orgId ?? null
 
   const input: ConnectCredentialChannelInput = {
     providerKey: body.providerKey,
@@ -96,7 +97,7 @@ export async function POST(req: Request): Promise<Response> {
     userId: null,
     scope: {
       tenantId: auth.tenantId as string,
-      organizationId: (auth as { orgId?: string | null }).orgId ?? null,
+      organizationId: orgId,
     },
   }
   const { result } = await commandBus.execute<
@@ -108,10 +109,8 @@ export async function POST(req: Request): Promise<Response> {
       container,
       auth: auth as never,
       organizationScope: null,
-      selectedOrganizationId: (auth as { orgId?: string | null }).orgId ?? null,
-      organizationIds: (auth as { orgId?: string | null }).orgId
-        ? [(auth as { orgId?: string | null }).orgId!]
-        : null,
+      selectedOrganizationId: orgId,
+      organizationIds: orgId ? [orgId] : null,
     },
   })
 

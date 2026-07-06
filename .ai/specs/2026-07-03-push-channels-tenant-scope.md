@@ -75,7 +75,7 @@ connect/write path stamped a per-user id. This change fixes that path only.
 - **New index** `communication_channels_tenant_push_provider_uq`:
   `create unique index … on ("tenant_id","provider_key") where "channel_type" = 'push' and "user_id" is null and "deleted_at" is null`.
   Covers only `user_id IS NULL` rows, so existing per-user rows never violate it. Migration
-  `Migration20260703120000_communication_channels.ts` + snapshot updated.
+  `Migration20260703123630_communication_channels.ts` + snapshot updated.
 - **`integration_credentials` (`user_id IS NULL`)**: no unique index exists and is not
   added — tenant-wide Stripe/Akeneo credentials already rely on the same find-then-update in
   `credentials-service.ts` `save()`. Push follows that parity.
@@ -88,6 +88,18 @@ connect/write path stamped a per-user id. This change fixes that path only.
 - API `POST /api/communication_channels/channels/connect/tenant-credentials`:
   `channel-fcm/__integration__/TC-CHANNEL-PUSH-002.spec.ts` — 422 (tenant-scoped FCM adapter
   reached, empty creds rejected) and 400 (per-user IMAP rejected on the tenant route).
+- Unit — route error contract:
+  `communication_channels/api/post/channels/connect/tenant-credentials/__tests__/route.test.ts`
+  asserts every failure path returns the structured `code` the connect widgets localize on:
+  400 `provider_not_tenant_scoped`, 404 unknown provider, 409 `mailbox_already_connected`,
+  422 `fieldErrors`, 500 `wrong_scope_for_route`, plus 201 dispatches with `userId: null`.
+- Unit — failure-path i18n mapping:
+  `communication_channels/lib/__tests__/push-connect-error.test.ts` locks
+  `resolvePushConnectErrorMessage` — each route `code` resolves to its
+  `push.connect.errors.<code>` locale message (and the key ships in `en.json`), while a
+  missing/unknown code falls back to the generic `push.connect.failed`. This is the shared
+  helper the three connect widgets call, so the concern-#1 fix is covered once rather than per
+  provider package.
 - API `POST /api/communication_channels/channels/connect/credentials` (per-user):
   `TC-CHANNEL-PUSH-001.spec.ts` — FCM (tenant-scoped) is refused with 403
   `provider_is_tenant_scoped` (proves the adapter is registered and the privilege guard holds).
@@ -104,6 +116,26 @@ connect/write path stamped a per-user id. This change fixes that path only.
 `push-fanout.ts`, `push-delivery.ts`, `workers/send-push.worker.ts`, `GET /channels`,
 `push-capabilities.ts` — the read/delivery path is already scope-agnostic. Gmail/IMAP stay
 per-user (default `channelScope: 'user'`).
+
+## Known tradeoffs
+
+- **Connect-widget duplication.** `ConnectFcmWidget` / `ConnectApnsWidget` / `ConnectExpoWidget`
+  are near-identical (~200 lines each) — they differ only in provider key, form fields, and
+  defaults; the dialog shell, `update`/`submit`/`onDialogKeyDown`/`Field` and the mutation
+  plumbing are copy-pasted. Each lives in its own provider package, so a shared component has no
+  natural home (importing UI from one provider package into another couples them). This is an
+  accepted tradeoff for now. **Before adding a 4th push provider, extract the shared dialog into
+  a reusable helper** (candidate home: a `communication_channels` client export or a small shared
+  hook) rather than forking a 4th copy.
+- **Failure-path i18n.** The three connect widgets call the shared, React-free
+  `resolvePushConnectErrorMessage` (`communication_channels/lib/push-connect-error.ts`), which
+  maps the route's structured `body.code` (`provider_not_tenant_scoped`,
+  `mailbox_already_connected`, `wrong_scope_for_route`) to
+  `communication_channels.push.connect.errors.<code>` keys (en/de/es/pl) and falls back to the
+  generic `push.connect.failed`. The raw English `body.error` is reserved for logs/API consumers
+  and is no longer flashed to the admin. A new provider that returns a new `code` MUST add a
+  matching `errors.<code>` key in all four locale files, or the generic fallback is shown — the
+  helper's unit test guards the shipped codes.
 
 ## Post-merge step
 

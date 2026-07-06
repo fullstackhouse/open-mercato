@@ -6,6 +6,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { resolvePushConnectErrorMessage } from '@open-mercato/core/modules/communication_channels/lib/push-connect-error'
 import { Button } from '@open-mercato/ui/primitives/button'
 import {
   Dialog,
@@ -25,6 +26,7 @@ type WidgetContext = Record<string, unknown> & {
 type ConnectResponse = {
   channelId?: string
   error?: string
+  code?: string
   fieldErrors?: Record<string, string>
 }
 
@@ -97,10 +99,7 @@ export default function ConnectFcmWidget({
       const body = response.result as ConnectResponse | undefined
       if (!response.ok) {
         setFieldErrors(body?.fieldErrors ?? {})
-        flash(
-          body?.error ?? t('communication_channels.push.connect.failed', 'Could not connect push provider.'),
-          'error',
-        )
+        flash(resolvePushConnectErrorMessage(t, body), 'error')
         return
       }
       flash(t('communication_channels.push.connect.connected', 'Push provider connected.'), 'success')
