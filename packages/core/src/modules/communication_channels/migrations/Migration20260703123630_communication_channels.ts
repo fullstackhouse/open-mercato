@@ -1,6 +1,6 @@
 import { Migration } from '@mikro-orm/migrations';
 
-export class Migration20260703120000_communication_channels extends Migration {
+export class Migration20260703123630_communication_channels extends Migration {
 
   override up(): void | Promise<void> {
     // Enforce one tenant-wide push channel per (tenant, provider). Push providers
