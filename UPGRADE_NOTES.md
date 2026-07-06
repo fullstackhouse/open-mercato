@@ -24,6 +24,19 @@ most of the patterns listed below in a user's codebase.
 
 ## 0.6.5 → 0.6.6 (unreleased)
 
+### Notification channels unified on the delivery-strategy seam (Phase 7)
+
+All notification channels now flow through one seam and one gate. This is additive and backward-compatible, with one **intentional corrective behavior change** and one **deprecation** relevant to module authors.
+
+**Behavior change (corrective).** Per-channel opt-out and the `nonOptOut`/`silent` type flags are now enforced on **every** channel, not just push. Previously, disabling `in_app` or `email` for a notification type in a user's preferences was silently ignored — those channels always delivered. After upgrading, an `in_app` opt-out hides the notification from the bell/inbox/unread-count (the row is still written as a durable record), and an `email` opt-out suppresses the email. A user who has **never changed their preferences sees no difference** (preferences default to on). No action required unless you relied on opt-outs being ignored.
+
+**`Notification.channels` is now authoritative.** The new nullable `channels` JSONB column stores the resolved delivery-channel set. A create call with no `channels` still fans out to every registered channel (unchanged); pass `channels: ['push']` (etc.) to a `notificationService.create(...)` call to target specific channels. Legacy rows (`channels = NULL`) are treated as "all channels / visible".
+
+**Deprecation — `NotificationDeliveryContext` email fields.** For authors of custom `NotificationDeliveryStrategy` implementations: the context is now split into a channel-agnostic core (`NotificationDeliveryContextCore`) and `EmailDeliveryExtras` (`panelUrl`, `panelLink`, `actionLinks` — and `recipient.email` is email-specific). The flat shape is unchanged (all fields still present) so existing strategies compile and run as-is, but the email-shaped fields are now `@deprecated`: a non-email strategy MUST NOT depend on them and should derive whatever it needs from `notification`. They will move behind an email-scoped accessor in a future major.
+
+**New capability hooks.** `NotificationDeliveryStrategy` gained optional `isConfigured(ctx)` and `supports(notification)`; the dispatcher skips a channel when either returns `false`. Use `isConfigured` for tenant-config/technical deliverability (not per-user opt-out, which the create-time gate already handles).
+
+
 ### Versioned browser-storage envelopes for shared UI preference slots (#3457)
 
 Several shared UI surfaces that persist client state to `localStorage` — DataTable perspective snapshots, the AppShell sidebar collapsed-groups set, the AI model picker selection, and the AI chat sessions cache — now write through a shared **versioned-envelope** helper (`packages/shared/src/lib/browser/versionedPreference.ts`) instead of bare JSON. On disk each of these slots now carries a `{ v, data }` shape with an explicit version discriminator, rather than the raw value it stored before.

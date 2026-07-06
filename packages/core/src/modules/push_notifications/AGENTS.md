@@ -30,14 +30,20 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
   worker that re-claimed the row never re-open an active delivery.
 - **Fan-out** (`lib/push-fanout.ts`, `fanOutPushDeliveries`) is the shared device-resolution + provider
   routing + delivery-row insert + enqueue. The strategy (visible notifications) and `sendCustomPush`
-  call it; it is preference-agnostic (the caller decides whether to gate on preferences).
+  call it; it stays preference-agnostic. Its channel/device short-circuits (no push channel / no
+  devices / no provider match → `{ enqueued: 0 }`) are push's technical `isConfigured` equivalent and
+  remain the authoritative "is push set up for this tenant/recipient" check.
+- **Opt-out is enforced upstream, once (Phase 7).** The `push` strategy no longer calls
+  `isChannelEnabled`/checks `nonOptOut`; the notifications create-time gate (`shouldDeliver`) already
+  resolved per-channel opt-out into `notification.channels`, and the dispatcher only invokes this
+  strategy when `push ∈ channels`. The strategy still reads the **type** for `silent` (delivery style).
 - **Silent push** is **not** a separate API — it is just a notification whose **type** is declared
   `silent: true` (`NotificationTypeDefinition.silent`), created through the **normal**
   `notificationService.create()` flow (`create()` → `notifications:deliver` subscriber → the `push`
   strategy). The strategy derives `silent` from the type, sends a content-available (data-only) push,
   and skips user-facing copy; the in-app `Notification` row is still created and per-channel
-  preferences still apply — to make a silent type always fire, declare it `nonOptOut: true`. There is
-  no `sendSilentPush` helper. (Email/in-app channels respecting `silent` is deferred — see spec Phase 7.)
+  preferences still apply (now enforced by the notifications create-time gate, not the strategy) — to
+  make a silent type always fire, declare it `nonOptOut: true`. There is no `sendSilentPush` helper.
 - **Admin custom push** (`lib/send-custom-push.ts`, exposed in DI as `pushNotificationService`) is a
   one-off **visible** push with literal title/body that fans out directly (no in-app row, no email, no
   preference check); it backs `api/custom-send/route.ts`.
