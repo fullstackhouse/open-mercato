@@ -128,7 +128,7 @@ async function handleRetryableFailure(
 // Soft-delete the device through the devices module's own command (audit/events/undo stay
 // consistent) rather than mutating its table directly. Dispatched by command id with a trusted
 // system context — no business-logic import, no authenticated actor.
-async function softDeleteUnregisteredDevice(
+export async function softDeleteUnregisteredDevice(
   resolve: Resolve,
   input: { id: string; tenantId: string; userId: string; organizationId: string | null },
 ): Promise<void> {
@@ -178,6 +178,16 @@ export async function processPushDeliveryJob(
   const delivery = await em.findOne(PushNotificationDelivery, { id: job.deliveryId, tenantId: job.tenantId })
   if (!delivery) return null
   if (claimed === 0) return { status: delivery.status, deliveryId: delivery.id }
+
+  // Count the attempt at CLAIM time and persist it BEFORE the provider send.
+  // Previously the increment happened only just before `sendMessage` and was
+  // flushed later alongside the terminal status — so a crash after the send but
+  // before that flush lost the increment, the reaper re-enqueued the row, and the
+  // provider could be hit more than MAX_ATTEMPTS times. Persisting here makes
+  // MAX_ATTEMPTS a real cap on provider sends. A crash in the tiny window between
+  // this flush and `sendMessage` re-runs with no duplicate (no send happened yet).
+  delivery.attempts += 1
+  await em.flush()
 
   // Resolve the device for its full (secret) push token. Soft via DI token to avoid coupling.
   // `push_token` is encrypted at rest, so decrypt on read (no-op when encryption is disabled).
@@ -253,8 +263,6 @@ export async function processPushDeliveryJob(
   const scope = { tenantId: job.tenantId, organizationId: job.organizationId ?? job.tenantId }
   const payload = (delivery.payload ?? {}) as PushPayload
   const body = payload.body ?? payload.title ?? ''
-
-  delivery.attempts += 1
 
   try {
     const converted = await adapter.convertOutbound({ body, bodyFormat: 'text' })

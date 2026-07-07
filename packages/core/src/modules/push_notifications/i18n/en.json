@@ -74,5 +74,6 @@
   "push_notifications.types.admin_custom_message.title": "Admin message",
   "push_notifications.types.admin_custom_silent.body": "Background update.",
   "push_notifications.types.admin_custom_silent.label": "Admin silent message",
-  "push_notifications.types.admin_custom_silent.title": "Silent message"
+  "push_notifications.types.admin_custom_silent.title": "Silent message",
+  "push_notifications.warnings.no_matching_devices_in_scope": "No push-capable devices matched this recipient in the selected scope, so nothing was sent."
 }

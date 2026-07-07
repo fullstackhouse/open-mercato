@@ -24,7 +24,16 @@ export const customSendSchema = z
   .strict()
 export type CustomSendInput = z.infer<typeof customSendSchema>
 
-export const customSendResponseSchema = z.object({ enqueued: z.number() })
+// Machine-readable warning surfaced when a well-formed send resolved no deliverable device in scope
+// (no push channel configured, no in-scope devices, or none whose provider matches an active channel).
+// The caller gets `enqueued: 0` plus this code + a human `message` instead of a misleading silent success.
+export const CUSTOM_SEND_NO_DEVICES_WARNING = 'no_matching_devices_in_scope'
+
+export const customSendResponseSchema = z.object({
+  enqueued: z.number(),
+  warning: z.literal(CUSTOM_SEND_NO_DEVICES_WARNING).optional(),
+  message: z.string().optional(),
+})
 
 // Read-only delivery-log list contract (admin observability). No full push token is ever exposed —
 // only `token_snapshot` (last 8 chars) and the `provider` snapshot.

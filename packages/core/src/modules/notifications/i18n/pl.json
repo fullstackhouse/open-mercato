@@ -42,6 +42,7 @@
   "notifications.preferences.pageDescription": "Wybierz, które kanały dostarczają poszczególne typy powiadomień. Nieustawione opcje pozostają domyślnie włączone.",
   "notifications.preferences.pageTitle": "Preferencje powiadomień",
   "notifications.preferences.profileGroup": "Profil",
+  "notifications.preferences.requiredHint": "This notification is required and cannot be turned off.",
   "notifications.preferences.save": "Zapisz preferencje",
   "notifications.preferences.saveError": "Nie udało się zapisać preferencji powiadomień",
   "notifications.preferences.saveSuccess": "Zapisano preferencje powiadomień",

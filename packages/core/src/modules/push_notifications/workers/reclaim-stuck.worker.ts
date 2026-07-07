@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { JobContext, QueuedJob, WorkerMeta } from '@open-mercato/queue'
 import { PUSH_STUCK_RECLAIM_QUEUE } from '../lib/queue'
 import { reclaimStuckPushDeliveries } from '../lib/push-reaper'
+import { checkPushReceipts } from '../lib/push-receipt-reaper'
 
 /**
  * Scheduler tick payload. Fired by the `@open-mercato/scheduler` interval entry registered in
@@ -48,5 +49,23 @@ export default async function handle(
       error: error instanceof Error ? error.message : String(error),
     })
     throw error
+  }
+
+  // Piggyback the Expo async-receipt hygiene pass on the same per-tenant tick (no separate scheduler
+  // entry). Best-effort and isolated on its own EM fork: a receipt-check failure logs and returns, so it
+  // never fails/retries the stuck-row reclaim above nor the tick itself.
+  try {
+    const receiptEm = (ctx.resolve('em') as EntityManager).fork()
+    const receipts = await checkPushReceipts(receiptEm, { tenantId }, ctx.resolve)
+    if (receipts.unregistered > 0) {
+      console.log(
+        `[push_notifications:reclaim-stuck] tenant ${tenantId}: pruned ${receipts.unregistered} device(s) from ${receipts.checked} async push receipt(s)`,
+      )
+    }
+  } catch (error) {
+    console.error('[push_notifications:reclaim-stuck] receipt sweep failed', {
+      tenantId,
+      error: error instanceof Error ? error.message : String(error),
+    })
   }
 }

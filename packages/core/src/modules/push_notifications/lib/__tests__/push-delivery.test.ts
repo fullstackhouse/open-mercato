@@ -138,6 +138,26 @@ describe('processPushDeliveryJob', () => {
     expect(emitMock).toHaveBeenCalledWith('push_notifications.delivery.sent', expect.any(Object), expect.any(Object))
   })
 
+  it('increments and flushes attempts at claim time, before the provider send', async () => {
+    // MAX_ATTEMPTS must cap real provider sends across crashes: the attempt is counted and persisted
+    // right after the atomic claim, BEFORE sendMessage — not just before the send and flushed later.
+    const delivery = makeDelivery({ attempts: 0 })
+    const h = makeHarness({ delivery })
+    let attemptsAtSend: number | undefined
+    let flushesBeforeSend = 0
+    h.sendMessage.mockImplementationOnce(async () => {
+      attemptsAtSend = delivery.attempts
+      flushesBeforeSend = (h.em.flush as jest.Mock).mock.calls.length
+      return { externalMessageId: 'm1', status: 'sent', metadata: { stub: true } }
+    })
+
+    await processPushDeliveryJob(h.em as never, job, h.resolve)
+
+    // The increment was already visible AND already flushed by the time the adapter was invoked.
+    expect(attemptsAtSend).toBe(1)
+    expect(flushesBeforeSend).toBeGreaterThanOrEqual(1)
+  })
+
   it('packs data, options and the silent flag into the send envelope', async () => {
     const delivery = makeDelivery({
       payload: {

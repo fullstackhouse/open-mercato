@@ -28,7 +28,7 @@ import {
   createNotificationPreferenceService,
   type NotificationPreferenceService,
 } from './notificationPreferenceService'
-import { inAppVisibleFilter, isInAppVisible } from './notificationVisibility'
+import { inAppVisibleFilter, inAppVisibleSql, isInAppVisible } from './notificationVisibility'
 
 const logger = createLogger('notifications').child({ component: 'service' })
 
@@ -438,6 +438,12 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
           .where('recipient_user_id' as any, '=', ctx.userId as any)
           .where('tenant_id' as any, '=', ctx.tenantId)
           .where('status' as any, '=', 'unread')
+          // Only in-app-visible rows count toward the badge (see getUnreadCount),
+          // so "mark all as read" must scope to the SAME set — otherwise it flips
+          // push/email-only rows the user never saw and SSE-broadcasts a read for
+          // notifications that were never in the bell, inflating the returned
+          // count past what the badge showed.
+          .where(inAppVisibleSql() as any)
         if (ctx.organizationId) {
           chain = chain.where('organization_id' as any, '=', ctx.organizationId)
         }
