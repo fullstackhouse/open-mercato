@@ -4,7 +4,7 @@ import { apiRequest } from '@open-mercato/core/helpers/integration/api'
 import { readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
 
 /**
- * TC-CHANNEL-PUSH-002 — APNs provider visible to the hub's credential-connect API.
+ * TC-CHANNEL-PUSH-003 — APNs provider visible to the hub's credential-connect API.
  *
  * `@open-mercato/channel-apns` registers the `apns` push `ChannelAdapter` at import.
  * Push providers have no OAuth/webhook surface of their own — operators connect
@@ -15,7 +15,7 @@ import { readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixt
  * "not 404" therefore proves the adapter is registered and reachable; real send
  * paths are covered network-free by lib/__tests__/adapter.test.ts.
  */
-test.describe('TC-CHANNEL-PUSH-002: APNs provider registration', () => {
+test.describe('TC-CHANNEL-PUSH-003: APNs provider registration', () => {
   test('POST connect/credentials with providerKey=apns reaches the registered adapter', async ({ request }) => {
     const token = await getAuthToken(request)
     const response = await apiRequest(
