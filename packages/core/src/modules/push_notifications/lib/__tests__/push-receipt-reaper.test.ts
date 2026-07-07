@@ -15,7 +15,7 @@ jest.mock('../../events', () => ({
 
 const TENANT = '00000000-0000-0000-0000-000000000001'
 const NOW = new Date('2026-07-01T12:00:00.000Z')
-// Default receipt window is [now-60m, now-15m]. This sit is old enough to have a receipt, still in window.
+// Default receipt window is [now-60m, now-15m]. This is old enough to have a receipt, still in window.
 const IN_WINDOW = new Date(NOW.getTime() - 20 * 60 * 1000)
 const TOO_FRESH = new Date(NOW.getTime() - 5 * 60 * 1000)
 

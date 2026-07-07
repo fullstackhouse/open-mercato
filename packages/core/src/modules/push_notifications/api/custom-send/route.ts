@@ -124,7 +124,9 @@ export async function POST(req: Request) {
           }
         : { enqueued: result.enqueued }
 
-    return NextResponse.json(responseBody, { status: 201 })
+    // 201 Created only when jobs were actually enqueued; the no-op branch returns 200 OK so callers
+    // that key off the status code aren't told something was created when nothing was.
+    return NextResponse.json(responseBody, { status: result.enqueued === 0 ? 200 : 201 })
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json(
@@ -148,9 +150,13 @@ export const openApi = {
     tags: ['PushNotifications'],
     requestBody: { schema: customSendSchema },
     responses: {
-      201: {
+      200: {
         description:
-          'Per-device push jobs enqueued. When nothing was deliverable in scope, `enqueued` is 0 and a `warning` code plus human `message` explain why (no silent no-op).',
+          'Nothing was deliverable in scope: `enqueued` is 0 and a `warning` code plus human `message` explain why (no silent no-op). Returned instead of 201 because nothing was created.',
+        content: { 'application/json': { schema: customSendResponseSchema } },
+      },
+      201: {
+        description: 'Per-device push jobs enqueued.',
         content: { 'application/json': { schema: customSendResponseSchema } },
       },
       400: {

@@ -111,10 +111,15 @@ let expoModulePromise: Promise<ExpoModule> | null = null
 
 function loadExpoModule(): Promise<ExpoModule> {
   if (!expoModulePromise) {
-    expoModulePromise = import('expo-server-sdk').then((mod) => {
+    const loading = import('expo-server-sdk').then((mod) => {
       const candidate = mod as unknown as { default?: ExpoModule } & ExpoModule
       return candidate.default ?? candidate
     })
+    // Drop a failed import so a later call can retry instead of returning the cached rejection forever.
+    loading.catch(() => {
+      if (expoModulePromise === loading) expoModulePromise = null
+    })
+    expoModulePromise = loading
   }
   return expoModulePromise
 }
@@ -123,7 +128,12 @@ function getExpoInstance(accessToken: string | undefined): Promise<ExpoInstance>
   const cacheKey = accessToken ?? ''
   let instance = expoInstanceCache.get(cacheKey)
   if (!instance) {
-    instance = loadExpoModule().then(({ Expo }) => new Expo({ accessToken }))
+    const pending = loadExpoModule().then(({ Expo }) => new Expo({ accessToken }))
+    // Drop a failed init so a later call can retry instead of returning the cached rejection forever.
+    pending.catch(() => {
+      if (expoInstanceCache.get(cacheKey) === pending) expoInstanceCache.delete(cacheKey)
+    })
+    instance = pending
     expoInstanceCache.set(cacheKey, instance)
   }
   return instance
