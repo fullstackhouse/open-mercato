@@ -108,6 +108,11 @@ async function getApp(serviceAccount: FcmServiceAccount): Promise<FcmAppLike> {
     ) as unknown as FcmAppLike
   })()
   appCache.set(key, pending)
+  // Drop a rejected init (e.g. invalid service-account cert) from the cache so the
+  // next call can re-initialize instead of forever returning the cached rejection.
+  pending.catch(() => {
+    if (appCache.get(key) === pending) appCache.delete(key)
+  })
 
   if (appCache.size > APP_CACHE_MAX) {
     const oldestKey = appCache.keys().next().value as string | undefined

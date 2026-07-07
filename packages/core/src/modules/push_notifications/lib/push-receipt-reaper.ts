@@ -28,19 +28,19 @@ export type ReceiptReaperResult = { checked: number; unregistered: number }
 // nothing to poll yet. Wait MIN_AGE before the first check (Expo recommends ~15m) and stop looking after
 // MAX_AGE — a row not resolved within the window is left as `sent` (best-effort hygiene, not a
 // correctness guarantee). Both tunable; MAX is clamped above MIN so the window is always non-empty.
-const RECEIPT_MIN_AGE_MS = Math.max(
-  0,
-  (Number.parseInt(process.env.OM_PUSH_RECEIPT_MIN_AGE_MINUTES ?? '15', 10) || 15) * 60 * 1000,
-)
+// Parse an int env var, falling back to `fallback` only when it is unset/non-numeric — a legitimately
+// configured `0` is preserved (`|| fallback` would coerce it, since `0` is falsy).
+function envInt(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+const RECEIPT_MIN_AGE_MS = Math.max(0, envInt('OM_PUSH_RECEIPT_MIN_AGE_MINUTES', 15) * 60 * 1000)
 const RECEIPT_MAX_AGE_MS = Math.max(
   RECEIPT_MIN_AGE_MS + 60 * 1000,
-  (Number.parseInt(process.env.OM_PUSH_RECEIPT_MAX_AGE_MINUTES ?? '60', 10) || 60) * 60 * 1000,
+  envInt('OM_PUSH_RECEIPT_MAX_AGE_MINUTES', 60) * 60 * 1000,
 )
 // Bound the per-tick scan so a busy tenant's `sent` backlog cannot fetch an unbounded row set.
-const RECEIPT_BATCH_LIMIT = Math.max(
-  1,
-  Number.parseInt(process.env.OM_PUSH_RECEIPT_BATCH_LIMIT ?? '500', 10) || 500,
-)
+const RECEIPT_BATCH_LIMIT = Math.max(1, envInt('OM_PUSH_RECEIPT_BATCH_LIMIT', 500))
 
 /** The provider ticket id persisted by the send path, or null when there is nothing to poll. */
 function ticketIdOf(delivery: PushNotificationDelivery): string | null {

@@ -72,7 +72,8 @@ describe('push_notifications custom-send route', () => {
 
     const response = await post({ recipientUserId, title: 'Hello' })
 
-    expect(response.status).toBe(201)
+    // 200 (not 201) — nothing was created; the warning body conveys the no-op.
+    expect(response.status).toBe(200)
     const payload = await response.json()
     expect(payload.enqueued).toBe(0)
     expect(payload.warning).toBe(CUSTOM_SEND_NO_DEVICES_WARNING)
