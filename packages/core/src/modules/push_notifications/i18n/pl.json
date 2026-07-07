@@ -74,5 +74,6 @@
   "push_notifications.types.admin_custom_message.title": "Wiadomość administratora",
   "push_notifications.types.admin_custom_silent.body": "Aktualizacja w tle.",
   "push_notifications.types.admin_custom_silent.label": "Ciche powiadomienie administratora",
-  "push_notifications.types.admin_custom_silent.title": "Ciche powiadomienie"
+  "push_notifications.types.admin_custom_silent.title": "Ciche powiadomienie",
+  "push_notifications.warnings.no_matching_devices_in_scope": "Żadne urządzenie odbiorcy obsługujące powiadomienia push nie pasowało do wybranego zakresu, więc nic nie wysłano."
 }

@@ -153,7 +153,8 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
     // or a create that ran before the delivery strategies were registered) would otherwise deliver
     // every channel with no gate — so recompute the effective set from current preferences here,
     // keeping the single `shouldDeliver` gate instead of re-checking opt-out inside each strategy.
-    const targetChannels = notification.channels ?? await resolveEffectiveChannels({
+    const persistedChannels = notification.channels
+    const targetChannels = persistedChannels ?? await resolveEffectiveChannels({
       typeId: notification.type,
       type: getNotificationType(notification.type),
       scope: { tenantId: notification.tenantId, userId: notification.recipientUserId },
@@ -161,6 +162,27 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
       registeredChannels: strategies.map((strategy) => strategy.id),
       preferences: resolveNotificationPreferenceService({ resolve: ctx.resolve }),
     })
+    // Persist the recomputed set back onto a null-channels row so the in-app
+    // VISIBILITY path (bell/inbox/unread — see notificationVisibility.ts) reads
+    // the same authoritative target the DELIVERY gate just applied. Without this
+    // the row stays `null` ⇒ "visible everywhere", so a notification suppressed
+    // from in_app by the user's opt-out would still surface in the bell while
+    // delivery correctly skipped it. A null result (no strategies registered)
+    // stays null and keeps legacy all-channels back-compat. `channels` is a
+    // plaintext JSONB column, so a forked nativeUpdate avoids the shared UoW.
+    if (persistedChannels == null && targetChannels != null) {
+      try {
+        await (em as EntityManager)
+          .fork()
+          .nativeUpdate(
+            Notification,
+            { id: notification.id, tenantId: notification.tenantId },
+            { channels: targetChannels },
+          )
+      } catch (err) {
+        debug('failed to persist recomputed channels', err)
+      }
+    }
     for (const strategy of strategies) {
       if (targetChannels && !targetChannels.includes(strategy.id)) {
         debug('channel not targeted', strategy.id)

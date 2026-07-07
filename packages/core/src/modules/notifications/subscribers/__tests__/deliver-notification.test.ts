@@ -196,6 +196,48 @@ describe('deliver-notification subscriber', () => {
 
       expect(pushDeliver).toHaveBeenCalledTimes(1)
     })
+
+    it('persists the recomputed channel set (excluding in_app) back onto the null-channels row', async () => {
+      // Recipient opted out of in_app for this type: the recomputed set excludes it. The subscriber
+      // must write that set back via a forked nativeUpdate so the in-app VISIBILITY path (bell/inbox/
+      // unread — notificationVisibility.ts) agrees with what DELIVERY just gated, instead of leaving
+      // the row null ⇒ "visible everywhere".
+      resolveEffectiveChannelsMock.mockResolvedValue(['push', 'email'])
+      const nativeUpdate = jest.fn(async () => 1)
+      const em = { fork: () => ({ nativeUpdate }) }
+      const ctx = {
+        resolve: (name: string) => {
+          if (name === 'em') return em
+          throw new Error(`Unknown service: ${name}`)
+        },
+      }
+
+      await handle(basePayload, ctx as never)
+
+      expect(nativeUpdate).toHaveBeenCalledWith(
+        Notification,
+        { id: 'notif-1', tenantId: 'tenant-1' },
+        { channels: ['push', 'email'] },
+      )
+      const writtenChannels = (nativeUpdate.mock.calls[0][2] as { channels: string[] }).channels
+      expect(writtenChannels).not.toContain('in_app')
+    })
+
+    it('does not persist channels when the recompute returns null (legacy all-channels preserved)', async () => {
+      resolveEffectiveChannelsMock.mockResolvedValue(null)
+      const nativeUpdate = jest.fn(async () => 1)
+      const em = { fork: () => ({ nativeUpdate }) }
+      const ctx = {
+        resolve: (name: string) => {
+          if (name === 'em') return em
+          throw new Error(`Unknown service: ${name}`)
+        },
+      }
+
+      await handle(basePayload, ctx as never)
+
+      expect(nativeUpdate).not.toHaveBeenCalled()
+    })
   })
 
   it('honors a non-null channels snapshot without recomputing from preferences', async () => {

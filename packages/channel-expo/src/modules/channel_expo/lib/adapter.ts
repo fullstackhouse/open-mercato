@@ -7,6 +7,8 @@ import {
   deviceUnregisteredResult,
   MISSING_PUSH_TOKEN_RESULT,
   readPushToken,
+  type PushReceiptChecker,
+  type PushReceiptOutcome,
 } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
 import { readPushEnvelope, resolvePushBody, type PushEnvelope } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import { expoCredentialsSchema, type ExpoCredentials } from './credentials'
@@ -17,6 +19,24 @@ export interface ExpoPushTicket {
   message?: string
   details?: { error?: string }
 }
+
+/**
+ * Async delivery receipt fetched later by ticket id via `getPushNotificationReceiptsAsync`. This is
+ * where the common "app uninstalled" case surfaces for Expo (`details.error === 'DeviceNotRegistered'`),
+ * NOT the synchronous send ticket.
+ */
+export interface ExpoPushReceipt {
+  status: 'ok' | 'error'
+  message?: string
+  details?: { error?: string }
+}
+
+/**
+ * Expo receipt-error codes that mean the device token is permanently invalid ⇒ soft-delete the device
+ * (uniform `device_unregistered` contract). Everything else (notably `MessageRateExceeded`) is transient
+ * and must NOT kill the token.
+ */
+const PERMANENT_EXPO_RECEIPT_ERRORS = new Set(['DeviceNotRegistered'])
 
 export interface ExpoPushMessage {
   to: string
@@ -59,6 +79,8 @@ export function buildExpoMessage(token: string, envelope: PushEnvelope): ExpoPus
 export interface ExpoClientLike {
   isExpoPushToken(token: string): boolean | Promise<boolean>
   send(messages: ExpoPushMessage[]): Promise<ExpoPushTicket[]>
+  /** Fetch async delivery receipts keyed by ticket id (chunked internally by the SDK). */
+  getReceipts(ticketIds: string[]): Promise<Record<string, ExpoPushReceipt>>
 }
 
 type ExpoModule = {
@@ -66,6 +88,8 @@ type ExpoModule = {
     isExpoPushToken(token: string): boolean
     new (options: { accessToken?: string }): {
       sendPushNotificationsAsync(messages: ExpoPushMessage[]): Promise<ExpoPushTicket[]>
+      chunkPushNotificationReceiptIds(receiptIds: string[]): string[][]
+      getPushNotificationReceiptsAsync(receiptIds: string[]): Promise<Record<string, ExpoPushReceipt>>
     }
   }
 }
@@ -115,10 +139,18 @@ function defaultClientFactory(credentials: ExpoCredentials): ExpoClientLike {
       const expo = await getExpoInstance(credentials.accessToken)
       return expo.sendPushNotificationsAsync(messages)
     },
+    async getReceipts(ticketIds: string[]): Promise<Record<string, ExpoPushReceipt>> {
+      const expo = await getExpoInstance(credentials.accessToken)
+      const receipts: Record<string, ExpoPushReceipt> = {}
+      for (const chunk of expo.chunkPushNotificationReceiptIds(ticketIds)) {
+        Object.assign(receipts, await expo.getPushNotificationReceiptsAsync(chunk))
+      }
+      return receipts
+    },
   }
 }
 
-class ExpoChannelAdapter extends BasePushChannelAdapter {
+class ExpoChannelAdapter extends BasePushChannelAdapter implements PushReceiptChecker {
   readonly providerKey = 'expo'
   protected readonly credentialsSchema = expoCredentialsSchema
 
@@ -148,13 +180,11 @@ class ExpoChannelAdapter extends BasePushChannelAdapter {
       if (ticket.status === 'ok') {
         return { externalMessageId: ticket.id ?? '', status: 'sent' }
       }
-      // LIMITATION: Expo delivery is two-phase. A `status: 'ok'` ticket only means Expo *accepted*
-      // the message — it does NOT confirm the token is valid. `DeviceNotRegistered` for a
-      // well-formed-but-stale token (the common "app uninstalled" case) surfaces later in the
-      // RECEIPT phase via `getPushNotificationReceiptsAsync` (receipt `details.error`), which this
-      // adapter does not yet poll. So this ticket-level check only catches the narrow cases Expo
-      // rejects synchronously; full unregistered-cleanup for Expo needs receipt polling, tracked as
-      // a Phase 6 hygiene follow-up (see spec § Deferred to a later spec).
+      // Expo delivery is two-phase. A `status: 'ok'` ticket only means Expo *accepted* the message — it
+      // does NOT confirm the token is valid. This ticket-level check catches the narrow cases Expo
+      // rejects synchronously; the common "app uninstalled" case (`DeviceNotRegistered` for a
+      // well-formed-but-stale token) surfaces later in the RECEIPT phase and is pruned by `checkReceipts`
+      // below, polled by the push_notifications receipt reaper.
       if (ticket.details?.error === 'DeviceNotRegistered') {
         return deviceUnregisteredResult({ reason: 'DeviceNotRegistered' })
       }
@@ -162,6 +192,31 @@ class ExpoChannelAdapter extends BasePushChannelAdapter {
     } catch (err) {
       return { externalMessageId: '', status: 'failed', error: err instanceof Error ? err.message : String(err) }
     }
+  }
+
+  /**
+   * Poll async delivery receipts for previously-accepted tickets and report which map to a
+   * permanently-unregistered device token. Returns an entry ONLY for tickets whose receipt is ready
+   * (present in the SDK response); tickets with no receipt yet are omitted so the reaper re-checks them
+   * on a later sweep. `MessageRateExceeded` (and any other non-`DeviceNotRegistered` error) is treated
+   * as transient — the receipt resolves but the token is NOT killed.
+   */
+  async checkReceipts(ticketIds: string[], credentials: unknown): Promise<PushReceiptOutcome[]> {
+    const ids = ticketIds.filter((id) => typeof id === 'string' && id.length > 0)
+    if (ids.length === 0) return []
+
+    const parsedCredentials = expoCredentialsSchema.safeParse(credentials ?? {})
+    const client = (clientFactory ?? defaultClientFactory)(parsedCredentials.success ? parsedCredentials.data : {})
+
+    const receipts = await client.getReceipts(ids)
+    const outcomes: PushReceiptOutcome[] = []
+    for (const ticketId of ids) {
+      const receipt = receipts[ticketId]
+      if (!receipt) continue // receipt not ready yet — leave it for a later sweep
+      const unregistered = receipt.status === 'error' && !!receipt.details?.error && PERMANENT_EXPO_RECEIPT_ERRORS.has(receipt.details.error)
+      outcomes.push({ ticketId, unregistered })
+    }
+    return outcomes
   }
 }
 

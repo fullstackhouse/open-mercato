@@ -41,6 +41,39 @@ export const MISSING_PUSH_TOKEN_RESULT: SendMessageResult = {
   error: 'missing_push_token',
 }
 
+/**
+ * Outcome of checking one provider delivery receipt for a previously-accepted push.
+ * Emitted only for tickets whose receipt is already available (`resolved`); a ticket whose
+ * receipt is not yet ready is omitted so the caller retries it on a later sweep.
+ */
+export interface PushReceiptOutcome {
+  /** The provider ticket id returned by the synchronous send (persisted as `externalMessageId`). */
+  ticketId: string
+  /** The receipt reports the device token is permanently invalid ⇒ soft-delete the device. */
+  unregistered: boolean
+}
+
+/**
+ * Optional capability for providers whose "device unregistered" signal arrives in an ASYNCHRONOUS
+ * receipt phase rather than the synchronous send ticket (Expo). Implemented by the Expo adapter and
+ * polled by the push_notifications receipt reaper; FCM/APNs prune synchronously in `sendMessage` and
+ * do not implement it. Additive to `ChannelAdapter` — feature-detected via `supportsReceiptChecking`.
+ */
+export interface PushReceiptChecker {
+  /**
+   * Fetch delivery receipts for previously-accepted push tickets and report which map to a
+   * permanently-unregistered device token. Return an entry ONLY for tickets whose receipt is ready;
+   * omit tickets with no receipt yet so the caller re-checks them later. Reuses the same tenant
+   * credentials as the send path.
+   */
+  checkReceipts(ticketIds: string[], credentials: unknown): Promise<PushReceiptOutcome[]>
+}
+
+/** Feature-detect the optional `PushReceiptChecker` capability on a resolved channel adapter. */
+export function supportsReceiptChecking(adapter: unknown): adapter is PushReceiptChecker {
+  return typeof (adapter as { checkReceipts?: unknown } | null | undefined)?.checkReceipts === 'function'
+}
+
 /** Extract the per-call push token from `SendMessageInput.metadata`, or null if absent. */
 export function readPushToken(input: SendMessageInput): string | null {
   const token = typeof input.metadata?.pushToken === 'string' ? input.metadata.pushToken : ''

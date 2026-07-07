@@ -42,6 +42,7 @@
   "notifications.preferences.pageDescription": "Wählen Sie, über welche Kanäle die einzelnen Benachrichtigungstypen zugestellt werden. Nicht gesetzte Optionen bleiben standardmäßig aktiviert.",
   "notifications.preferences.pageTitle": "Benachrichtigungseinstellungen",
   "notifications.preferences.profileGroup": "Profil",
+  "notifications.preferences.requiredHint": "This notification is required and cannot be turned off.",
   "notifications.preferences.save": "Einstellungen speichern",
   "notifications.preferences.saveError": "Benachrichtigungseinstellungen konnten nicht gespeichert werden",
   "notifications.preferences.saveSuccess": "Benachrichtigungseinstellungen gespeichert",

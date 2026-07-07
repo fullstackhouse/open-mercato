@@ -12,7 +12,11 @@ import {
   type MutationGuardInput,
 } from '@open-mercato/shared/lib/crud/mutation-guard-registry'
 import type { AwilixContainer } from 'awilix'
-import { customSendSchema, customSendResponseSchema } from '../../data/validators'
+import {
+  customSendSchema,
+  customSendResponseSchema,
+  CUSTOM_SEND_NO_DEVICES_WARNING,
+} from '../../data/validators'
 import type { PushNotificationService } from '../../lib/send-custom-push'
 
 const RESOURCE_KIND = 'push_notifications.push_notification_delivery'
@@ -104,7 +108,23 @@ export async function POST(req: Request) {
       })
     }
 
-    return NextResponse.json(result, { status: 201 })
+    // A well-formed request that enqueued nothing (no push channel, no in-scope device, or no device
+    // whose provider matches an active channel) previously returned a bare 201 — a silent
+    // success-with-no-send that hid, for example, a tenant-level admin targeting org-scoped devices.
+    // Surface an explicit machine-readable warning + human message so the caller can react.
+    const responseBody: z.infer<typeof customSendResponseSchema> =
+      result.enqueued === 0
+        ? {
+            enqueued: 0,
+            warning: CUSTOM_SEND_NO_DEVICES_WARNING,
+            message: translate(
+              'push_notifications.warnings.no_matching_devices_in_scope',
+              'No push-capable devices matched this recipient in the selected scope, so nothing was sent.',
+            ),
+          }
+        : { enqueued: result.enqueued }
+
+    return NextResponse.json(responseBody, { status: 201 })
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json(
@@ -129,7 +149,8 @@ export const openApi = {
     requestBody: { schema: customSendSchema },
     responses: {
       201: {
-        description: 'Per-device push jobs enqueued',
+        description:
+          'Per-device push jobs enqueued. When nothing was deliverable in scope, `enqueued` is 0 and a `warning` code plus human `message` explain why (no silent no-op).',
         content: { 'application/json': { schema: customSendResponseSchema } },
       },
       400: {
