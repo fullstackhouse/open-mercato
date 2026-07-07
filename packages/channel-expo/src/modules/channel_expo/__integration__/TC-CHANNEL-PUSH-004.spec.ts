@@ -4,7 +4,7 @@ import { apiRequest } from '@open-mercato/core/helpers/integration/api'
 import { readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
 
 /**
- * TC-CHANNEL-PUSH-003 — Expo provider visible to the hub's credential-connect API.
+ * TC-CHANNEL-PUSH-004 — Expo provider visible to the hub's credential-connect API.
  *
  * `@open-mercato/channel-expo` registers the `expo` push `ChannelAdapter` at import.
  * Push providers have no OAuth/webhook surface of their own — operators connect
@@ -19,7 +19,7 @@ import { readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixt
  * VALIDATE and create a channel — we send a wrong-typed accessToken instead so
  * validateCredentials rejects it and the flow stays side-effect-free.
  */
-test.describe('TC-CHANNEL-PUSH-003: Expo provider registration', () => {
+test.describe('TC-CHANNEL-PUSH-004: Expo provider registration', () => {
   test('POST connect/credentials with providerKey=expo reaches the registered adapter', async ({ request }) => {
     const token = await getAuthToken(request)
     const response = await apiRequest(

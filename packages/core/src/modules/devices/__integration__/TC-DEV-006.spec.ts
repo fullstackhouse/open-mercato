@@ -29,7 +29,7 @@ const ADMIN_PATH = '/api/devices/admin/devices'
 let deviceCounter = 0
 function uniqueDeviceId(): string {
   deviceCounter += 1
-  return `qa-dev3-${Date.now()}-${deviceCounter}`
+  return `qa-dev6-${Date.now()}-${deviceCounter}`
 }
 
 async function registerDevice(
@@ -61,10 +61,10 @@ async function readDeviceColumn<T = string>(deviceId: string, column: string): P
   })
 }
 
-// TC-DEV-003: push_token is a long-lived provider secret. encryption.ts declares it encrypted at rest,
+// TC-DEV-006: push_token is a long-lived provider secret. encryption.ts declares it encrypted at rest,
 // so the raw column must hold ciphertext (never the plaintext the client sent), while the API keeps
 // stripping it from every response.
-test.describe('TC-DEV-003: Devices push_token encryption at rest', () => {
+test.describe('TC-DEV-006: Devices push_token encryption at rest', () => {
   test('stores push_token as ciphertext and never returns it via the API', async ({ request }) => {
     const token = await getAuthToken(request, 'employee')
     const deviceId = uniqueDeviceId()
@@ -100,10 +100,10 @@ test.describe('TC-DEV-003: Devices push_token encryption at rest', () => {
   })
 })
 
-// TC-DEV-004: device metadata edits carry lost-update risk, so the self update route enforces OSS
+// TC-DEV-007: device metadata edits carry lost-update risk, so the self update route enforces OSS
 // optimistic locking when the caller sends the expected-version header. A stale version must 409; the
 // matching version must succeed.
-test.describe('TC-DEV-004: Devices optimistic-lock conflict on update', () => {
+test.describe('TC-DEV-007: Devices optimistic-lock conflict on update', () => {
   test('rejects a stale update with 409 and accepts the matching version', async ({ request }) => {
     const token = await getAuthToken(request, 'employee')
     const deviceId = uniqueDeviceId()
@@ -151,10 +151,10 @@ test.describe('TC-DEV-004: Devices optimistic-lock conflict on update', () => {
   })
 })
 
-// TC-DEV-005: the admin device endpoints gate every record by isOrganizationReadAccessAllowed. A
+// TC-DEV-008: the admin device endpoints gate every record by isOrganizationReadAccessAllowed. A
 // restricted admin (visibility scoped to one org) must be denied a device that lives in another org,
 // even though devices.admin grants tenant-wide feature access.
-test.describe('TC-DEV-005: Admin cross-organization device access denial', () => {
+test.describe('TC-DEV-008: Admin cross-organization device access denial', () => {
   test('denies a restricted admin a device outside their organization scope', async ({ request }) => {
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId } = getTokenScope(adminToken)
@@ -163,7 +163,7 @@ test.describe('TC-DEV-005: Admin cross-organization device access denial', () =>
 
     const stamp = `${Date.now()}-${deviceCounter}`
     const password = 'Restricted1!Admin'
-    const restrictedEmail = `tc-dev-005-restricted-${stamp}@acme.com`
+    const restrictedEmail = `tc-dev-008-restricted-${stamp}@acme.com`
 
     let orgAId: string | null = null
     let orgBId: string | null = null
@@ -172,8 +172,8 @@ test.describe('TC-DEV-005: Admin cross-organization device access denial', () =>
     let orgADeviceId: string | null = null
     let orgBDeviceId: string | null = null
     try {
-      orgAId = await createOrganizationInDb({ name: `TC-DEV-005 Org A ${stamp}`, tenantId })
-      orgBId = await createOrganizationInDb({ name: `TC-DEV-005 Org B ${stamp}`, tenantId })
+      orgAId = await createOrganizationInDb({ name: `TC-DEV-008 Org A ${stamp}`, tenantId })
+      orgBId = await createOrganizationInDb({ name: `TC-DEV-008 Org B ${stamp}`, tenantId })
 
       // The full admin registers a device into each org (organization is taken from the selected org).
       const orgADeviceKey = uniqueDeviceId()
@@ -197,7 +197,7 @@ test.describe('TC-DEV-005: Admin cross-organization device access denial', () =>
 
       // Build a restricted admin: devices.admin feature, visibility narrowed to org A only, and a null
       // home org so the effective scope is exactly the visibility list.
-      restrictedRoleId = await createRoleFixture(request, adminToken, { name: `TC-DEV-005 Role ${stamp}` })
+      restrictedRoleId = await createRoleFixture(request, adminToken, { name: `TC-DEV-008 Role ${stamp}` })
       restrictedUserId = await createUserFixture(request, adminToken, {
         email: restrictedEmail,
         password,

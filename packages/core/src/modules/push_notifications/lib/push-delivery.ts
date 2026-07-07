@@ -219,7 +219,8 @@ export async function processPushDeliveryJob(
 
   const registry = resolve('channelAdapterRegistry') as ChannelAdapterRegistryLike | undefined
   const adapter = registry?.get(delivery.provider)
-  // Provider package not installed yet (real adapters land in Phase 4). Terminal, no retry.
+  // No provider package registered this provider's adapter (e.g. channel-fcm/apns/expo not installed).
+  // Terminal, no retry.
   if (!adapter) return failTerminal(em, delivery, 'no_adapter')
 
   // Resolve credentials (best-effort, mirrors test-send).
