@@ -50,7 +50,6 @@ export async function GET(req: Request) {
           runMode: adapter.runMode ?? 'generic',
           canStartRun: adapter.runMode !== 'provider',
           supportedEntities: adapter.supportedEntities,
-          syncModes: adapter.syncModes ?? {},
           runParameters: adapter.runParameters ?? [],
           hasCredentials: Boolean(credentials),
           isEnabled,

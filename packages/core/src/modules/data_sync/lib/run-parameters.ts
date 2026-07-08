@@ -19,7 +19,6 @@ export function getApplicableRunParameters(
   declared: RunParameter[] | undefined,
   direction: 'import' | 'export',
   entityType?: string,
-  mode?: string,
 ): RunParameter[] {
   if (!declared || declared.length === 0) return []
   return declared.filter((param) => {
@@ -27,10 +26,6 @@ export function getApplicableRunParameters(
     if (param.entityType !== undefined && entityType !== undefined) {
       const allowed = Array.isArray(param.entityType) ? param.entityType : [param.entityType]
       if (!allowed.includes(entityType)) return false
-    }
-    if (param.mode !== undefined && mode !== undefined) {
-      const allowed = Array.isArray(param.mode) ? param.mode : [param.mode]
-      if (!allowed.includes(mode)) return false
     }
     return true
   })
@@ -68,9 +63,9 @@ function coerceNumber(value: unknown): number | null {
 
 /**
  * Validate and coerce an untrusted parameter object against an adapter's
- * declared `runParameters` for the given run direction, entity type and mode.
+ * declared `runParameters` for the given run direction and entity type.
  *
- * - Parameters that do not apply to the direction, entity type or mode are ignored.
+ * - Parameters that do not apply to the direction or entity type are ignored.
  * - Undeclared keys in the input are dropped (never passed through).
  * - Blank values fall back to `defaultValue`; a blank required value is an error.
  * - Values are coerced to the declared type; the result only contains declared keys.
@@ -80,9 +75,8 @@ export function normalizeRunParameters(
   direction: 'import' | 'export',
   raw: Record<string, unknown> | null | undefined,
   entityType?: string,
-  mode?: string,
 ): NormalizeRunParametersResult {
-  const params = getApplicableRunParameters(declared, direction, entityType, mode)
+  const params = getApplicableRunParameters(declared, direction, entityType)
   const input = raw && typeof raw === 'object' ? raw : {}
   const values: Record<string, RunParameterValue> = {}
   const errors: RunParameterError[] = []

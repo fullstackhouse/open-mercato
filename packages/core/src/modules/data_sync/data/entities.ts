@@ -4,7 +4,7 @@ import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legac
 @Entity({ tableName: 'sync_runs' })
 @Index({ properties: ['integrationId', 'entityType', 'status', 'organizationId', 'tenantId'] })
 export class SyncRun {
-  [OptionalProps]?: 'status' | 'mode' | 'cursor' | 'initialCursor' | 'createdCount' | 'updatedCount' | 'skippedCount' | 'failedCount' | 'batchesCompleted' | 'lastError' | 'progressJobId' | 'jobId' | 'triggeredBy' | 'parameters' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'status' | 'cursor' | 'initialCursor' | 'createdCount' | 'updatedCount' | 'skippedCount' | 'failedCount' | 'batchesCompleted' | 'lastError' | 'progressJobId' | 'jobId' | 'triggeredBy' | 'parameters' | 'createdAt' | 'updatedAt' | 'deletedAt'
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
@@ -16,10 +16,6 @@ export class SyncRun {
 
   @Property({ name: 'direction', type: 'text' })
   direction!: 'import' | 'export'
-
-  // Sync mode (e.g. 'backfill' | 'feed'); adapter-defined, defaults to 'backfill'.
-  @Property({ name: 'mode', type: 'text', default: 'backfill' })
-  mode: string = 'backfill'
 
   @Property({ name: 'status', type: 'text' })
   status!: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
@@ -77,12 +73,9 @@ export class SyncRun {
 }
 
 @Entity({ tableName: 'sync_cursors' })
-// Unique per (integration, entity, direction, mode) — the mode dimension lets one
-// entity keep independent cursors for e.g. its backfill and its change-feed.
-// Explicitly named so the migration is deterministic (no auto-hashed index name).
-@Index({ name: 'sync_cursors_scope_mode_uq', properties: ['integrationId', 'entityType', 'direction', 'mode', 'organizationId', 'tenantId'], options: { unique: true } })
+@Index({ properties: ['integrationId', 'entityType', 'direction', 'organizationId', 'tenantId'], options: { unique: true } })
 export class SyncCursor {
-  [OptionalProps]?: 'mode' | 'cursor' | 'updatedAt'
+  [OptionalProps]?: 'cursor' | 'updatedAt'
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
@@ -94,10 +87,6 @@ export class SyncCursor {
 
   @Property({ name: 'direction', type: 'text' })
   direction!: 'import' | 'export'
-
-  // See SyncRun.mode. Part of the unique key so backfill and feed cursors coexist.
-  @Property({ name: 'mode', type: 'text', default: 'backfill' })
-  mode: string = 'backfill'
 
   @Property({ name: 'cursor', type: 'text', nullable: true })
   cursor?: string | null
@@ -144,7 +133,7 @@ export class SyncMapping {
 @Entity({ tableName: 'sync_schedules' })
 @Index({ properties: ['integrationId', 'entityType', 'direction', 'organizationId', 'tenantId'] })
 export class SyncSchedule {
-  [OptionalProps]?: 'mode' | 'timezone' | 'fullSync' | 'isEnabled' | 'scheduledJobId' | 'lastRunAt' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'timezone' | 'fullSync' | 'isEnabled' | 'scheduledJobId' | 'lastRunAt' | 'createdAt' | 'updatedAt' | 'deletedAt'
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
@@ -156,10 +145,6 @@ export class SyncSchedule {
 
   @Property({ name: 'direction', type: 'text' })
   direction!: 'import' | 'export'
-
-  // See SyncRun.mode. Which mode this schedule triggers (typically 'feed' for a tail).
-  @Property({ name: 'mode', type: 'text', default: 'backfill' })
-  mode: string = 'backfill'
 
   @Property({ name: 'schedule_type', type: 'text' })
   scheduleType!: 'cron' | 'interval'

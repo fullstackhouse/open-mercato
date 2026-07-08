@@ -84,7 +84,7 @@ export async function POST(req: Request, ctx: { params?: Promise<{ id?: string }
 
   const cursor = parsedBody.data.fromBeginning
     ? null
-    : previous.cursor ?? await syncRunService.resolveCursor(previous.integrationId, previous.entityType, previous.direction, previous.mode, scope)
+    : previous.cursor ?? await syncRunService.resolveCursor(previous.integrationId, previous.entityType, previous.direction, scope)
 
   const { run, progressJob } = await startDataSyncRun({
     syncRunService,
@@ -97,7 +97,6 @@ export async function POST(req: Request, ctx: { params?: Promise<{ id?: string }
       integrationId: previous.integrationId,
       entityType: previous.entityType,
       direction: previous.direction,
-      mode: previous.mode,
       cursor,
       triggeredBy: auth.sub,
       batchSize: 100,

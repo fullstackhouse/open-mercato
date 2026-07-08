@@ -7,9 +7,6 @@ export const runSyncSchema = z.object({
   fullSync: z.boolean().default(false),
   batchSize: z.number().int().min(1).max(1000).default(100),
   triggeredBy: z.string().optional(),
-  // Adapter-declared sync mode (e.g. 'backfill' | 'feed'). Validated against the
-  // adapter's `syncModes` for the entity in the run route; defaults to 'backfill'.
-  mode: z.string().min(1).default('backfill'),
   // Adapter-declared run parameters. Validated/coerced against the adapter's
   // `runParameters` declaration in the run route; here we only accept a record.
   parameters: z.record(z.string(), z.unknown()).optional(),
@@ -56,7 +53,6 @@ export const createSyncScheduleSchema = z.object({
   scheduleValue: z.string().min(1),
   timezone: z.string().min(1).default('UTC'),
   fullSync: z.boolean().default(false),
-  mode: z.string().min(1).default('backfill'),
   isEnabled: z.boolean().default(true),
 })
 
@@ -68,7 +64,6 @@ export const updateSyncScheduleSchema = z.object({
   scheduleValue: z.string().min(1).optional(),
   timezone: z.string().min(1).optional(),
   fullSync: z.boolean().optional(),
-  mode: z.string().min(1).optional(),
   isEnabled: z.boolean().optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one field must be updated',

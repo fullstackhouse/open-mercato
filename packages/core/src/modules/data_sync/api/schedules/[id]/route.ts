@@ -110,7 +110,6 @@ export async function PUT(req: Request, ctx: { params?: Promise<{ id?: string }>
       scheduleValue: parsed.data.scheduleValue ?? current.scheduleValue,
       timezone: parsed.data.timezone ?? current.timezone,
       fullSync: parsed.data.fullSync ?? current.fullSync,
-      mode: parsed.data.mode ?? current.mode,
       isEnabled: parsed.data.isEnabled ?? current.isEnabled,
     }, scope)
 

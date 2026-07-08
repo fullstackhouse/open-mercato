@@ -430,7 +430,6 @@ export function createSyncEngine(deps: EngineDeps) {
       try {
         for await (const batch of adapter.streamImport({
           entityType: run.entityType,
-          mode: run.mode,
           cursor: run.cursor ?? undefined,
           batchSize,
           credentials,
@@ -576,7 +575,6 @@ export function createSyncEngine(deps: EngineDeps) {
       try {
         for await (const batch of adapter.streamExport({
           entityType: run.entityType,
-          mode: run.mode,
           cursor: run.cursor ?? undefined,
           batchSize,
           credentials,

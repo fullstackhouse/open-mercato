@@ -129,7 +129,6 @@ export function createSyncScheduleService(em: EntityManager, schedulerService?: 
       scheduleValue: string
       timezone: string
       fullSync: boolean
-      mode: string
       isEnabled: boolean
       expectedUpdatedAt?: string | null
     }, scope: SyncScope): Promise<SyncSchedule> {
@@ -155,7 +154,6 @@ export function createSyncScheduleService(em: EntityManager, schedulerService?: 
         scheduleValue: input.scheduleValue,
         timezone: input.timezone,
         fullSync: input.fullSync,
-        mode: input.mode,
         isEnabled: input.isEnabled,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
@@ -168,7 +166,6 @@ export function createSyncScheduleService(em: EntityManager, schedulerService?: 
       row.scheduleValue = input.scheduleValue
       row.timezone = input.timezone
       row.fullSync = input.fullSync
-      row.mode = input.mode
       row.isEnabled = input.isEnabled
       row.scheduledJobId = row.scheduledJobId ?? row.id
 

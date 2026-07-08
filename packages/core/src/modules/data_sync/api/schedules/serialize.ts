@@ -7,7 +7,6 @@ export function serializeSchedule(item: {
   scheduleValue: string
   timezone: string
   fullSync: boolean
-  mode: string
   isEnabled: boolean
   scheduledJobId?: string | null
   lastRunAt?: Date | null
@@ -23,7 +22,6 @@ export function serializeSchedule(item: {
     scheduleValue: item.scheduleValue,
     timezone: item.timezone,
     fullSync: item.fullSync,
-    mode: item.mode,
     isEnabled: item.isEnabled,
     scheduledJobId: item.scheduledJobId ?? null,
     lastRunAt: item.lastRunAt?.toISOString() ?? null,

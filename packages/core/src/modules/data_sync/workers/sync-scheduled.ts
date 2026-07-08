@@ -67,7 +67,6 @@ export default async function handle(job: QueuedJob<ScheduledSyncPayload>, ctx: 
         schedule.integrationId,
         schedule.entityType,
         schedule.direction,
-        schedule.mode,
         job.payload.scope,
       )
 
@@ -75,7 +74,6 @@ export default async function handle(job: QueuedJob<ScheduledSyncPayload>, ctx: 
     integrationId: schedule.integrationId,
     entityType: schedule.entityType,
     direction: schedule.direction,
-    mode: schedule.mode,
     cursor,
     triggeredBy: 'scheduler',
   }, job.payload.scope)
