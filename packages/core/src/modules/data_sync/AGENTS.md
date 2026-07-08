@@ -129,12 +129,17 @@ runParameters: [
   { key: 'startId', label: 'Start id', type: 'number', min: 0 },
   { key: 'mode', label: 'Mode', type: 'select',
     options: [{ value: 'fast' }, { value: 'thorough' }] },
+  // Only offered when the orders entity is selected:
+  { key: 'bulk', label: 'Bulk reindex', type: 'boolean', entityType: 'sales_orders' },
 ]
 ```
 
 Supported types: `boolean`, `string`, `number`, `select`. A parameter may set
-`direction` to apply to only `import` or `export` runs; blank values fall back
-to `defaultValue`; values are retained across retries.
+`direction` to apply to only `import` or `export` runs, and `entityType`
+(a `supportedEntities` value or an array of them) to apply only when that
+entity is selected — use it when a knob only makes sense for one entity's run.
+Params without `direction` / `entityType` apply to every run. Blank values fall
+back to `defaultValue`; values are retained across retries.
 
 If the sync provider needs bootstrap credentials, mappings, locales, channels, or other default sync settings after a fresh install, implement a provider-owned env preset flow:
 

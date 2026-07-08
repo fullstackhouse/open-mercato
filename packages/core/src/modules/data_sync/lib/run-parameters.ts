@@ -10,15 +10,25 @@ export type NormalizeRunParametersResult =
   | { ok: false; errors: RunParameterError[] }
 
 /**
- * Returns the declared parameters that apply to a given run direction. A
- * parameter without an explicit `direction` applies to both.
+ * Returns the declared parameters that apply to a given run. A parameter
+ * without an explicit `direction` applies to both directions; one without an
+ * explicit `entityType` applies to every entity. When `entityType` is omitted
+ * here (the caller does not know the run's entity), entity scoping is skipped.
  */
-export function getRunParametersForDirection(
+export function getApplicableRunParameters(
   declared: RunParameter[] | undefined,
   direction: 'import' | 'export',
+  entityType?: string,
 ): RunParameter[] {
   if (!declared || declared.length === 0) return []
-  return declared.filter((param) => !param.direction || param.direction === direction)
+  return declared.filter((param) => {
+    if (param.direction && param.direction !== direction) return false
+    if (param.entityType !== undefined && entityType !== undefined) {
+      const allowed = Array.isArray(param.entityType) ? param.entityType : [param.entityType]
+      if (!allowed.includes(entityType)) return false
+    }
+    return true
+  })
 }
 
 function isBlank(value: unknown): boolean {
@@ -53,9 +63,9 @@ function coerceNumber(value: unknown): number | null {
 
 /**
  * Validate and coerce an untrusted parameter object against an adapter's
- * declared `runParameters` for the given run direction.
+ * declared `runParameters` for the given run direction and entity type.
  *
- * - Parameters that do not apply to the direction are ignored.
+ * - Parameters that do not apply to the direction or entity type are ignored.
  * - Undeclared keys in the input are dropped (never passed through).
  * - Blank values fall back to `defaultValue`; a blank required value is an error.
  * - Values are coerced to the declared type; the result only contains declared keys.
@@ -64,8 +74,9 @@ export function normalizeRunParameters(
   declared: RunParameter[] | undefined,
   direction: 'import' | 'export',
   raw: Record<string, unknown> | null | undefined,
+  entityType?: string,
 ): NormalizeRunParametersResult {
-  const params = getRunParametersForDirection(declared, direction)
+  const params = getApplicableRunParameters(declared, direction, entityType)
   const input = raw && typeof raw === 'object' ? raw : {}
   const values: Record<string, RunParameterValue> = {}
   const errors: RunParameterError[] = []

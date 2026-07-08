@@ -140,6 +140,14 @@ export interface RunParameter {
    * parameter applies to both import and export runs.
    */
   direction?: 'import' | 'export'
+  /**
+   * Restrict the parameter to one or more entity types (matched against the
+   * run's `entityType`, i.e. a value from `supportedEntities`). When omitted
+   * the parameter applies to every entity the adapter supports. Use this when
+   * a knob only makes sense for a specific entity's run — e.g. a bulk-reindex
+   * toggle that only applies to the orders backfill.
+   */
+  entityType?: string | string[]
 }
 
 export interface DataSyncAdapter {

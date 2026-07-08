@@ -74,6 +74,7 @@ type RunParameter = {
   min?: number
   max?: number
   direction?: 'import' | 'export'
+  entityType?: string | string[]
 }
 
 type RunParameterValue = string | boolean
@@ -186,9 +187,17 @@ function formatEntityTypeLabel(entityType: string): string {
 function getApplicableRunParameters(
   option: SyncOption | null,
   direction: 'import' | 'export',
+  entityType: string | null,
 ): RunParameter[] {
   const declared = option?.runParameters ?? []
-  return declared.filter((param) => !param.direction || param.direction === direction)
+  return declared.filter((param) => {
+    if (param.direction && param.direction !== direction) return false
+    if (param.entityType !== undefined && entityType) {
+      const allowed = Array.isArray(param.entityType) ? param.entityType : [param.entityType]
+      if (!allowed.includes(entityType)) return false
+    }
+    return true
+  })
 }
 
 function buildDefaultRunParameterValues(params: RunParameter[]): Record<string, RunParameterValue> {
@@ -318,8 +327,8 @@ export default function SyncRunsDashboardPage() {
   )
 
   const runParameters = React.useMemo(
-    () => getApplicableRunParameters(selectedIntegration, selectedDirection),
-    [selectedIntegration, selectedDirection],
+    () => getApplicableRunParameters(selectedIntegration, selectedDirection, selectedEntityType),
+    [selectedIntegration, selectedDirection, selectedEntityType],
   )
 
   React.useEffect(() => {

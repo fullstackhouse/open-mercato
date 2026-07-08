@@ -1,5 +1,5 @@
 import type { RunParameter } from '../adapter'
-import { getRunParametersForDirection, normalizeRunParameters } from '../run-parameters'
+import { getApplicableRunParameters, normalizeRunParameters } from '../run-parameters'
 
 const params: RunParameter[] = [
   { key: 'dryRun', label: 'Dry run', type: 'boolean', defaultValue: false },
@@ -9,16 +9,29 @@ const params: RunParameter[] = [
   { key: 'exportOnly', label: 'Export only', type: 'boolean', direction: 'export' },
 ]
 
-describe('getRunParametersForDirection', () => {
+describe('getApplicableRunParameters', () => {
   it('includes direction-agnostic params and only matching directional params', () => {
-    expect(getRunParametersForDirection(params, 'import').map((p) => p.key)).toEqual([
+    expect(getApplicableRunParameters(params, 'import').map((p) => p.key)).toEqual([
       'dryRun', 'startId', 'note', 'mode',
     ])
-    expect(getRunParametersForDirection(params, 'export').map((p) => p.key)).toContain('exportOnly')
+    expect(getApplicableRunParameters(params, 'export').map((p) => p.key)).toContain('exportOnly')
   })
 
   it('returns empty array when nothing is declared', () => {
-    expect(getRunParametersForDirection(undefined, 'import')).toEqual([])
+    expect(getApplicableRunParameters(undefined, 'import')).toEqual([])
+  })
+
+  it('scopes params to entity types, keeping unscoped params for every entity', () => {
+    const scoped: RunParameter[] = [
+      { key: 'shared', label: 'Shared', type: 'boolean' },
+      { key: 'bulk', label: 'Bulk', type: 'boolean', entityType: 'orders' },
+      { key: 'refData', label: 'Ref data', type: 'boolean', entityType: ['products', 'customers'] },
+    ]
+    expect(getApplicableRunParameters(scoped, 'import', 'orders').map((p) => p.key)).toEqual(['shared', 'bulk'])
+    expect(getApplicableRunParameters(scoped, 'import', 'products').map((p) => p.key)).toEqual(['shared', 'refData'])
+    expect(getApplicableRunParameters(scoped, 'import', 'customers').map((p) => p.key)).toEqual(['shared', 'refData'])
+    // No entity provided → entity scoping is skipped, everything applicable is returned.
+    expect(getApplicableRunParameters(scoped, 'import').map((p) => p.key)).toEqual(['shared', 'bulk', 'refData'])
   })
 })
 
@@ -63,5 +76,15 @@ describe('normalizeRunParameters', () => {
     const result = normalizeRunParameters(params, 'import', { exportOnly: true })
     expect(result.ok).toBe(true)
     if (result.ok) expect('exportOnly' in result.values).toBe(false)
+  })
+
+  it('ignores params scoped to a different entity, even required ones', () => {
+    const scoped: RunParameter[] = [
+      { key: 'bulk', label: 'Bulk', type: 'boolean', entityType: 'orders' },
+      { key: 'refCursor', label: 'Ref cursor', type: 'string', required: true, entityType: 'products' },
+    ]
+    // Running the `orders` entity: the products-only required param is dropped, not enforced.
+    const result = normalizeRunParameters(scoped, 'import', { bulk: 'true', refCursor: 'x' }, 'orders')
+    expect(result).toEqual({ ok: true, values: { bulk: true } })
   })
 })

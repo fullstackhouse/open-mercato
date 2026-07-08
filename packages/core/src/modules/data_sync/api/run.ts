@@ -74,6 +74,7 @@ export async function POST(req: Request) {
       adapter.runParameters,
       parsed.data.direction,
       parsed.data.parameters,
+      parsed.data.entityType,
     )
     if (!normalizedParameters.ok) {
       return NextResponse.json(
