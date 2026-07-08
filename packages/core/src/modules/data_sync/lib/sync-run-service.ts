@@ -17,6 +17,7 @@ export function createSyncRunService(em: EntityManager) {
         integrationId: run.integrationId,
         entityType: run.entityType,
         direction: run.direction,
+        mode: run.mode,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
       },
@@ -34,6 +35,7 @@ export function createSyncRunService(em: EntityManager) {
         integrationId: run.integrationId,
         entityType: run.entityType,
         direction: run.direction,
+        mode: run.mode,
         cursor,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
@@ -46,6 +48,7 @@ export function createSyncRunService(em: EntityManager) {
       integrationId: string
       entityType: string
       direction: 'import' | 'export'
+      mode?: string | null
       cursor?: string | null
       triggeredBy?: string | null
       progressJobId?: string | null
@@ -56,6 +59,7 @@ export function createSyncRunService(em: EntityManager) {
         integrationId: input.integrationId,
         entityType: input.entityType,
         direction: input.direction,
+        mode: input.mode ?? 'backfill',
         status: 'pending',
         cursor: input.cursor,
         initialCursor: input.cursor,
@@ -205,7 +209,7 @@ export function createSyncRunService(em: EntityManager) {
       return run
     },
 
-    async resolveCursor(integrationId: string, entityType: string, direction: 'import' | 'export', scope: SyncScope): Promise<string | null> {
+    async resolveCursor(integrationId: string, entityType: string, direction: 'import' | 'export', mode: string, scope: SyncScope): Promise<string | null> {
       const row = await findOneWithDecryption(
         em,
         SyncCursor,
@@ -213,6 +217,7 @@ export function createSyncRunService(em: EntityManager) {
         integrationId,
         entityType,
         direction,
+        mode,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
         },
