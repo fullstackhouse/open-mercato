@@ -67,7 +67,7 @@ export const setup: ModuleSetupConfig = {
         id: stableScheduleUuid(`push_notifications:reclaim-stuck:${tenantId}`),
         name: 'Push delivery stuck-row reclaim',
         description:
-          `Every ${RECLAIM_TICK_INTERVAL_SECONDS}s, recover push deliveries stranded in 'sending' by a crashed worker (re-enqueue if attempts remain, else expire).`,
+          `Every ${RECLAIM_TICK_INTERVAL_SECONDS}s, recover push deliveries stranded in 'sending' by a crashed worker (re-enqueue if attempts remain, else expire) and poll async provider receipts (Expo) to soft-delete unregistered devices.`,
         scopeType: 'tenant',
         tenantId,
         scheduleType: 'interval',

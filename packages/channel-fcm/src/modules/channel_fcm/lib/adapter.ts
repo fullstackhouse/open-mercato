@@ -59,24 +59,77 @@ function appNameForServiceAccount(serviceAccount: FcmServiceAccount): string {
   return `om-fcm-${hash}`
 }
 
+type FcmAppLike = {
+  name?: string
+  /**
+   * firebase-admin's App exposes async `delete()`, which stops the background
+   * OAuth token-refresh timer bound to the service-account credential and drops
+   * the app from the SDK's registry.
+   */
+  delete(): Promise<void>
+}
+
+/**
+ * Bounds the number of live firebase-admin apps cached at once. Each app holds a
+ * service-account OAuth credential with a background token-refresh timer, so an
+ * unbounded cache would leak an app (and its timer) every time a tenant rotates
+ * their service account (the hash changes → a new app, while the stale app never
+ * gets deleted). LRU-evicting the least-recently used app and calling `delete()`
+ * keeps the app and timer count bounded.
+ */
+const APP_CACHE_MAX = 32
+const appCache = new Map<string, Promise<FcmAppLike>>()
+
+async function getApp(serviceAccount: FcmServiceAccount): Promise<FcmAppLike> {
+  const key = appNameForServiceAccount(serviceAccount)
+  const existing = appCache.get(key)
+  if (existing) {
+    // Refresh recency: delete + re-insert moves the key to the newest position.
+    appCache.delete(key)
+    appCache.set(key, existing)
+    return existing
+  }
+
+  const pending = (async () => {
+    const { initializeApp, getApps, cert } = await import('firebase-admin/app')
+    const registered = getApps().find((app) => app?.name === key)
+    return (
+      registered ??
+      initializeApp(
+        {
+          credential: cert({
+            projectId: serviceAccount.projectId,
+            clientEmail: serviceAccount.clientEmail,
+            privateKey: serviceAccount.privateKey,
+          }),
+        },
+        key,
+      )
+    ) as unknown as FcmAppLike
+  })()
+  appCache.set(key, pending)
+  // Drop a rejected init (e.g. invalid service-account cert) from the cache so the
+  // next call can re-initialize instead of forever returning the cached rejection.
+  pending.catch(() => {
+    if (appCache.get(key) === pending) appCache.delete(key)
+  })
+
+  if (appCache.size > APP_CACHE_MAX) {
+    const oldestKey = appCache.keys().next().value as string | undefined
+    if (oldestKey != null) {
+      const evicted = appCache.get(oldestKey)
+      appCache.delete(oldestKey)
+      void evicted?.then((app) => app.delete()).catch(() => {})
+    }
+  }
+
+  return pending
+}
+
 async function defaultMessagingFactory(serviceAccount: FcmServiceAccount): Promise<FirebaseMessaging> {
-  const { initializeApp, getApps, cert } = await import('firebase-admin/app')
   const { getMessaging } = await import('firebase-admin/messaging')
-  const appName = appNameForServiceAccount(serviceAccount)
-  const existing = getApps().find((app) => app?.name === appName)
-  const app =
-    existing ??
-    initializeApp(
-      {
-        credential: cert({
-          projectId: serviceAccount.projectId,
-          clientEmail: serviceAccount.clientEmail,
-          privateKey: serviceAccount.privateKey,
-        }),
-      },
-      appName,
-    )
-  return getMessaging(app) as unknown as FirebaseMessaging
+  const app = await getApp(serviceAccount)
+  return getMessaging(app as never) as unknown as FirebaseMessaging
 }
 
 async function resolveMessaging(serviceAccount: FcmServiceAccount): Promise<FirebaseMessaging> {

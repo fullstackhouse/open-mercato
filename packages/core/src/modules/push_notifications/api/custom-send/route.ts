@@ -12,7 +12,11 @@ import {
   type MutationGuardInput,
 } from '@open-mercato/shared/lib/crud/mutation-guard-registry'
 import type { AwilixContainer } from 'awilix'
-import { customSendSchema, customSendResponseSchema } from '../../data/validators'
+import {
+  customSendSchema,
+  customSendResponseSchema,
+  CUSTOM_SEND_NO_DEVICES_WARNING,
+} from '../../data/validators'
 import type { PushNotificationService } from '../../lib/send-custom-push'
 
 const RESOURCE_KIND = 'push_notifications.push_notification_delivery'
@@ -104,7 +108,25 @@ export async function POST(req: Request) {
       })
     }
 
-    return NextResponse.json(result, { status: 201 })
+    // A well-formed request that enqueued nothing (no push channel, no in-scope device, or no device
+    // whose provider matches an active channel) previously returned a bare 201 — a silent
+    // success-with-no-send that hid, for example, a tenant-level admin targeting org-scoped devices.
+    // Surface an explicit machine-readable warning + human message so the caller can react.
+    const responseBody: z.infer<typeof customSendResponseSchema> =
+      result.enqueued === 0
+        ? {
+            enqueued: 0,
+            warning: CUSTOM_SEND_NO_DEVICES_WARNING,
+            message: translate(
+              'push_notifications.warnings.no_matching_devices_in_scope',
+              'No push-capable devices matched this recipient in the selected scope, so nothing was sent.',
+            ),
+          }
+        : { enqueued: result.enqueued }
+
+    // 201 Created only when jobs were actually enqueued; the no-op branch returns 200 OK so callers
+    // that key off the status code aren't told something was created when nothing was.
+    return NextResponse.json(responseBody, { status: result.enqueued === 0 ? 200 : 201 })
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json(
@@ -128,8 +150,13 @@ export const openApi = {
     tags: ['PushNotifications'],
     requestBody: { schema: customSendSchema },
     responses: {
+      200: {
+        description:
+          'Nothing was deliverable in scope: `enqueued` is 0 and a `warning` code plus human `message` explain why (no silent no-op). Returned instead of 201 because nothing was created.',
+        content: { 'application/json': { schema: customSendResponseSchema } },
+      },
       201: {
-        description: 'Per-device push jobs enqueued',
+        description: 'Per-device push jobs enqueued.',
         content: { 'application/json': { schema: customSendResponseSchema } },
       },
       400: {

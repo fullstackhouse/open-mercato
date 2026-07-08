@@ -42,6 +42,7 @@
   "notifications.preferences.pageDescription": "Choose which channels deliver each notification type. Unset choices stay enabled by default.",
   "notifications.preferences.pageTitle": "Notification Preferences",
   "notifications.preferences.profileGroup": "Profile",
+  "notifications.preferences.requiredHint": "This notification is required and cannot be turned off.",
   "notifications.preferences.save": "Save preferences",
   "notifications.preferences.saveError": "Failed to save notification preferences",
   "notifications.preferences.saveSuccess": "Notification preferences saved",

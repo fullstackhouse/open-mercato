@@ -74,5 +74,6 @@
   "push_notifications.types.admin_custom_message.title": "Admin-Nachricht",
   "push_notifications.types.admin_custom_silent.body": "Hintergrund-Update.",
   "push_notifications.types.admin_custom_silent.label": "Stille Admin-Nachricht",
-  "push_notifications.types.admin_custom_silent.title": "Stille Nachricht"
+  "push_notifications.types.admin_custom_silent.title": "Stille Nachricht",
+  "push_notifications.warnings.no_matching_devices_in_scope": "Kein push-fähiges Gerät dieses Empfängers passte zum ausgewählten Bereich, daher wurde nichts gesendet."
 }

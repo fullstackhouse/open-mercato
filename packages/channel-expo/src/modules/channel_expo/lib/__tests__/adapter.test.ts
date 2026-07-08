@@ -2,6 +2,7 @@ import {
   getExpoChannelAdapter,
   setExpoClientFactory,
   type ExpoClientLike,
+  type ExpoPushReceipt,
   type ExpoPushTicket,
 } from '../adapter'
 import type { SendMessageInput } from '@open-mercato/core/modules/communication_channels/lib/adapter'
@@ -22,8 +23,21 @@ function buildInput(overrides?: Partial<SendMessageInput>): SendMessageInput {
 
 function buildClient(ticket: ExpoPushTicket, validToken = true): { client: ExpoClientLike; send: jest.Mock } {
   const send = jest.fn(async () => [ticket])
-  const client: ExpoClientLike = { isExpoPushToken: () => validToken, send }
+  const client: ExpoClientLike = { isExpoPushToken: () => validToken, send, getReceipts: async () => ({}) }
   return { client, send }
+}
+
+function buildReceiptClient(receipts: Record<string, ExpoPushReceipt>): {
+  client: ExpoClientLike
+  getReceipts: jest.Mock
+} {
+  const getReceipts = jest.fn(async (ticketIds: string[]) => {
+    const out: Record<string, ExpoPushReceipt> = {}
+    for (const id of ticketIds) if (receipts[id]) out[id] = receipts[id]
+    return out
+  })
+  const client: ExpoClientLike = { isExpoPushToken: () => true, send: jest.fn(async () => []), getReceipts }
+  return { client, getReceipts }
 }
 
 afterEach(() => setExpoClientFactory(null))
@@ -138,5 +152,60 @@ describe('ExpoChannelAdapter', () => {
     expect(result.status).toBe('failed')
     expect(result.error).toBe('MessageRateExceeded')
     expect(result.metadata?.unregistered).toBeUndefined()
+  })
+})
+
+describe('ExpoChannelAdapter.checkReceipts', () => {
+  it('flags a DeviceNotRegistered receipt as unregistered (the async "app uninstalled" case)', async () => {
+    const { client, getReceipts } = buildReceiptClient({
+      'ticket-dead': { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } },
+    })
+    setExpoClientFactory(() => client)
+
+    const outcomes = await getExpoChannelAdapter().checkReceipts(['ticket-dead'], {})
+
+    expect(getReceipts).toHaveBeenCalledWith(['ticket-dead'])
+    expect(outcomes).toEqual([{ ticketId: 'ticket-dead', unregistered: true }])
+  })
+
+  it('resolves an ok receipt without killing the token', async () => {
+    const { client } = buildReceiptClient({ 'ticket-ok': { status: 'ok' } })
+    setExpoClientFactory(() => client)
+
+    const outcomes = await getExpoChannelAdapter().checkReceipts(['ticket-ok'], {})
+
+    expect(outcomes).toEqual([{ ticketId: 'ticket-ok', unregistered: false }])
+  })
+
+  it('treats MessageRateExceeded as transient (receipt resolved, token kept)', async () => {
+    const { client } = buildReceiptClient({
+      'ticket-rate': { status: 'error', details: { error: 'MessageRateExceeded' } },
+    })
+    setExpoClientFactory(() => client)
+
+    const outcomes = await getExpoChannelAdapter().checkReceipts(['ticket-rate'], {})
+
+    expect(outcomes).toEqual([{ ticketId: 'ticket-rate', unregistered: false }])
+  })
+
+  it('omits tickets whose receipt is not ready yet (re-checked on a later sweep)', async () => {
+    const { client } = buildReceiptClient({
+      'ticket-ready': { status: 'ok' },
+    })
+    setExpoClientFactory(() => client)
+
+    const outcomes = await getExpoChannelAdapter().checkReceipts(['ticket-ready', 'ticket-pending'], {})
+
+    expect(outcomes).toEqual([{ ticketId: 'ticket-ready', unregistered: false }])
+  })
+
+  it('short-circuits with no network call when there are no usable ticket ids', async () => {
+    const { client, getReceipts } = buildReceiptClient({})
+    setExpoClientFactory(() => client)
+
+    const outcomes = await getExpoChannelAdapter().checkReceipts(['', ''], {})
+
+    expect(outcomes).toEqual([])
+    expect(getReceipts).not.toHaveBeenCalled()
   })
 })

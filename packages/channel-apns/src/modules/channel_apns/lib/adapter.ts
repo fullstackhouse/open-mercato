@@ -92,6 +92,11 @@ async function getProvider(credentials: ApnsResolvedCredentials): Promise<ApnsPr
     })
   })()
   providerCache.set(key, pending)
+  // Drop a rejected init (e.g. invalid p8 key) from the cache so the next call can
+  // re-initialize instead of forever returning the cached rejection.
+  pending.catch(() => {
+    if (providerCache.get(key) === pending) providerCache.delete(key)
+  })
 
   if (providerCache.size > PROVIDER_CACHE_MAX) {
     const oldestKey = providerCache.keys().next().value as string | undefined

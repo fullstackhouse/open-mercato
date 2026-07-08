@@ -74,5 +74,6 @@
   "push_notifications.types.admin_custom_message.title": "Mensaje de administrador",
   "push_notifications.types.admin_custom_silent.body": "Actualización en segundo plano.",
   "push_notifications.types.admin_custom_silent.label": "Mensaje silencioso de administrador",
-  "push_notifications.types.admin_custom_silent.title": "Mensaje silencioso"
+  "push_notifications.types.admin_custom_silent.title": "Mensaje silencioso",
+  "push_notifications.warnings.no_matching_devices_in_scope": "Ningún dispositivo con capacidad de push de este destinatario coincidió con el ámbito seleccionado, por lo que no se envió nada."
 }

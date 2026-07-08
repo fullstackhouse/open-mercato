@@ -3,8 +3,16 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Switch } from '@open-mercato/ui/primitives/switch'
+import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 
-export type NotificationTypeItem = { id: string; labelKey: string; descriptionKey?: string | null }
+export type NotificationTypeItem = {
+  id: string
+  labelKey: string
+  descriptionKey?: string | null
+  // When true the type cannot be opted out of; the matrix locks its cells ON (the server drops
+  // opt-out writes for these, so a toggleable switch would silently lie on reload).
+  nonOptOut?: boolean
+}
 export type PreferenceItem = { notificationTypeId: string; channel: string; enabled: boolean }
 
 export type ChannelDef = { key: string; labelKey: string; labelFallback: string; hintKey: string; hintFallback: string }
@@ -144,16 +152,33 @@ export function NotificationPreferenceMatrix({
                   <div className="text-xs text-muted-foreground">{t(type.descriptionKey, '')}</div>
                 ) : null}
               </td>
-              {channels.map((channel) => (
-                <td key={channel.key} className="px-4 py-3">
+              {channels.map((channel) => {
+                const locked = type.nonOptOut === true
+                const cellLabel = `${t(type.labelKey, type.id)} – ${t(channel.labelKey, channel.labelFallback)}`
+                const requiredHint = t(
+                  'notifications.preferences.requiredHint',
+                  'This notification is required and cannot be turned off.',
+                )
+                const switchEl = (
                   <Switch
-                    checked={prefs[preferenceKey(type.id, channel.key)] ?? true}
-                    disabled={disabled}
+                    checked={locked ? true : prefs[preferenceKey(type.id, channel.key)] ?? true}
+                    disabled={disabled || locked}
                     onCheckedChange={(checked) => onToggle(type.id, channel.key, checked)}
-                    aria-label={`${t(type.labelKey, type.id)} – ${t(channel.labelKey, channel.labelFallback)}`}
+                    aria-label={locked ? `${cellLabel} (${requiredHint})` : cellLabel}
                   />
-                </td>
-              ))}
+                )
+                return (
+                  <td key={channel.key} className="px-4 py-3">
+                    {locked ? (
+                      <SimpleTooltip content={requiredHint}>
+                        <span className="inline-flex">{switchEl}</span>
+                      </SimpleTooltip>
+                    ) : (
+                      switchEl
+                    )}
+                  </td>
+                )
+              })}
             </tr>
           ))}
         </tbody>

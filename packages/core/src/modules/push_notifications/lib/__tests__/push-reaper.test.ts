@@ -37,13 +37,16 @@ function makeRow(overrides: Partial<PushNotificationDelivery> = {}): PushNotific
   } as PushNotificationDelivery
 }
 
-// EM stub: `find` applies the status + updatedAt<cutoff filter against the dataset; `nativeUpdate`
-// applies the same guard to one row, mutating it and reporting 1 when it wins the claim, else 0.
+// EM stub: `find` applies the `status IN (...)` + updatedAt<cutoff filter against the dataset (the
+// sweep now covers BOTH `sending` and `pending`); `nativeUpdate` applies the same guard to one row,
+// mutating it and reporting 1 when it wins the claim, else 0.
 function makeEm(rows: PushNotificationDelivery[]) {
   return {
     find: jest.fn(async (_entity: unknown, where: Record<string, unknown>) => {
       const cutoff = (where.updatedAt as { $lt: Date }).$lt
-      return rows.filter((r) => r.status === where.status && r.updatedAt instanceof Date && r.updatedAt < cutoff)
+      const statusFilter = where.status as { $in?: string[] } | string
+      const statuses = typeof statusFilter === 'string' ? [statusFilter] : statusFilter.$in ?? []
+      return rows.filter((r) => statuses.includes(r.status) && r.updatedAt instanceof Date && r.updatedAt < cutoff)
     }),
     nativeUpdate: jest.fn(async (_entity: unknown, where: Record<string, unknown>, data: Record<string, unknown>) => {
       const row = rows.find((r) => r.id === where.id)
@@ -127,14 +130,59 @@ describe('reclaimStuckPushDeliveries', () => {
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
-  it('honours OM_PUSH_STUCK_RECLAIM_MINUTES=0 (reclaim any sending row on the next tick)', async () => {
-    process.env.OM_PUSH_STUCK_RECLAIM_MINUTES = '0'
-    const row = makeRow({ id: 'aggressive', updatedAt: FRESH, attempts: 1 })
+  it('re-enqueues a stale pending row whose enqueue job was lost after the INSERT committed', async () => {
+    // A `pending` row older than the window means the fan-out committed the row but the follow-up
+    // enqueue never landed; the send-path claim only runs on a job, so no job ⇒ no claim. The sweep
+    // must recover it exactly like a stuck `sending` row.
+    const row = makeRow({ id: 'orphan-pending', status: 'pending', attempts: 1, organizationId: 'org-7' })
     const em = makeEm([row])
 
     const result = await reclaimStuckPushDeliveries(em as never, { tenantId: TENANT }, NOW)
 
-    expect(result.reEnqueued).toBe(1)
+    expect(result).toEqual({ reEnqueued: 1, expired: 0 })
     expect(row.status).toBe('pending')
+    expect(enqueueMock).toHaveBeenCalledWith({ deliveryId: 'orphan-pending', tenantId: TENANT, organizationId: 'org-7' })
   })
+
+  it('expires a stale pending row that has already exhausted its attempts (no re-enqueue)', async () => {
+    const row = makeRow({ id: 'orphan-pending-max', status: 'pending', attempts: 3 })
+    const em = makeEm([row])
+
+    const result = await reclaimStuckPushDeliveries(em as never, { tenantId: TENANT }, NOW)
+
+    expect(result).toEqual({ reEnqueued: 0, expired: 1 })
+    expect(row.status).toBe('expired')
+    expect(row.lastError).toBe('stuck_reclaimed')
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves a fresh pending row alone (a live in-flight fan-out is younger than the cutoff)', async () => {
+    const row = makeRow({ id: 'fresh-pending', status: 'pending', updatedAt: FRESH, attempts: 0 })
+    const em = makeEm([row])
+
+    const result = await reclaimStuckPushDeliveries(em as never, { tenantId: TENANT }, NOW)
+
+    expect(result).toEqual({ reEnqueued: 0, expired: 0 })
+    expect(row.status).toBe('pending')
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  // The reclaim window floors at MIN_STUCK_MINUTES (1). `0`, negatives, and garbage all fall back to the
+  // 5-minute default instead of `cutoff = now` — the old `0` meaning re-opened an actively-`sending` row
+  // stamped at claim time and produced duplicate pushes.
+  it.each(['0', '-3', 'not-a-number'])(
+    'clamps OM_PUSH_STUCK_RECLAIM_MINUTES=%s to the default and does NOT reclaim an actively-sending fresh row',
+    async (value) => {
+      process.env.OM_PUSH_STUCK_RECLAIM_MINUTES = value
+      // Stamped ~now (as at claim time); with the 5-minute default it is well inside the window.
+      const row = makeRow({ id: 'in-flight', status: 'sending', updatedAt: new Date(NOW.getTime() - 1000), attempts: 1 })
+      const em = makeEm([row])
+
+      const result = await reclaimStuckPushDeliveries(em as never, { tenantId: TENANT }, NOW)
+
+      expect(result).toEqual({ reEnqueued: 0, expired: 0 })
+      expect(row.status).toBe('sending')
+      expect(enqueueMock).not.toHaveBeenCalled()
+    },
+  )
 })

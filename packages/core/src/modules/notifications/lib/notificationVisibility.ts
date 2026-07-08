@@ -1,3 +1,4 @@
+import { sql, type RawBuilder } from 'kysely'
 import { IN_APP_CHANNEL } from './strategies/in-app-delivery-strategy'
 
 /**
@@ -31,4 +32,17 @@ export function inAppVisibleFilter(): { $or: Array<Record<string, unknown>> } {
  */
 export function isInAppVisible(channels: string[] | null | undefined): boolean {
   return channels == null || channels.includes(IN_APP_CHANNEL)
+}
+
+/**
+ * Raw-SQL counterpart of {@link inAppVisibleFilter} for queries built with Kysely
+ * (which cannot consume MikroORM's `$contains` fragment). Emits
+ * `(<column> IS NULL OR <column> @> '["in_app"]'::jsonb)` — the exact predicate
+ * MikroORM produces — so raw and ORM paths stay in lock-step. `columnRef` MUST be
+ * a trusted, code-controlled column identifier (never user input).
+ */
+export function inAppVisibleSql(columnRef = 'channels'): RawBuilder<boolean> {
+  return sql<boolean>`(${sql.ref(columnRef)} is null or ${sql.ref(columnRef)} @> ${sql.val(
+    JSON.stringify([IN_APP_CHANNEL]),
+  )}::jsonb)`
 }

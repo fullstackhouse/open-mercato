@@ -4,22 +4,28 @@ import { emitPushNotificationsEvent } from '../events'
 import { MAX_ATTEMPTS } from './push-delivery'
 import { enqueuePushDelivery } from './queue'
 
-// Minutes a row may sit in `sending` before it is treated as abandoned by a dead worker. Tunable via
-// OM_PUSH_STUCK_RECLAIM_MINUTES (0 means "reclaim on the next tick"; negative/non-numeric → default).
+// Minutes a row may sit in `sending`/`pending` before it is treated as abandoned by a dead worker.
+// Tunable via OM_PUSH_STUCK_RECLAIM_MINUTES (values below MIN_STUCK_MINUTES, negative, or non-numeric
+// → default).
 //
 // INVARIANT: this window MUST exceed the worst-case single provider send time. `updated_at` is stamped
 // once when the row is claimed (`pending` → `sending`) and is NOT refreshed mid-send (no heartbeat), so
 // a legitimate send that runs longer than the window would be reclaimed and re-enqueued → a duplicate
 // push. The default (5m) is comfortably above any adapter's send/HTTP timeout; if you lower it, keep it
-// above the adapter timeout. Duplicates are otherwise bounded by MAX_ATTEMPTS and inherent to
-// at-least-once delivery.
+// above the adapter timeout. Duplicates are otherwise bounded by MAX_ATTEMPTS (now incremented at claim
+// time — see push-delivery.ts) and inherent to at-least-once delivery.
+//
+// A floor of MIN_STUCK_MINUTES is enforced: `0` (the old "reclaim on the next tick") is UNSAFE because
+// `cutoff = now` matches an actively-`sending` row whose `updated_at` was stamped at claim, re-opening
+// an in-flight send and causing a genuine duplicate push. Sub-floor values fall back to the default.
 const DEFAULT_STUCK_MINUTES = 5
+const MIN_STUCK_MINUTES = 1
 
 export type ReclaimStuckResult = { reEnqueued: number; expired: number }
 
 function resolveStuckThresholdMs(): number {
   const raw = Number.parseInt(process.env.OM_PUSH_STUCK_RECLAIM_MINUTES ?? '', 10)
-  const minutes = Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_STUCK_MINUTES
+  const minutes = Number.isFinite(raw) && raw >= MIN_STUCK_MINUTES ? raw : DEFAULT_STUCK_MINUTES
   return minutes * 60 * 1000
 }
 
@@ -40,18 +46,27 @@ async function emitFailed(delivery: PushNotificationDelivery, willRetry: boolean
 }
 
 /**
- * Recover push delivery rows stranded in `sending` by a worker that crashed between claiming the row
- * (`pending` → `sending`) and finalizing it. Such a row has no outstanding job — the send-path claim
- * only ever matches `status = 'pending'` — so without this sweep it would never reach a terminal state
- * nor surface as failed in the admin log. Driven by the `push_notifications:reclaim-stuck` scheduler
- * tick (one per tenant), so the query is scoped to the tenant only (covers org-bound and tenant-level
- * rows alike); there is no cross-tenant read.
+ * Recover push delivery rows stranded by a worker (or an enqueue) that never finished:
  *
- * A stuck row with retry budget left is re-opened to `pending` and re-enqueued: a crash almost always
- * means the send never reached the provider, and a rare duplicate is bounded by MAX_ATTEMPTS and
- * inherent to at-least-once delivery. A row that already spent its attempts is finalized `expired`.
+ *  - `sending` rows — a worker crashed between claiming the row (`pending` → `sending`) and finalizing
+ *    it. Such a row has no outstanding job the claim can re-match.
+ *  - `pending` rows — the fan-out committed the delivery row (a plain INSERT, auto-committed) but the
+ *    subsequent enqueue never landed (process died, or the queue dropped the job). The row then sits
+ *    `pending` forever: the send-path claim only runs when a job fires, so no job ⇒ no claim ⇒ the row
+ *    is never retried, expired, nor surfaced as failed. Only a *synchronous* enqueue throw is handled
+ *    inline by the fan-out; a lost job after the INSERT committed is invisible without this sweep.
  *
- * Each transition is an atomic `nativeUpdate` guarded on `status = 'sending'` AND still-stale
+ * Both are recovered identically: re-enqueue if retry budget remains, else finalize `expired`. Driven
+ * by the `push_notifications:reclaim-stuck` scheduler tick (one per tenant), so the query is scoped to
+ * the tenant only (covers org-bound and tenant-level rows alike); there is no cross-tenant read.
+ *
+ * The stale-`updated_at < cutoff` guard is what makes sweeping `pending` safe: a freshly fan-outed row
+ * (with a live job in flight) is younger than the cutoff and is left alone; only a row that has sat
+ * past the reclaim window — long after any real job would have claimed it — is re-enqueued. A rare
+ * duplicate job is a no-op because the send-path claim is atomic (`pending` → `sending`, exactly one
+ * winner), and provider-send duplicates are bounded by MAX_ATTEMPTS.
+ *
+ * Each transition is an atomic `nativeUpdate` guarded on the row's observed `status` AND still-stale
  * `updated_at < cutoff`, so overlapping ticks (or a worker that re-claimed the row in the meantime)
  * can never re-open an actively-processing delivery — exactly one actor wins each row.
  */
@@ -63,14 +78,14 @@ export async function reclaimStuckPushDeliveries(
   const cutoff = new Date(now.getTime() - resolveStuckThresholdMs())
   const stuck = await em.find(PushNotificationDelivery, {
     tenantId: scope.tenantId,
-    status: 'sending',
+    status: { $in: ['sending', 'pending'] },
     updatedAt: { $lt: cutoff },
   })
 
   let reEnqueued = 0
   let expired = 0
   for (const delivery of stuck) {
-    const claimGuard = { id: delivery.id, tenantId: scope.tenantId, status: 'sending' as const, updatedAt: { $lt: cutoff } }
+    const claimGuard = { id: delivery.id, tenantId: scope.tenantId, status: delivery.status, updatedAt: { $lt: cutoff } }
 
     if (delivery.attempts >= MAX_ATTEMPTS) {
       const claimed = await em.nativeUpdate(PushNotificationDelivery, claimGuard, {
