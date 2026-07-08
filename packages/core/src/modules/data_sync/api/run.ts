@@ -70,11 +70,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unsupported entity type for this integration' }, { status: 422 })
     }
 
+    // Validate the requested sync mode against what the adapter declares for this
+    // entity. An entity with no declared modes supports only the default 'backfill'.
+    const allowedModes = adapter.syncModes?.[parsed.data.entityType] ?? ['backfill']
+    if (!allowedModes.includes(parsed.data.mode)) {
+      return NextResponse.json(
+        { error: `Unsupported sync mode '${parsed.data.mode}' for this entity`, details: { allowedModes } },
+        { status: 422 },
+      )
+    }
+
     const normalizedParameters = normalizeRunParameters(
       adapter.runParameters,
       parsed.data.direction,
       parsed.data.parameters,
       parsed.data.entityType,
+      parsed.data.mode,
     )
     if (!normalizedParameters.ok) {
       return NextResponse.json(
@@ -115,7 +126,7 @@ export async function POST(req: Request) {
 
     const cursor = parsed.data.fullSync
       ? null
-      : await syncRunService.resolveCursor(parsed.data.integrationId, parsed.data.entityType, parsed.data.direction, scope)
+      : await syncRunService.resolveCursor(parsed.data.integrationId, parsed.data.entityType, parsed.data.direction, parsed.data.mode, scope)
 
     const { run, progressJob } = await startDataSyncRun({
       syncRunService,
@@ -128,6 +139,7 @@ export async function POST(req: Request) {
         integrationId: parsed.data.integrationId,
         entityType: parsed.data.entityType,
         direction: parsed.data.direction,
+        mode: parsed.data.mode,
         cursor,
         triggeredBy: parsed.data.triggeredBy ?? auth.sub,
         batchSize: parsed.data.batchSize,

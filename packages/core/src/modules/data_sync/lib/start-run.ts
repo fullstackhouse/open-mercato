@@ -12,6 +12,7 @@ export type StartDataSyncRunInput = {
   integrationId: string
   entityType: string
   direction: 'import' | 'export'
+  mode?: string | null
   cursor?: string | null
   triggeredBy?: string | null
   batchSize?: number
@@ -62,6 +63,7 @@ export async function startDataSyncRun(params: {
       integrationId: input.integrationId,
       entityType: input.entityType,
       direction: input.direction,
+      mode: input.mode ?? null,
       cursor: input.cursor ?? null,
       triggeredBy: input.triggeredBy ?? scope.userId ?? null,
       parameters: input.parameters ?? null,

@@ -33,6 +33,27 @@ describe('getApplicableRunParameters', () => {
     // No entity provided → entity scoping is skipped, everything applicable is returned.
     expect(getApplicableRunParameters(scoped, 'import').map((p) => p.key)).toEqual(['shared', 'bulk', 'refData'])
   })
+
+  it('scopes params to sync modes, keeping unscoped params for every mode', () => {
+    const scoped: RunParameter[] = [
+      { key: 'shared', label: 'Shared', type: 'boolean' },
+      { key: 'fromBeginning', label: 'From the beginning', type: 'boolean', mode: 'backfill' },
+      { key: 'replayFrom', label: 'Replay from', type: 'string', mode: ['feed'] },
+    ]
+    expect(getApplicableRunParameters(scoped, 'import', undefined, 'backfill').map((p) => p.key)).toEqual(['shared', 'fromBeginning'])
+    expect(getApplicableRunParameters(scoped, 'import', undefined, 'feed').map((p) => p.key)).toEqual(['shared', 'replayFrom'])
+    // No mode provided → mode scoping is skipped.
+    expect(getApplicableRunParameters(scoped, 'import').map((p) => p.key)).toEqual(['shared', 'fromBeginning', 'replayFrom'])
+  })
+
+  it('combines entity and mode scoping', () => {
+    const scoped: RunParameter[] = [
+      { key: 'bulk', label: 'Bulk', type: 'boolean', entityType: 'sales_orders', mode: 'backfill' },
+    ]
+    expect(getApplicableRunParameters(scoped, 'import', 'sales_orders', 'backfill').map((p) => p.key)).toEqual(['bulk'])
+    expect(getApplicableRunParameters(scoped, 'import', 'sales_orders', 'feed')).toEqual([])
+    expect(getApplicableRunParameters(scoped, 'import', 'subiekt_products', 'backfill')).toEqual([])
+  })
 })
 
 describe('normalizeRunParameters', () => {
@@ -86,5 +107,15 @@ describe('normalizeRunParameters', () => {
     // Running the `orders` entity: the products-only required param is dropped, not enforced.
     const result = normalizeRunParameters(scoped, 'import', { bulk: 'true', refCursor: 'x' }, 'orders')
     expect(result).toEqual({ ok: true, values: { bulk: true } })
+  })
+
+  it('ignores params scoped to a different mode, even required ones', () => {
+    const scoped: RunParameter[] = [
+      { key: 'fromBeginning', label: 'From the beginning', type: 'boolean', mode: 'backfill' },
+      { key: 'replayFrom', label: 'Replay from', type: 'string', required: true, mode: 'feed' },
+    ]
+    // A backfill run: the feed-only required param is dropped, not enforced.
+    const result = normalizeRunParameters(scoped, 'import', { fromBeginning: 'true', replayFrom: 'x' }, undefined, 'backfill')
+    expect(result).toEqual({ ok: true, values: { fromBeginning: true } })
   })
 })

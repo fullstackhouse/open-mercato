@@ -113,6 +113,29 @@ Register adapters in your provider module's `di.ts`:
 registerDataSyncAdapter(myAdapter)
 ```
 
+### Sync modes
+
+An entity can be synced in more than one **mode** — the built-ins are `backfill`
+(bulk historical load) and `feed` (incremental change-feed tail), the universal
+snapshot→stream pattern. A run carries a `mode` (default `'backfill'`), and — this is
+the key — `SyncCursor` is keyed by `(integration, entityType, direction, mode)`, so a
+single entity keeps independent cursors per mode (a backfill keyset position and a
+feed watermark never clobber each other).
+
+Declare which modes each entity supports; the run API validates the requested `mode`
+against this, and `streamImport` / `streamExport` receive `mode` alongside
+`entityType`. Omit `syncModes` (or an entity from it) to support only `'backfill'` —
+single-mode adapters are unaffected.
+
+```typescript
+syncModes: {
+  sales_orders: ['backfill', 'feed'],
+  subiekt_products: ['backfill', 'feed'],
+}
+// dispatch inside streamImport:
+//   if (input.mode === 'feed') yield* runFeed(...); else yield* runBackfill(...)
+```
+
 ### Run parameters
 
 Adapters may declare optional, operator-facing `runParameters`. The dashboard
@@ -127,19 +150,21 @@ runParameters: [
   { key: 'dryRun', label: 'Dry run', type: 'boolean', defaultValue: false,
     description: 'Report what would change without writing.' },
   { key: 'startId', label: 'Start id', type: 'number', min: 0 },
-  { key: 'mode', label: 'Mode', type: 'select',
+  { key: 'strategy', label: 'Strategy', type: 'select',
     options: [{ value: 'fast' }, { value: 'thorough' }] },
-  // Only offered when the orders entity is selected:
-  { key: 'bulk', label: 'Bulk reindex', type: 'boolean', entityType: 'sales_orders' },
+  // Only offered for the orders backfill (entity + mode scoped):
+  { key: 'bulk', label: 'Bulk reindex', type: 'boolean',
+    entityType: 'sales_orders', mode: 'backfill' },
+  // Feed-only knob:
+  { key: 'replayFromChangeId', label: 'Replay from change id', type: 'number', mode: 'feed' },
 ]
 ```
 
 Supported types: `boolean`, `string`, `number`, `select`. A parameter may set
-`direction` to apply to only `import` or `export` runs, and `entityType`
-(a `supportedEntities` value or an array of them) to apply only when that
-entity is selected — use it when a knob only makes sense for one entity's run.
-Params without `direction` / `entityType` apply to every run. Blank values fall
-back to `defaultValue`; values are retained across retries.
+`direction` (import/export), `entityType` (a `supportedEntities` value or array),
+and/or `mode` (a sync mode or array) to be offered/validated only for that
+direction / entity / mode. Params without those apply to every run. Blank values
+fall back to `defaultValue`; values are retained across retries.
 
 If the sync provider needs bootstrap credentials, mappings, locales, channels, or other default sync settings after a fresh install, implement a provider-owned env preset flow:
 

@@ -88,6 +88,22 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'backfill'",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "organization_id": {
           "name": "organization_id",
           "type": "uuid",
@@ -140,26 +156,27 @@
       "indexes": [
         {
           "columnNames": [
-            "integration_id",
-            "entity_type",
-            "direction",
-            "organization_id",
-            "tenant_id"
-          ],
-          "composite": true,
-          "constraint": false,
-          "keyName": "sync_cursors_integration_id_entity_type_direction__255ea_index",
-          "primary": false,
-          "unique": false
-        },
-        {
-          "columnNames": [
             "id"
           ],
           "composite": false,
           "constraint": true,
           "keyName": "sync_cursors_pkey",
           "primary": true,
+          "unique": true
+        },
+        {
+          "columnNames": [
+            "integration_id",
+            "entity_type",
+            "direction",
+            "mode",
+            "organization_id",
+            "tenant_id"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "sync_cursors_scope_mode_uq",
+          "primary": false,
           "unique": true
         }
       ],
@@ -541,6 +558,22 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'backfill'",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "organization_id": {
           "name": "organization_id",
           "type": "uuid",
@@ -556,6 +589,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "uuid"
+        },
+        "parameters": {
+          "name": "parameters",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
         },
         "progress_job_id": {
           "name": "progress_job_id",
@@ -668,22 +717,6 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "integer"
-        },
-        "parameters": {
-          "name": "parameters",
-          "type": "jsonb",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": true,
-          "unique": false,
-          "length": null,
-          "precision": null,
-          "scale": null,
-          "default": null,
-          "comment": null,
-          "enumItems": [],
-          "mappedType": "json"
         }
       },
       "indexes": [
@@ -863,6 +896,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'backfill'",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
         },
         "organization_id": {
           "name": "organization_id",
