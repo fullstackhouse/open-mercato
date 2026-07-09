@@ -1,14 +1,15 @@
 import { expect, test } from '@playwright/test'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { createNotificationFixture } from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   expectNativeMessage,
-  NOTIFICATIONS_PATH,
+  makeFakePushToken,
   readLatestDelivery,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
@@ -23,7 +24,6 @@ import {
  * `events` (fan-out) then `push-deliveries` (worker) → the delivery row reaches `sent` AND the
  * provider-native message the adapter handed the SDK is asserted.
  */
-const TOKEN_TAIL = 'FCM00005'
 const PROVIDER = 'fcm'
 
 test.describe('TC-CHANNEL-PUSH-005: real FCM adapter reaches sent with a correct native message', () => {
@@ -31,6 +31,9 @@ test.describe('TC-CHANNEL-PUSH-005: real FCM adapter reaches sent with a correct
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, organizationId, userId } = getTokenScope(adminToken)
+    // Run-unique: the sink is append-only and is not truncated on the reused-environment path.
+    const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
+    const startedAt = new Date().toISOString()
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -40,23 +43,18 @@ test.describe('TC-CHANNEL-PUSH-005: real FCM adapter reaches sent with a correct
         request,
         adminToken,
         PROVIDER,
-        `qa-fcm-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-channel-push-005-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_message',
           title: 'Order shipped',
           body: 'Your order is on its way',
           data: { probe: 'tc-channel-push-005' },
           pushOptions: { channelId: 'orders', badge: 3, sound: 'chime.caf' },
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      expect((await readJsonSafe<{ id?: string }>(createRes))?.id).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -69,23 +67,19 @@ test.describe('TC-CHANNEL-PUSH-005: real FCM adapter reaches sent with a correct
 
       const row = await readLatestDelivery(tenantId, userDeviceId as string)
       expect(row?.provider).toBe(PROVIDER)
-      expect(row?.token_snapshot).toBe(TOKEN_TAIL)
+      expect(row?.token_snapshot).toBe(tokenTail)
       expect(row?.organization_id).toBe(organizationId ?? null)
 
       // The message firebase-admin would have transmitted — proof the real adapter, not a stub, ran.
-      const native = await expectNativeMessage(PROVIDER, TOKEN_TAIL)
-      expect(native.token).toBe(`qa-fcm-token-${TOKEN_TAIL}`)
+      const native = await expectNativeMessage(PROVIDER, tokenTail, startedAt)
+      expect(native.token).toBe(pushToken)
       expect(native.notification).toMatchObject({ title: 'Order shipped', body: 'Your order is on its way' })
       expect(native.android).toMatchObject({ notification: { channelId: 'orders', sound: 'chime.caf' } })
       expect(native.apns).toMatchObject({ payload: { aps: { badge: 3, sound: 'chime.caf' } } })
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

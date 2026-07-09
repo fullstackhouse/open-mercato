@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseBooleanToken } from '@open-mercato/shared/lib/boolean'
@@ -32,19 +33,39 @@ export function isPushFakeProvidersEnabled(): boolean {
 }
 
 /**
- * Colocated with the queue's own base dir: the worker process, the drain child, and the spec all
- * already agree on it (`QUEUE_BASE_DIR`, else `<appRoot>/.mercato/queue`).
+ * The one place the queue base dir is resolved. The worker process, the drain child, and the spec must
+ * all agree, so every caller goes through this: `QUEUE_BASE_DIR` when set (the harness always sets it,
+ * and `drainIntegrationQueue` propagates it to its child), else `<appRoot>/.mercato/queue`.
+ *
+ * In the app/worker process `cwd` IS the app root. The Playwright process runs from the repo root, so
+ * `helpers/integration/pushFake` sets `QUEUE_BASE_DIR` before anything reads it — this fallback is never
+ * reached there.
  */
+export function resolveQueueBaseDir(): string {
+  const explicit = process.env.QUEUE_BASE_DIR?.trim()
+  if (explicit) return explicit
+  return path.resolve(process.env.OM_TEST_APP_ROOT?.trim() || process.cwd(), '.mercato/queue')
+}
+
 export function resolveFakePushLogPath(): string {
-  const baseDir =
-    process.env.QUEUE_BASE_DIR?.trim() ||
-    path.resolve(process.env.OM_TEST_APP_ROOT?.trim() || process.cwd(), '.mercato/queue')
-  return path.join(baseDir, LOG_FILE_NAME)
+  return path.join(resolveQueueBaseDir(), LOG_FILE_NAME)
 }
 
 /** Token tail used to key entries — never the raw token (mirrors `token_snapshot` on the delivery row). */
 export function pushTokenTail(token: string): string {
   return token.slice(-8)
+}
+
+/**
+ * An 8-char token tail unique to this run.
+ *
+ * The sink is append-only and is NOT truncated between runs on the reused-environment path
+ * (`tryReuseExistingEnvironment` does not wipe `QUEUE_BASE_DIR`, unlike the fresh path). A compile-time
+ * constant tail would therefore let a *previous* run's entry satisfy an assertion before this run's
+ * worker had written anything — a false pass. Uniqueness also isolates specs running in parallel.
+ */
+export function uniquePushTokenTail(): string {
+  return randomBytes(4).toString('hex').toUpperCase()
 }
 
 export function recordFakePush(provider: FakePushProvider, token: string, native: Record<string, unknown>): void {
@@ -61,6 +82,16 @@ export function recordFakePush(provider: FakePushProvider, token: string, native
   fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, 'utf8')
 }
 
+function parseEntry(line: string): FakePushEntry | null {
+  try {
+    return JSON.parse(line) as FakePushEntry
+  } catch {
+    // A reader can observe a line the writer has not finished appending. Skipping it lets the caller
+    // poll again; throwing would permanently fail the enclosing `expect.poll`.
+    return null
+  }
+}
+
 export function readFakePushLog(): FakePushEntry[] {
   const filePath = resolveFakePushLogPath()
   if (!fs.existsSync(filePath)) return []
@@ -68,13 +99,23 @@ export function readFakePushLog(): FakePushEntry[] {
     .readFileSync(filePath, 'utf8')
     .split('\n')
     .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as FakePushEntry)
+    .map(parseEntry)
+    .filter((entry): entry is FakePushEntry => entry !== null)
 }
 
-/** Find the message a spec's own device produced, isolating it from any concurrent spec. */
-export function findFakePush(provider: FakePushProvider, tokenTail: string): FakePushEntry | undefined {
+/**
+ * Find the message a spec's own device produced. `tokenTail` should come from
+ * {@link uniquePushTokenTail}; `sinceIso` additionally rejects entries predating the caller, so a stale
+ * sink can never satisfy an assertion.
+ */
+export function findFakePush(
+  provider: FakePushProvider,
+  tokenTail: string,
+  sinceIso?: string,
+): FakePushEntry | undefined {
   return readFakePushLog()
     .filter((entry) => entry.provider === provider && entry.tokenTail === tokenTail)
+    .filter((entry) => !sinceIso || entry.at >= sinceIso)
     .pop()
 }
 

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { login } from '@open-mercato/core/helpers/integration/auth'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
 import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import { withClient } from '@open-mercato/core/helpers/integration/dbFixtures'
@@ -8,7 +8,8 @@ import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
+  makeFakePushToken,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
 
@@ -19,7 +20,6 @@ import {
  * then asserts the delivery detail page renders `Sent` with the last-8 token snapshot — proving the
  * REAL FCM adapter delivered and the admin observability surface reflects it.
  */
-const TOKEN_TAIL = 'ADMINUI9'
 const PROVIDER = 'fcm'
 const PUSH_TITLE = 'TC-PUSH-009 admin send'
 
@@ -40,6 +40,7 @@ test.describe('TC-PUSH-009: admin send page → delivery log shows sent', () => 
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId } = getTokenScope(adminToken)
+    const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -49,7 +50,7 @@ test.describe('TC-PUSH-009: admin send page → delivery log shows sent', () => 
         request,
         adminToken,
         PROVIDER,
-        `qa-fcm-adminui-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-push-009-${Date.now()}`,
       )
 
@@ -63,7 +64,14 @@ test.describe('TC-PUSH-009: admin send page → delivery log shows sent', () => 
       await page.getByRole('option').first().click()
 
       await page.getByLabel('Title', { exact: true }).fill(PUSH_TITLE)
+
+      // Wait for the send to actually land before draining. `.click()` only dispatches the event; draining
+      // straight after would run the queues before the row that feeds them exists.
+      const sendResponse = page.waitForResponse(
+        (response) => response.url().includes('/api/push_notifications/custom-send') && response.request().method() === 'POST',
+      )
       await page.getByRole('button', { name: 'Send push' }).click()
+      expect((await sendResponse).status()).toBe(201)
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -73,15 +81,11 @@ test.describe('TC-PUSH-009: admin send page → delivery log shows sent', () => 
 
       await page.goto(`/backend/push_notifications/${deliveryId}`)
       await expect(page.getByText('Sent', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
-      await expect(page.getByText(TOKEN_TAIL, { exact: false }).first()).toBeVisible()
+      await expect(page.getByText(tokenTail, { exact: false }).first()).toBeVisible()
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

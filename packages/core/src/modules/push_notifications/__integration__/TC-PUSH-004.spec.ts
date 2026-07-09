@@ -1,15 +1,16 @@
 import { expect, test } from '@playwright/test'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { createNotificationFixture } from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   isDeviceSoftDeleted,
-  NOTIFICATIONS_PATH,
   readLatestDelivery,
+  makeFakePushTokenFor,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
 
@@ -26,7 +27,6 @@ import {
  * Provider-agnostic worker behavior, so one provider suffices (the per-provider mappings are covered by
  * each adapter's unit suite; the FCM path is exercised here end-to-end).
  */
-const TOKEN_TAIL = 'UNREG004'
 const PROVIDER = 'fcm'
 
 test.describe('TC-PUSH-004: unregistered token → delivery failed + device soft-deleted', () => {
@@ -34,6 +34,7 @@ test.describe('TC-PUSH-004: unregistered token → delivery failed + device soft
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
+    const { pushToken } = makeFakePushTokenFor(PROVIDER, 'unregistered')
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -45,21 +46,16 @@ test.describe('TC-PUSH-004: unregistered token → delivery failed + device soft
         request,
         adminToken,
         PROVIDER,
-        `qa-fcm-unregistered-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-push-004-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_message',
           title: 'TC-PUSH-004',
           body: 'Drives the unregistered branch.',
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      expect((await readJsonSafe<{ id?: string }>(createRes))?.id).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -78,12 +74,8 @@ test.describe('TC-PUSH-004: unregistered token → delivery failed + device soft
       await expect.poll(() => isDeviceSoftDeleted(userDeviceId as string), { timeout: 30_000 }).toBe(true)
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

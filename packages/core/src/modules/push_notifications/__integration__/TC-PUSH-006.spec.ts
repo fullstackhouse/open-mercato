@@ -1,14 +1,15 @@
 import { expect, test } from '@playwright/test'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { createNotificationFixture } from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   expectNativeMessage,
-  NOTIFICATIONS_PATH,
+  makeFakePushToken,
   readLatestDelivery,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
@@ -21,7 +22,6 @@ import {
  * asserts the full chain through the REAL FCM adapter — the built message must carry no user-facing
  * copy, only `content-available`.
  */
-const TOKEN_TAIL = 'SILENT06'
 const PROVIDER = 'fcm'
 
 test.describe('TC-PUSH-006: silent type → data-only content-available push', () => {
@@ -29,6 +29,8 @@ test.describe('TC-PUSH-006: silent type → data-only content-available push', (
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
+    const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
+    const startedAt = new Date().toISOString()
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -38,22 +40,17 @@ test.describe('TC-PUSH-006: silent type → data-only content-available push', (
         request,
         adminToken,
         PROVIDER,
-        `qa-fcm-silent-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-push-006-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_silent',
           title: 'Never rendered as a banner',
           body: 'Never rendered as a banner',
           data: { sync: 'orders', cursor: '42' },
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      expect((await readJsonSafe<{ id?: string }>(createRes))?.id).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -67,7 +64,7 @@ test.describe('TC-PUSH-006: silent type → data-only content-available push', (
       const row = await readLatestDelivery(tenantId, userDeviceId as string)
       expect(row?.silent).toBe(true)
 
-      const native = await expectNativeMessage(PROVIDER, TOKEN_TAIL)
+      const native = await expectNativeMessage(PROVIDER, tokenTail, startedAt)
       // Data-only: a `notification` block would surface a visible banner.
       expect(native.notification).toBeUndefined()
       expect(native.data).toMatchObject({ sync: 'orders', cursor: '42' })
@@ -78,12 +75,8 @@ test.describe('TC-PUSH-006: silent type → data-only content-available push', (
       expect(native.android).toMatchObject({ priority: 'high' })
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

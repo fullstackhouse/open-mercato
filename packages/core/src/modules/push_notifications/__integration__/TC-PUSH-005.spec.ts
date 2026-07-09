@@ -1,14 +1,15 @@
 import { expect, test } from '@playwright/test'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { createNotificationFixture } from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   isDeviceSoftDeleted,
-  NOTIFICATIONS_PATH,
+  makeFakePushTokenFor,
   readLatestDelivery,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
@@ -22,7 +23,6 @@ import {
  * Each attempt re-enqueues with exponential backoff + jitter (~1-2s, then ~2-3s), so a single drain can
  * only ever advance one attempt — the terminal state is unreachable without draining across the delays.
  */
-const TOKEN_TAIL = 'FAIL0005'
 const PROVIDER = 'fcm'
 const MAX_ATTEMPTS = 3
 
@@ -31,6 +31,7 @@ test.describe('TC-PUSH-005: retryable failure → MAX_ATTEMPTS → expired', () 
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
+    const { pushToken } = makeFakePushTokenFor(PROVIDER, 'fail')
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -42,21 +43,16 @@ test.describe('TC-PUSH-005: retryable failure → MAX_ATTEMPTS → expired', () 
         request,
         adminToken,
         PROVIDER,
-        `qa-fcm-fail-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-push-005-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_message',
           title: 'TC-PUSH-005',
           body: 'Drives the retry branch.',
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      expect((await readJsonSafe<{ id?: string }>(createRes))?.id).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
 
@@ -80,12 +76,8 @@ test.describe('TC-PUSH-005: retryable failure → MAX_ATTEMPTS → expired', () 
       expect(await isDeviceSoftDeleted(userDeviceId as string)).toBe(false)
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

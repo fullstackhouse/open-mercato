@@ -1,14 +1,15 @@
 import { expect, test } from '@playwright/test'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { createNotificationFixture } from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   expectNativeMessage,
-  NOTIFICATIONS_PATH,
+  makeFakePushToken,
   readLatestDelivery,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
@@ -19,7 +20,6 @@ import {
  * Only the `expo-server-sdk` client is faked (`OM_PUSH_FAKE_PROVIDERS`), so the adapter's token
  * validation, chunking, and `buildExpoMessage` run for real.
  */
-const TOKEN_TAIL = 'EXPO0007'
 const PROVIDER = 'expo'
 
 test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correct native message', () => {
@@ -27,6 +27,8 @@ test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correc
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
+    const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
+    const startedAt = new Date().toISOString()
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -36,23 +38,18 @@ test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correc
         request,
         adminToken,
         PROVIDER,
-        `qa-expo-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-channel-push-007-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_message',
           title: 'Order shipped',
           body: 'Your order is on its way',
           data: { probe: 'tc-channel-push-007' },
           pushOptions: { sound: 'chime.caf', priority: 'high', channelId: 'orders' },
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      expect((await readJsonSafe<{ id?: string }>(createRes))?.id).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -65,10 +62,10 @@ test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correc
 
       const row = await readLatestDelivery(tenantId, userDeviceId as string)
       expect(row?.provider).toBe(PROVIDER)
-      expect(row?.token_snapshot).toBe(TOKEN_TAIL)
+      expect(row?.token_snapshot).toBe(tokenTail)
 
-      const native = await expectNativeMessage(PROVIDER, TOKEN_TAIL)
-      expect(native.to).toBe(`qa-expo-token-${TOKEN_TAIL}`)
+      const native = await expectNativeMessage(PROVIDER, tokenTail, startedAt)
+      expect(native.to).toBe(pushToken)
       expect(native.title).toBe('Order shipped')
       expect(native.body).toBe('Your order is on its way')
       expect(native.sound).toBe('chime.caf')
@@ -76,12 +73,8 @@ test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correc
       expect(native.channelId).toBe('orders')
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

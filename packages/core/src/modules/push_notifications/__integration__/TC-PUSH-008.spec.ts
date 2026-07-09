@@ -1,18 +1,19 @@
-import path from 'node:path'
 import { expect, test } from '@playwright/test'
 import { createQueue } from '@open-mercato/queue'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { createNotificationFixture } from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   isDeviceSoftDeleted,
-  NOTIFICATIONS_PATH,
+  makeFakePushTokenFor,
   readLatestDelivery,
   registerFakePushDevice,
+  resolveQueueBaseDir,
 } from '@open-mercato/core/helpers/integration/pushFake'
 
 /**
@@ -27,16 +28,14 @@ import {
  * spec enqueues one itself. It also skips rows younger than `OM_PUSH_RECEIPT_MIN_AGE_MINUTES`
  * (defaulted to 0 by the integration harness; 15 minutes in production).
  */
-const TOKEN_TAIL = 'UNREG008'
 const PROVIDER = 'expo'
 const RECLAIM_QUEUE = 'push-stuck-reclaim'
 
-const TEST_APP_ROOT = process.env.OM_TEST_APP_ROOT?.trim()
-const APP_ROOT = TEST_APP_ROOT ? path.resolve(TEST_APP_ROOT) : path.resolve(process.cwd(), 'apps/mercato')
-const APP_QUEUE_BASE_DIR = path.resolve(APP_ROOT, '.mercato/queue')
-
 async function enqueueReclaimTick(tenantId: string): Promise<void> {
-  const queue = createQueue<{ tenantId: string }>(RECLAIM_QUEUE, 'local', { baseDir: APP_QUEUE_BASE_DIR })
+  // Resolve through the shared helper rather than a local fallback: the harness may point
+  // `QUEUE_BASE_DIR` somewhere other than `<appRoot>/.mercato/queue` (the ephemeral runner does), and the
+  // drain child honors it. A hand-rolled path would enqueue into a queue nobody drains.
+  const queue = createQueue<{ tenantId: string }>(RECLAIM_QUEUE, 'local', { baseDir: resolveQueueBaseDir() })
   try {
     await queue.enqueue({ tenantId })
   } finally {
@@ -49,6 +48,7 @@ test.describe('TC-PUSH-008: Expo async receipt reports DeviceNotRegistered → d
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
+    const { pushToken } = makeFakePushTokenFor(PROVIDER, 'unregistered')
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -60,21 +60,16 @@ test.describe('TC-PUSH-008: Expo async receipt reports DeviceNotRegistered → d
         request,
         adminToken,
         PROVIDER,
-        `qa-expo-unregistered-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-push-008-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_message',
           title: 'TC-PUSH-008',
           body: 'Drives the Expo receipt branch.',
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      expect((await readJsonSafe<{ id?: string }>(createRes))?.id).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -99,12 +94,8 @@ test.describe('TC-PUSH-008: Expo async receipt reports DeviceNotRegistered → d
       expect(row?.status).toBe('sent')
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })
