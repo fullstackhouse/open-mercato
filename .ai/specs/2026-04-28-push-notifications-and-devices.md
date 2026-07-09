@@ -11,7 +11,6 @@
 **Key Points:**
 - Open Mercato ships only **in-app** notifications. There is no mobile push channel, no device registry, no DB-persistent notification type registry, and no per-channel user preferences.
 - This spec adds two core modules (`devices`, `push_notifications`), extends `notifications` with a type catalogue + channel-agnostic preferences, and delivers push **through the existing `communication_channels` hub** — FCM, APNs, and Expo are hub `ChannelAdapter`s in their own npm packages.
-- The design is a deliberate, upstream-native architecture built to Open Mercato's platform constraints rather than a port of any pre-existing implementation.
 
 **Scope:**
 - `devices` — generic per-tenant `(user, device, platform)` registry. Push is one consumer; MFA device-trust (#539), session-aware auth, and audit logs are plausible future consumers.
