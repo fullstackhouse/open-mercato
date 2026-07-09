@@ -1974,6 +1974,13 @@ function buildReusableEnvironment(
     // drive real delivery. Production-safe + inert unless a delivery row carries
     // `provider='push_stub'`. Mirrors the fresh-environment app server env below.
     OM_ENABLE_PUSH_STUB_ADAPTER: process.env.OM_ENABLE_PUSH_STUB_ADAPTER ?? '1',
+    // Swap the FCM/APNs/Expo SDK clients for network-free fakes so the REAL provider
+    // adapters run end-to-end. Unlike `push_stub` (which replaces the whole adapter),
+    // this replaces only each SDK client. Mirrors the fresh-environment env below.
+    OM_PUSH_FAKE_PROVIDERS: process.env.OM_PUSH_FAKE_PROVIDERS ?? '1',
+    // Expo's receipt reaper ignores rows younger than 15 minutes by default, which no
+    // integration test can wait out. Poll immediately instead.
+    OM_PUSH_RECEIPT_MIN_AGE_MINUTES: process.env.OM_PUSH_RECEIPT_MIN_AGE_MINUTES ?? '0',
     // Tests assert on access_logs immediately after CRUD reads; keep the
     // blocking write path on inside the integration runtime so tests do
     // not have to call flushPendingCrudAccessLogs() explicitly.
@@ -3335,6 +3342,16 @@ export async function startEphemeralEnvironment(options: EphemeralRuntimeOptions
       // push channel + device. Applies to the app server, the Playwright process, and
       // any drain/worker child that inherits this environment.
       OM_ENABLE_PUSH_STUB_ADAPTER: process.env.OM_ENABLE_PUSH_STUB_ADAPTER ?? '1',
+      // Swap the FCM/APNs/Expo SDK clients for network-free fakes (TC-CHANNEL-PUSH-005+) so the REAL
+      // provider adapters — native message construction, credential parsing, client caching, and every
+      // error → `device_unregistered` mapping — run end-to-end without live keys. Unlike
+      // `push_stub`, which replaces the whole adapter, this replaces only each SDK client, and is
+      // registered only under this flag. Applies to the app server, the Playwright process, and any
+      // drain/worker child that inherits this environment.
+      OM_PUSH_FAKE_PROVIDERS: process.env.OM_PUSH_FAKE_PROVIDERS ?? '1',
+      // Expo's receipt reaper ignores rows younger than 15 minutes by default (it polls a real
+      // provider's async receipts). No integration test can wait that out — poll immediately.
+      OM_PUSH_RECEIPT_MIN_AGE_MINUTES: process.env.OM_PUSH_RECEIPT_MIN_AGE_MINUTES ?? '0',
       OM_DISABLE_EMAIL_DELIVERY: '1',
       OM_WEBHOOKS_ALLOW_PRIVATE_URLS: process.env.OM_WEBHOOKS_ALLOW_PRIVATE_URLS ?? '1',
       ENABLE_CRUD_API_CACHE: 'true',
