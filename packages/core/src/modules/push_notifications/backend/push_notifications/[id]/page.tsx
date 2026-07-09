@@ -1,6 +1,5 @@
 "use client"
 import * as React from 'react'
-import { useParams } from 'next/navigation'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { LoadingMessage, ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
 import { StatusBadge, type StatusMap } from '@open-mercato/ui/primitives/status-badge'
@@ -54,9 +53,8 @@ function JsonBlock({ value }: { value: Record<string, unknown> | null }) {
   )
 }
 
-export default function PushDeliveryDetailPage() {
-  const params = useParams<{ id: string }>()
-  const id = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params?.id[0] : ''
+export default function PushDeliveryDetailPage({ params }: { params?: { id?: string } }) {
+  const id = typeof params?.id === 'string' ? params.id : ''
   const t = useT()
   const [item, setItem] = React.useState<DeliveryDetail | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
