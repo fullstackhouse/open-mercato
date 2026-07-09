@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { resolveAppRoot } from './appRoot'
 import { drainQueueFromAppRoot } from './queue-runner'
 
 type DrainQueueOptions = {
@@ -10,9 +11,6 @@ type DrainQueueOptions = {
 
 const DEFAULT_JOB_LIMIT = 100
 
-function resolveAppRoot(input?: string): string {
-  return path.resolve(input?.trim() || process.env.OM_TEST_APP_ROOT?.trim() || path.resolve(process.cwd(), 'apps/mercato'))
-}
 
 async function drainQueueInCurrentProcess(queueName: string, options: Required<DrainQueueOptions>): Promise<number> {
   return drainQueueFromAppRoot(queueName, options)

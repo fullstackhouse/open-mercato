@@ -56,15 +56,15 @@ beforeEach(() => {
 })
 
 describe('APNs fake provider', () => {
-  it('sends through the real adapter and records the native notification', async () => {
+  it('sends through the real adapter and records the wire-form notification', async () => {
     const result = await getApnsChannelAdapter().sendMessage(buildInput('device-token-ABCDEF12'))
     expect(result.status).toBe('sent')
 
+    // Built against a real `apn.Notification`, so this is what node-apn would transmit.
     const recorded = findFakePush('apns', 'ABCDEF12')
-    expect(recorded?.native).toMatchObject({
-      topic: 'com.openmercato.fake',
-      alert: { title: 'Hello', body: 'Body text' },
-      badge: 4,
+    expect(recorded?.native.headers).toMatchObject({ 'apns-topic': 'com.openmercato.fake' })
+    expect(recorded?.native.payload).toMatchObject({
+      aps: { alert: { title: 'Hello', body: 'Body text' }, badge: 4 },
     })
   })
 
@@ -73,8 +73,9 @@ describe('APNs fake provider', () => {
     expect(result.status).toBe('sent')
 
     const recorded = findFakePush('apns', 'SILENT12')
-    expect(recorded?.native).toMatchObject({ contentAvailable: 1, pushType: 'background', priority: 5 })
-    expect(recorded?.native.alert).toBeUndefined()
+    expect(recorded?.native.headers).toMatchObject({ 'apns-push-type': 'background', 'apns-priority': 5 })
+    expect(recorded?.native.payload).toMatchObject({ aps: { 'content-available': 1 } })
+    expect((recorded?.native.payload as { aps: Record<string, unknown> }).aps.alert).toBeUndefined()
   })
 
   it('maps the native Unregistered reason to the device_unregistered sentinel', async () => {

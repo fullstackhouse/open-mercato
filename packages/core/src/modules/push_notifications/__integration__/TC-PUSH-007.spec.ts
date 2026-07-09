@@ -1,14 +1,18 @@
 import { expect, test } from '@playwright/test'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { getTokenScope, readJsonSafe } from '@open-mercato/core/helpers/integration/generalFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
+import {
+  createNotificationFixture,
+  listNotifications,
+} from '@open-mercato/core/helpers/integration/notificationsFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
 import {
   connectFakePushChannel,
   deleteChannelIfExists,
   deleteDeliveriesForDevice,
-  DEVICES_PATH,
+  deleteFakePushDevice,
   expectNativeMessage,
-  NOTIFICATIONS_PATH,
+  makeFakePushToken,
   readLatestDelivery,
   registerFakePushDevice,
 } from '@open-mercato/core/helpers/integration/pushFake'
@@ -20,7 +24,6 @@ import {
  * leaving the in-app notification body untouched. `TC-NOTIF-013` asserts the API round-trip; this
  * asserts the mapping onto the wire message built by the REAL adapter.
  */
-const TOKEN_TAIL = 'OPTS0007'
 const PROVIDER = 'fcm'
 const IN_APP_BODY = 'In-app body stays as written'
 const PUSH_BODY = 'Shortened push body'
@@ -30,6 +33,8 @@ test.describe('TC-PUSH-007: pushOptions round-trip into the native message', () 
     test.slow()
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
+    const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
+    const startedAt = new Date().toISOString()
 
     let channelId: string | null = null
     let userDeviceId: string | null = null
@@ -40,13 +45,11 @@ test.describe('TC-PUSH-007: pushOptions round-trip into the native message', () 
         request,
         adminToken,
         PROVIDER,
-        `qa-fcm-options-token-${TOKEN_TAIL}`,
+        pushToken,
         `qa-tc-push-007-${Date.now()}`,
       )
 
-      const createRes = await apiRequest(request, 'POST', NOTIFICATIONS_PATH, {
-        token: adminToken,
-        data: {
+      notificationId = await createNotificationFixture(request, adminToken, {
           recipientUserId: userId,
           type: 'admin.custom_message',
           title: 'Order shipped',
@@ -58,12 +61,7 @@ test.describe('TC-PUSH-007: pushOptions round-trip into the native message', () 
             image: 'https://cdn.example.com/hero.png',
             priority: 'normal',
           },
-        },
-      })
-      expect(createRes.status()).toBe(201)
-      const created = await readJsonSafe<{ id?: string }>(createRes)
-      notificationId = created?.id ?? null
-      expect(notificationId).toBeTruthy()
+        })
 
       await drainIntegrationQueue('events')
       await drainIntegrationQueue('push-deliveries')
@@ -74,7 +72,7 @@ test.describe('TC-PUSH-007: pushOptions round-trip into the native message', () 
         })
         .toBe('sent')
 
-      const native = await expectNativeMessage(PROVIDER, TOKEN_TAIL)
+      const native = await expectNativeMessage(PROVIDER, tokenTail, startedAt)
       // The push carries the override; the in-app notification body is unchanged (asserted below).
       expect(native.notification).toMatchObject({
         title: 'Order shipped',
@@ -90,19 +88,13 @@ test.describe('TC-PUSH-007: pushOptions round-trip into the native message', () 
         payload: { aps: { badge: 9, sound: 'chime.caf' } },
       })
 
-      const listRes = await apiRequest(request, 'GET', NOTIFICATIONS_PATH, { token: adminToken })
-      expect(listRes.status()).toBe(200)
-      const list = await readJsonSafe<{ items?: Array<{ id: string; body?: string }> }>(listRes)
-      const persisted = list?.items?.find((item) => item.id === notificationId)
+      const { items } = await listNotifications(request, adminToken)
+      const persisted = items.find((item) => item.id === notificationId)
       expect(persisted?.body).toBe(IN_APP_BODY)
     } finally {
       await deleteDeliveriesForDevice(userDeviceId)
-      if (userDeviceId) {
-        await apiRequest(request, 'DELETE', `${DEVICES_PATH}/${userDeviceId}`, { token: adminToken }).catch(
-          () => undefined,
-        )
-      }
-      await deleteChannelIfExists(channelId)
+      await deleteFakePushDevice(request, adminToken, userDeviceId)
+      await deleteChannelIfExists(request, adminToken, channelId)
     }
   })
 })

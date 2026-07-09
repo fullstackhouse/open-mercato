@@ -2,11 +2,14 @@ import path from 'node:path'
 import { expect, type APIRequestContext } from '@playwright/test'
 import {
   findFakePush,
+  resolveQueueBaseDir,
+  uniquePushTokenTail,
   type FakePushEntry,
   type FakePushProvider,
 } from '../../modules/push_notifications/lib/fake-provider-recorder'
 import { apiRequest } from './api'
-import { readJsonSafe } from './generalFixtures'
+import { resolveAppRoot } from './appRoot'
+import { deleteEntityByPathIfExists, expectId, readJsonSafe } from './generalFixtures'
 import { withClient } from './dbFixtures'
 
 /**
@@ -17,17 +20,40 @@ import { withClient } from './dbFixtures'
  * message travels through a JSONL sink under the queue's own base dir rather than the delivery row —
  * no adapter returns `metadata` on success, and APNs deliberately reports an empty `externalMessageId`.
  */
-const TEST_APP_ROOT = process.env.OM_TEST_APP_ROOT?.trim()
-const APP_ROOT = TEST_APP_ROOT ? path.resolve(TEST_APP_ROOT) : path.resolve(process.cwd(), 'apps/mercato')
-
-// Match the queue base dir the drain child uses, so the spec reads the file the worker wrote.
-if (!TEST_APP_ROOT && !process.env.QUEUE_BASE_DIR?.trim()) {
-  process.env.QUEUE_BASE_DIR = path.resolve(APP_ROOT, '.mercato/queue')
+/**
+ * The Playwright process runs from the repo root, so its `cwd` is not the app root. Pin `QUEUE_BASE_DIR`
+ * once, before anything resolves it, so the spec, the worker, and the drain child all agree on the queue
+ * dir and the sink inside it. Never overrides a dir the harness already chose (the ephemeral runner
+ * sets its own).
+ */
+if (!process.env.QUEUE_BASE_DIR?.trim()) {
+  process.env.QUEUE_BASE_DIR = path.resolve(resolveAppRoot(), '.mercato/queue')
 }
+
+/** Re-exported so specs never hand-roll a second, divergent fallback (see TC-PUSH-008). */
+export { resolveQueueBaseDir, uniquePushTokenTail }
+
+/** The canonical channel teardown — API-based, not raw SQL. Re-exported so specs import one module. */
+export { deleteChannelIfExists } from './communicationChannelsFixtures'
 
 export const TENANT_CONNECT_PATH = '/api/communication_channels/channels/connect/tenant-credentials'
 export const DEVICES_PATH = '/api/devices'
 export const NOTIFICATIONS_PATH = '/api/notifications'
+
+/** A push token whose last 8 chars are unique to this run — the sink and delivery row are keyed on them. */
+export function makeFakePushToken(provider: FakePushProvider): { pushToken: string; tokenTail: string } {
+  const tokenTail = uniquePushTokenTail()
+  return { pushToken: `qa-${provider}-token-${tokenTail}`, tokenTail }
+}
+
+/** A push token that drives the given branch, keeping the run-unique tail. */
+export function makeFakePushTokenFor(
+  provider: FakePushProvider,
+  sentinel: 'unregistered' | 'fail',
+): { pushToken: string; tokenTail: string } {
+  const tokenTail = uniquePushTokenTail()
+  return { pushToken: `qa-${provider}-${sentinel}-token-${tokenTail}`, tokenTail }
+}
 
 export type PushDeliveryRow = {
   status: string
@@ -62,7 +88,13 @@ export const FAKE_PUSH_CREDENTIALS: Record<FakePushProvider, Record<string, unkn
   },
 }
 
-/** Connect a tenant-wide push channel through the real credential-connect route. */
+/**
+ * Connect a tenant-wide push channel through the real credential-connect route.
+ *
+ * Not `seedConnectedChannel` from `communicationChannelsFixtures`: that seeds the `__test_seed__`
+ * provider, whereas these specs must drive the real `fcm`/`apns`/`expo` connect path so the adapter's own
+ * `validateCredentials` runs. Tear down with `deleteChannelIfExists` from that same module.
+ */
 export async function connectFakePushChannel(
   request: APIRequestContext,
   token: string,
@@ -75,15 +107,7 @@ export async function connectFakePushChannel(
   })
   expect(response.status(), `connect ${provider} channel`).toBe(201)
   const body = await readJsonSafe<{ channelId?: string }>(response)
-  expect(body?.channelId).toBeTruthy()
-  return body!.channelId as string
-}
-
-export async function deleteChannelIfExists(channelId: string | null): Promise<void> {
-  if (!channelId) return
-  await withClient(async (client) => {
-    await client.query('delete from communication_channels where id = $1', [channelId])
-  }).catch(() => undefined)
+  return expectId(body?.channelId, `connect ${provider} response should include channelId`)
 }
 
 /**
@@ -103,8 +127,17 @@ export async function registerFakePushDevice(
   })
   expect(response.status(), `register ${provider} device`).toBe(201)
   const body = await readJsonSafe<{ id?: string }>(response)
-  expect(body?.id).toBeTruthy()
-  return body!.id as string
+  return expectId(body?.id, `register ${provider} device response should include id`)
+}
+
+/** Teardown counterpart to {@link registerFakePushDevice}. */
+export async function deleteFakePushDevice(
+  request: APIRequestContext,
+  token: string | null,
+  userDeviceId: string | null,
+): Promise<void> {
+  if (!userDeviceId) return
+  await deleteEntityByPathIfExists(request, token, `${DEVICES_PATH}/${userDeviceId}`)
 }
 
 export async function deleteDeliveriesForDevice(userDeviceId: string | null): Promise<void> {
@@ -128,26 +161,41 @@ export async function readLatestDelivery(tenantId: string, userDeviceId: string)
   })
 }
 
-/** True once the device has been soft-deleted (the `device_unregistered` contract). */
+/**
+ * True once the device has been soft-deleted (the `device_unregistered` contract).
+ *
+ * A MISSING row returns `false`, not `true`: soft-delete keeps the row, so an absent one means the
+ * device was never created or a neighbouring teardown hard-deleted it. Returning `true` there would let
+ * the central assertion of TC-PUSH-004/008 pass vacuously.
+ */
 export async function isDeviceSoftDeleted(userDeviceId: string): Promise<boolean> {
   return withClient(async (client) => {
     const res = await client.query('select deleted_at from user_devices where id = $1', [userDeviceId])
-    if (res.rows.length === 0) return true
+    if (res.rows.length === 0) return false
     return res.rows[0].deleted_at != null
   })
 }
 
 /** The provider-native message the REAL adapter handed the faked SDK client. */
-export function readNativeMessage(provider: FakePushProvider, tokenTail: string): FakePushEntry | undefined {
-  return findFakePush(provider, tokenTail)
+export function readNativeMessage(
+  provider: FakePushProvider,
+  tokenTail: string,
+  sinceIso?: string,
+): FakePushEntry | undefined {
+  return findFakePush(provider, tokenTail, sinceIso)
 }
 
+/**
+ * Wait for the message this run's worker recorded. `sinceIso` (default: call time) rejects entries from
+ * an earlier run — the sink is append-only and the reused-environment path never truncates it.
+ */
 export async function expectNativeMessage(
   provider: FakePushProvider,
   tokenTail: string,
+  sinceIso: string = new Date(0).toISOString(),
 ): Promise<Record<string, unknown>> {
   await expect
-    .poll(() => readNativeMessage(provider, tokenTail)?.native ?? null, { timeout: 30_000 })
+    .poll(() => readNativeMessage(provider, tokenTail, sinceIso)?.native ?? null, { timeout: 30_000 })
     .not.toBeNull()
-  return readNativeMessage(provider, tokenTail)!.native
+  return readNativeMessage(provider, tokenTail, sinceIso)!.native
 }
