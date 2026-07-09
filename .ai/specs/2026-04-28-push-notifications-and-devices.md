@@ -11,7 +11,7 @@
 **Key Points:**
 - Open Mercato ships only **in-app** notifications. There is no mobile push channel, no device registry, no DB-persistent notification type registry, and no per-channel user preferences.
 - This spec adds two core modules (`devices`, `push_notifications`), extends `notifications` with a type catalogue + channel-agnostic preferences, and delivers push **through the existing `communication_channels` hub** — FCM, APNs, and Expo are hub `ChannelAdapter`s in their own npm packages.
-- The design is a deliberate re-architecture of a production implementation running in a downstream app (covo-backend's `user_notifications`), not a 1:1 port.
+- The design is a deliberate, upstream-native architecture built to Open Mercato's platform constraints rather than a port of any pre-existing implementation.
 
 **Scope:**
 - `devices` — generic per-tenant `(user, device, platform)` registry. Push is one consumer; MFA device-trust (#539), session-aware auth, and audit logs are plausible future consumers.
@@ -35,7 +35,7 @@ This spec splits the work along channel-agnostic vs. channel-specific lines:
 - **Provider-specific** (new `channel-*` packages): the FCM/APNs/Expo SDKs and their message builders.
 - **Cross-cutting** (new `devices` module): device identity, reusable beyond push.
 
-> **Market Reference**: The downstream production module `user_notifications` (covo-backend) is the reference implementation this spec was informed by. **Adopted:** its delivery-log shape, its exponential-backoff worker, and its `unregistered`-token device cleanup. **Rejected:** its single combined module, its `(user, type)` preference row with `push_enabled`/`email_enabled` boolean columns, its required-token `is_active` device entity, its direct `node-pushnotifications` provider calls, and its last-8 token masking in admin surfaces (upstream treats the token as a hard secret). See § Alternatives Considered.
+> **Design stance**: This module distills the patterns that a production push stack needs. **Adopted:** a delivery-log shape, an exponential-backoff worker, and `unregistered`-token device cleanup. **Rejected as anti-patterns:** a single combined module, a `(user, type)` preference row with `push_enabled`/`email_enabled` boolean columns, a required-token `is_active` device entity, direct `node-pushnotifications` provider calls, and last-8 token masking in admin surfaces (upstream treats the token as a hard secret). See § Alternatives Considered.
 
 ## Problem Statement
 
@@ -116,7 +116,7 @@ Each adapter maps its provider's permanent-token errors to the **uniform `device
 | Push *delivery* nevertheless rides the `communication_channels` hub | Maintainer mandate on #2595: *"push notifications support via the `communication_channels` hub … so it will be end2end feature."* Verified feasible with **no `ChannelAdapter` contract change**. This satisfies the end-to-end demand without collapsing the device registry into the hub. |
 | **No `PushProvider` interface** in `push_notifications` | The hub's `channelAdapterRegistry` *is* the provider seam. A second seam would be a parallel, divergent registry. The strategy calls `adapter.sendMessage(...)` once per device token, exactly as `channels/[id]/test-send` does — not the conversation/message pipeline. |
 | Type registry + preferences live in `notifications`, not `push_notifications` | Preferences are inherently cross-channel. A future `email_notifications` module would otherwise duplicate the table or depend on the push module — both wrong. There is one catalogue of "things a system can notify a user about"; in-app, push, and email are *renderings* of it. |
-| `NotificationPreference` = one row per `(user, type, channel)` with a free-form `channel` string | Adding `email`/`sms` is new rows, not a schema change. The downstream `(user, type)` + `push_enabled`/`email_enabled` columns require a migration per channel. |
+| `NotificationPreference` = one row per `(user, type, channel)` with a free-form `channel` string | Adding `email`/`sms` is new rows, not a schema change. A `(user, type)` row with per-channel boolean columns (`push_enabled`/`email_enabled`) would require a migration per channel. |
 | Preferences are lazy-seeded (absent row ⇒ enabled) | Avoids backfilling a row for every user × every type whenever a new type is registered. Apps wanting default-off insert explicit `enabled=false` rows at type registration. |
 | `UserDevice` carries push-token fields directly | Single token per `(device, app install)` is the universal case for FCM/APNs/Expo. A separate token entity is YAGNI; splitting later is one migration. |
 | Device identity includes `organization_id` | Without it, re-registering the same device in a different org silently *moved* the existing row between orgs. |
@@ -143,14 +143,14 @@ Each adapter maps its provider's permanent-token errors to the **uniform `device
 |-------------|--------------|
 | Fold `devices` into the `communication_channels` hub | Orthogonal concerns; the hub has no device/token axis. Would force one abstraction to serve two unrelated purposes. (Push *delivery* does ride the hub — the device *registry* does not.) |
 | A `PushProvider` interface + FCM/APNs implementations inside `push_notifications` (the original draft) | Superseded by the maintainer mandate on #2595. It would have created a second provider seam parallel to the hub's `channelAdapterRegistry`. |
-| A 1:1 port of the downstream `user_notifications` module | Deliberate re-architecture instead. Its combined module, boolean-column preferences, required-token device entity, and direct `node-pushnotifications` calls each fail an upstream platform constraint. |
+| A 1:1 port of a monolithic push-notifications module | Deliberate re-architecture instead. A combined module, boolean-column preferences, a required-token device entity, and direct `node-pushnotifications` calls each fail an upstream platform constraint. |
 | A `sendSilentPush` primitive that writes no `Notification` row and bypasses preferences | Removed 2026-06-30. Silent push now rides the ordinary `notificationService.create()` flow: the row is still written, and preferences still apply unless the type is `nonOptOut`. Unifying on the create flow genuinely shrinks the surface, and the bypass conflated delivery style with enforcement. |
 | A separate `PushToken` entity | YAGNI. One token per `(device, app install)` is universal across FCM/APNs/Expo. |
 | A **fake HTTP provider server** for integration tests | Three independent reasons. (0) It does not buy what it appears to: it cannot validate conformance with the real provider, because its schema is our own belief about the contract — a wrong belief passes under either approach. (1) Its sole genuine gain is running the vendor SDK's client-side validation, and that is structurally unavailable for FCM: `firebase-admin@13.10.0` hardcodes `const FCM_SEND_HOST = 'fcm.googleapis.com'` and ships no messaging emulator, so FCM needs the in-process shim regardless — a server buys *nothing* for the provider that runs in production. (2) Every existing external-service fake in this repo is in-process and env-gated, while the one fake *service* (LocalStack) appears in no workflow file, so discovery silently drops its four `TC-ATT-004..007` specs from every CI run. A compose sidecar would repeat that failure mode. |
 | Surface the provider-native message through the delivery row's `provider_response` (the spec's original preference) | Infeasible without editing `adapter.ts`. No adapter returns `metadata` on success — the worker persists only `{ externalMessageId }`. FCM and Expo could smuggle it through the id string; **APNs cannot**, because it deliberately hardcodes an empty id that is admin-exposed and must never carry token material. |
 | An in-memory array to record fake sends | The adapter never runs in the spec's process, and *which* process it runs in is not fixed (app server inline / drain child / Playwright). A module-level array would live in whichever one happened to run it — the flakiest possible failure. The queue already crosses those boundaries via `QUEUE_BASE_DIR`; the sink rides the same directory. |
 | A new HTTP/IPC endpoint to read fake sends | A production surface for a test-only concern. |
-| Range-partitioning `push_notification_deliveries` | Present downstream; deferred. A 90-day purge worker is the cheaper first step. |
+| Range-partitioning `push_notification_deliveries` | Deferred. A 90-day purge worker is the cheaper first step. |
 
 ## Architecture
 
@@ -426,7 +426,7 @@ Three harness notes. `TC-PUSH-005` cannot reach its terminal state in one drain,
 
 ## Deferred Follow-ups
 
-Present in the downstream module or raised in review, intentionally not in scope here.
+Raised in review, intentionally not in scope here.
 
 | Item | Why deferred |
 |---|---|

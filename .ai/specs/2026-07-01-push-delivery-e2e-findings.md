@@ -2,13 +2,13 @@
 
 **Date:** 2026-07-01
 **Branch:** `stack/devices-push/04-channel-adapters-fcm-apns-expo`
-**Context:** End-to-end validation of the push stack (`devices` → `push_notifications` → `channel-fcm`) against a real Android emulator, a throwaway Expo app (`~/Coding/fullstackhouse/notifications-tests`), and a real Firebase project (`covo-dev-487611`).
+**Context:** End-to-end validation of the push stack (`devices` → `push_notifications` → `channel-fcm`) against a real Android emulator, a throwaway Expo app, and a real Firebase project.
 
 ## TL;DR
 
 **RESOLVED (2026-07-01).** The whole failure collapsed to **one root cause** — notifications created via `POST /api/notifications` never carried an organization (`org=null`), while devices, push channels, and their encryption maps are all org-scoped. A one-line-of-intent fix in `resolveNotificationContext` (derive the org the same way `devices` and the Phase 6 custom-send route already do) makes the **real** pipeline deliver a visible push to the emulator, **foreground and background**, with the delivery row `sent` and the token snapshot showing plaintext. See § Resolution.
 
-Original diagnosis (kept for the record): the **FCM delivery capability is proven working**: a real `covo-dev-487611` service account + the device's real FCM token (decrypted from the encrypted `user_devices.push_token` column) + `firebase-admin` produced a **visible notification on the emulator**. Device registration, at-rest token encryption (on write), credential validation-at-connect, and the mobile integration all work.
+Original diagnosis (kept for the record): the **FCM delivery capability is proven working**: a real FCM service account + the device's real FCM token (decrypted from the encrypted `user_devices.push_token` column) + `firebase-admin` produced a **visible notification on the emulator**. Device registration, at-rest token encryption (on write), credential validation-at-connect, and the mobile integration all work.
 
 The **automatic backend delivery pipeline did NOT work end-to-end** before the fix. In a normal org-enabled tenant a created notification produced **zero** push deliveries, and even after working around that, the send failed with `invalid_fcm_credentials`. What looked like three distinct bugs turned out to be three *symptoms* of the single org-propagation gap (Findings 2 & 3 are downstream of Finding 1 — see each finding's update note). They are independent of provider/keys — the FCM adapter itself is fine.
 
@@ -63,7 +63,7 @@ The strategy snapshots the device token from a decrypting read, but the value is
 
 - `POST /api/devices` self-registration, org/tenant/user binding, `push_token` **encrypted on write**, never exposed in API responses.
 - `POST /api/communication_channels/channels/connect/credentials` for `fcm` → derives `channel_type=push`, validates the service account at connect time (bad key → 422).
-- FCM adapter send path (`firebase-admin` `cert()` + `messaging().send()`), the minted `covo-dev-487611` service account, and the app's real FCM token — **direct send produced a visible push on the emulator.**
+- FCM adapter send path (`firebase-admin` `cert()` + `messaging().send()`), a minted FCM service account, and the app's real FCM token — **direct send produced a visible push on the emulator.**
 - Mobile: Expo + `@react-native-firebase/messaging`, token acquisition, `POST /api/devices`, foreground `onMessage` + background handler.
 
 ## Resolution (2026-07-01) — fixed & verified e2e
