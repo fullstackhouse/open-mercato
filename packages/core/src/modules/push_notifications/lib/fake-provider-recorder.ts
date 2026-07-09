@@ -10,7 +10,15 @@ import { parseBooleanToken } from '@open-mercato/shared/lib/boolean'
  * builds the native message, but nothing persists it: no adapter returns `metadata` on success, and
  * APNs deliberately reports an empty `externalMessageId` (its value reaches the admin-exposed
  * `provider_response`, which must never carry token material). The message is therefore written here,
- * out of band, where a spec in the Playwright process can read what the worker process produced.
+ * out of band.
+ *
+ * **Why a file and not an in-memory recorder.** The adapter does not run in the spec's process, and
+ * *which* process it runs in is not fixed: the send happens in the Next.js app server (which may
+ * process the job inline), in a drain child that `drainIntegrationQueue` spawns whenever
+ * `OM_TEST_APP_ROOT` is set, or — only in the monorepo path — in the Playwright process itself. A
+ * module-level array would live in whichever of those three ran the adapter, and the spec could read it
+ * in just one. The queue already crosses exactly these boundaries through `QUEUE_BASE_DIR`, so the sink
+ * rides the same directory rather than inventing a second IPC channel.
  *
  * Production safety: every entry point is a no-op unless `OM_PUSH_FAKE_PROVIDERS` is set. Mirrors
  * `ensurePushStubAdapterRegistered()` in ./push-stub-adapter.ts.
