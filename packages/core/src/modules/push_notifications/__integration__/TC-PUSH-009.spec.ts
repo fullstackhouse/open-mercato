@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { login } from '@open-mercato/core/helpers/integration/auth'
+import { DEFAULT_CREDENTIALS, login } from '@open-mercato/core/helpers/integration/auth'
 import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
 import { getTokenScope } from '@open-mercato/core/helpers/integration/generalFixtures'
 import { drainIntegrationQueue } from '@open-mercato/core/helpers/integration/queue'
@@ -22,6 +22,7 @@ import {
  */
 const PROVIDER = 'fcm'
 const PUSH_TITLE = 'TC-PUSH-009 admin send'
+const ADMIN_EMAIL = DEFAULT_CREDENTIALS.admin.email
 
 async function readLatestDeliveryId(tenantId: string, userDeviceId: string): Promise<string | null> {
   return withClient(async (client) => {
@@ -37,7 +38,9 @@ async function readLatestDeliveryId(tenantId: string, userDeviceId: string): Pro
 
 test.describe('TC-PUSH-009: admin send page → delivery log shows sent', () => {
   test('an admin-composed push reaches sent and is visible in the delivery log', async ({ page, request }) => {
-    test.slow()
+    // `test.slow()` only triples the config's 20s budget (→ 60s), which the UI drive plus the 30s
+    // poll and two 30s visibility waits below can exceed on their own. Budget explicitly.
+    test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId } = getTokenScope(adminToken)
     const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
@@ -57,20 +60,32 @@ test.describe('TC-PUSH-009: admin send page → delivery log shows sent', () => 
       await login(page, 'admin')
       await page.goto('/backend/push_notifications/send')
 
-      // The recipient is the admin itself — the device registered above belongs to them.
-      const recipient = page.getByLabel('Recipient')
-      await recipient.click()
-      await recipient.fill('admin')
-      await page.getByRole('option').first().click()
+      // `CrudForm` renders each field's `<label>` as a SIBLING of the control, with no `htmlFor`
+      // and without wrapping it (CrudForm.tsx:4234), so `page.getByLabel(...)` never resolves a
+      // CrudForm field. Locate the field's wrapper via its label, then the control inside it.
+      const fieldByLabel = (label: string) =>
+        page.locator('label').filter({ hasText: new RegExp(`^${label}`) }).locator('xpath=..')
 
-      await page.getByLabel('Title', { exact: true }).fill(PUSH_TITLE)
+      // The recipient is the admin itself — the device registered above belongs to them.
+      // `ComboboxInput` renders its suggestions as `<Button>`s in a popover, NOT as ARIA `option`s,
+      // so `getByRole('option')` never resolves either. Click the suggestion by its label, which is
+      // `"<name> — <email>"` (see `loadUserOptions` in the send page).
+      const recipientField = fieldByLabel('Recipient')
+      const recipientInput = recipientField.locator('input').first()
+      await recipientInput.click()
+      await recipientInput.fill(ADMIN_EMAIL)
+      await recipientField.getByRole('button', { name: new RegExp(ADMIN_EMAIL, 'i') }).first().click()
+
+      await fieldByLabel('Title').locator('input').first().fill(PUSH_TITLE)
 
       // Wait for the send to actually land before draining. `.click()` only dispatches the event; draining
       // straight after would run the queues before the row that feeds them exists.
       const sendResponse = page.waitForResponse(
         (response) => response.url().includes('/api/push_notifications/custom-send') && response.request().method() === 'POST',
       )
-      await page.getByRole('button', { name: 'Send push' }).click()
+      // CrudForm renders the submit control in both the header and the footer, so scope to the
+      // enabled one — the form disables submit until a recipient with devices is selected.
+      await page.getByRole('button', { name: 'Send push', disabled: false }).first().click()
       expect((await sendResponse).status()).toBe(201)
 
       await drainIntegrationQueue('events')

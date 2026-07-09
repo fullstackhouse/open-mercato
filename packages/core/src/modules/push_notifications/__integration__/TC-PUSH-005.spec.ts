@@ -28,7 +28,10 @@ const MAX_ATTEMPTS = 3
 
 test.describe('TC-PUSH-005: retryable failure → MAX_ATTEMPTS → expired', () => {
   test('retries a transient provider error to exhaustion without deactivating the device', async ({ request }) => {
-    test.slow()
+    // `test.slow()` only triples the config's 20s budget (→ 60s), which the 60s poll below alone
+    // would consume — leaving nothing for setup, so the test always died before the poll could
+    // reach its own deadline. Budget the whole test explicitly instead.
+    test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
     const { pushToken } = makeFakePushTokenFor(PROVIDER, 'fail')
