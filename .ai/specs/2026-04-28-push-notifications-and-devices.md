@@ -1,406 +1,288 @@
 # Push Notifications and Devices Modules
 
-**Status:** In progress — Phase 1 (`devices` module) complete (`TC-DEV-001` + `TC-DEV-002` colocated); **Phase 2 (`notifications` extensions) complete** (`TC-NOTIF-011` + `TC-NOTIF-012` colocated; type catalogue + preferences; stacked as PR #17 on PR #16); one **deferred** follow-up noted — §2c extensible channel catalogue (module-registered channels, zero core edits), to land with the in-app/email-into-notification-service work; **Phase 3 (`push_notifications` rails + delivery-log UI) complete** (`push` delivery strategy + delivery log + `send-push` worker + `push_stub` adapter + read-only delivery-log API/UI; `push-delivery`/`push-delivery-strategy` unit suites + `TC-PUSH-001` API suite colocated; stacked as PR #18 on PR #17); **Phase 4 (reference provider adapters + `push_token` encryption at rest) complete** (`packages/channel-{fcm,apns,expo}` hub `ChannelAdapter` packages — `firebase-admin` / `@parse/node-apn` / `expo-server-sdk` — uniform `device_unregistered` sentinel, shared `pushChannelCapabilities` baseline + `readPushEnvelope` helper, per-device provider routing in the strategy, `push_token` encrypted at rest via `devices/encryption.ts` + `findWithDecryption`; per-adapter unit suites colocated; stacked on PR #18); **Phase 5 (silent push + flexible push payload) complete** (silent push delivered through the ordinary `notificationService.create()` flow gated on a `silent: true` notification type — **no dedicated `sendSilentPush` primitive** (the earlier draft's was removed 2026-06-30; the in-app row is still written and per-channel prefs still apply unless `nonOptOut`); shared `fanOutPushDeliveries`; arbitrary `data` + flat `pushOptions` on every notification, mapped per provider; `silent`/`options` on the push envelope; `nonOptOut` types bypass the preference gate; additive across `notifications`/`push_notifications`/the three channel adapters; `TC-NOTIF-013` payload round-trip colocated); **Phase 6 (per-device locale + admin custom send + hygiene) complete** (admin custom-send route + `TC-PUSH-002`; merge-readiness wiring pass — create-app template registers `devices` + `push_notifications`, the three channel packages declare their react/UI deps, and `TC-PUSH-003` drives the real delivery worker end-to-end asserting org propagation through `resolveNotificationContext`; the delivery-log purge worker + web push remain deferred follow-ups). **Module 3 architecture revised 2026-06-25** to deliver push **through the `communication_channels` hub** (FCM/APNs/Expo as hub `ChannelAdapter`s) per maintainer request on PR #2595 — see "Module 3" below and the 2026-06-25 changelog entry. Targeting `develop`; one PR per phase.
 **Date:** 2026-04-28
 **Author:** Jacek Tomaszewski (`@jtomaszewski`)
-**Related:** `packages/core/src/modules/notifications/` (in-app notifications, #412), `#539` (security/MFA — future device-trust consumer)
+**Status:** Implemented — Phases 1–8. Ships as a single PR against `develop`.
+**Related:** `packages/core/src/modules/notifications/` (in-app notifications, #412); `#539` (security/MFA — future device-trust consumer); upstream PR #2595 (superseded, devices-only)
+**Companion specs:** [`2026-07-01-push-delivery-e2e-findings.md`](2026-07-01-push-delivery-e2e-findings.md) (org-propagation blockers found during e2e), [`2026-07-03-push-channels-tenant-scope.md`](2026-07-03-push-channels-tenant-scope.md) (tenant-wide push channels)
 
 ## TLDR
 
-- Open Mercato currently ships only **in-app** notifications. There is no mobile push channel, no device-token registry, no DB-persistent notification type registry, and no per-channel user preferences.
-- This spec proposes:
-  - **Two new core modules**:
-    - `@open-mercato/core/modules/devices` — generic per-tenant `(user, device, platform)` registry. Push is one consumer; MFA device trust (#539) and session-aware auth/audit logs are plausible future consumers.
-    - `@open-mercato/core/modules/push_notifications` — push-token registry, mobile push delivery strategy, provider-pluggable sender (FCM + APNs reference providers), retry worker.
-  - **A minimal extension to the existing `notifications` module**: a DB-backed notification type registry and a channel-agnostic preferences table. Designed so future channels (email/SMS) plug in without schema changes.
-- The design is informed by a production implementation already running in a downstream app; ports are validated, not green-field. App-specific concerns (hard-coded categories, app i18n keys, deploy env wiring) are stripped before landing in core.
-- Verified 2026-04-28 (`gh search`): no existing upstream issue/PR covers push, devices, preferences, or a persistent type registry.
+**Key Points:**
+- Open Mercato ships only **in-app** notifications. There is no mobile push channel, no device registry, no DB-persistent notification type registry, and no per-channel user preferences.
+- This spec adds two core modules (`devices`, `push_notifications`), extends `notifications` with a type catalogue + channel-agnostic preferences, and delivers push **through the existing `communication_channels` hub** — FCM, APNs, and Expo are hub `ChannelAdapter`s in their own npm packages.
+- The design is a deliberate re-architecture of a production implementation running in a downstream app (covo-backend's `user_notifications`), not a 1:1 port.
 
-**Out of scope:**
-- Web push (browser Push API). Plausible follow-up.
-- Email and SMS channels. Spec designs preferences/registry to accommodate them additively, but no implementation here.
-- **Notification governance tier — partially implemented; the rest deferred to a later spec** (see "Downstream Parity Review" below). Implemented since the original draft: notification ~~**categories**~~ *(2026-06-26)*, ~~**`non_opt_out`** (server-side opt-out enforcement)~~ *(2026-06-26)*, the ~~**`silent`**~~ and ~~**`hidden_from_settings`**~~ type-metadata fields *(silent enforced in the push strategy; hidden types excluded from the client catalogue)*, ~~**silent push**~~ *(now via the ordinary create flow gated on `type.silent` — no dedicated no-row/bypass primitive)*, and ~~**admin custom / one-off send**~~ *(`sendCustomPush` + `POST /api/push_notifications/custom-send` + `TC-PUSH-002`)*. **Still deferred:** **priority**, the **`group_key`** type-metadata field, and **daily/weekly frequency caps** (`FrequencyGuardService`). Phase-1 governance is just "user can toggle a type off per channel." The deferred items exist in the downstream `user_notifications` module, but a clean upstream implementation approach is still open, so they are reintroduced when an app hits a real need.
-- Delivery-table **range partitioning** + scheduled partition worker, **GDPR data-export / consumer-deletion purge** for push data, and **cross-user token-handoff** deactivation on register — all present downstream, deferred here (the delivery-table purge is already tracked as Phase 6). *(Per-device **locale** resolution + title/body rewrite was originally listed here but is now **implemented** in Phase 6 — `UserDevice.locale` + per-device localized copy in `push-fanout.ts`.)*
-- Reworking the existing in-app `notifications` module's runtime — we extend it, we don't replace anything.
+**Scope:**
+- `devices` — generic per-tenant `(user, device, platform)` registry. Push is one consumer; MFA device-trust (#539), session-aware auth, and audit logs are plausible future consumers.
+- `notifications` extensions — DB-backed type registry, per-`(user, type, channel)` preferences, and a single delivery gate that every channel obeys.
+- `push_notifications` — delivery log, delivery strategy, retry/reclaim worker.
+- `packages/channel-{fcm,apns,expo}` — hub `ChannelAdapter` packages holding all provider-specific code.
+
+**Concerns:**
+- Push tokens are secrets. They are encrypted at rest and must never reach a list/detail response, an audit snapshot, a mutation-guard payload, or a provider response.
+- The delivery queue is at-least-once. Exactly-once *send* is enforced by an atomic `pending → sending` claim, not by the queue.
+- No fake validates conformance with the real providers. Only live credentials do; that gap is stated deliberately and is not closed by any option considered.
 
 ## Overview
 
-Today, an Open Mercato app that wants to deliver mobile push must build the following itself:
-1. A device-token store keyed by `(tenant, user, device)`.
-2. A delivery strategy registered into the notifications module's strategy seam.
-3. An FCM/APNs sender wrapper.
-4. A type registry that mobile clients can read (so a settings screen can render the catalogue without a hard dependency on server source code).
-5. Per-user, per-channel preference toggles.
-6. A worker for retryable delivery with exponential backoff.
+An Open Mercato app that wants mobile push must today build a device-token store, a delivery strategy, an FCM/APNs sender, a client-readable type registry, per-channel preference toggles, and a retrying worker. That is a lot of infrastructure, and it is the same in every app.
 
-That is a lot of infrastructure — and it is the same in every app. This spec splits the work along channel-agnostic vs. channel-specific lines:
+This spec splits the work along channel-agnostic vs. channel-specific lines:
 
-- **Channel-agnostic** (lives in existing `notifications` module): type registry, preferences. Future email/SMS modules read from the same tables.
-- **Channel-specific** (lives in new `push_notifications` module): tokens, delivery rows, sender, worker, provider seam.
+- **Channel-agnostic** (existing `notifications` module): type registry, preferences, the `shouldDeliver` gate. Future email/SMS channels read the same tables.
+- **Channel-specific** (new `push_notifications` module): delivery rows, fan-out, worker.
+- **Provider-specific** (new `channel-*` packages): the FCM/APNs/Expo SDKs and their message builders.
 - **Cross-cutting** (new `devices` module): device identity, reusable beyond push.
+
+> **Market Reference**: The downstream production module `user_notifications` (covo-backend) is the reference implementation this spec was informed by. **Adopted:** its delivery-log shape, its exponential-backoff worker, and its `unregistered`-token device cleanup. **Rejected:** its single combined module, its `(user, type)` preference row with `push_enabled`/`email_enabled` boolean columns, its required-token `is_active` device entity, its direct `node-pushnotifications` provider calls, and its last-8 token masking in admin surfaces (upstream treats the token as a hard secret). See § Alternatives Considered.
 
 ## Problem Statement
 
 ### Gaps in the current `notifications` module
 
 - `NotificationTypeDefinition` is **in-memory only**. A mobile app cannot enumerate types via API to render a preferences screen — it would have to ship a copy of the catalogue.
-- No notion of **user preferences** per channel: `Notification.channels` is fixed at creation time; users cannot opt out per type.
-- No **mobile push** delivery strategy.
-- No **device registry**. There is no first-class `(user, device, platform)` entity, no `is_active` lifecycle, no platform metadata.
+- There are no **per-channel user preferences**. `Notification.channels` is fixed at creation time and purely descriptive; users cannot opt out per type.
+- There is no **mobile push** delivery strategy.
+- There is no **device registry** — no first-class `(user, device, platform)` entity, no lifecycle, no platform metadata.
 
-### Why a separate `devices` module
+### The channels that bypass the seam get no enforcement
 
-A device registry is useful beyond push:
-- **MFA device trust** (#539) — "trusted device" lists.
-- **Session-aware auth** — bind sessions to a registered device.
-- **Audit logs** — attribute actions to a known device.
-
-Folding device storage into `push_notifications` would force these consumers to depend on the push module. Splitting them is a one-time cost paid in two extra files for clear reuse downstream.
-
-### Why pluggable push providers
-
-FCM + APNs are the obvious defaults but not universal:
-- Expo apps need the Expo push API.
-- Some apps standardize on OneSignal / Pushwoosh.
-- Test/dev environments want a stub provider.
-
-A `PushProvider` interface lets apps register additional providers in `di.ts` without forking the core module.
-
-### Why preferences and registry live in `notifications`
-
-Preferences are inherently cross-channel. If they lived in `push_notifications`, a future `email_notifications` module would either duplicate the table or take a hard dependency on `push_notifications` — both wrong. Keeping them in the channel-agnostic module means each channel reads the same source of truth via a small DI-injected service.
-
-The same logic applies to the type registry: there is one catalogue of "things a system can notify a user about." In-app, push, and future channels are *renderings* of the same catalogue.
+The `NotificationDeliveryStrategy` seam is correct, but before Phase 7 the two pre-existing channels did not use it: **in-app** delivery was the implicit act of writing the `Notification` row, and **email** was hard-coded inline in the dispatch subscriber. Because per-channel enforcement lived *inside each strategy*, disabling `in_app` or `email` for a type silently still delivered it, and the `nonOptOut`/`silent` governance flags were honored on push only.
 
 ## Proposed Solution
 
-### Module 1 — `@open-mercato/core/modules/devices` (new)
+### Module 1 — `devices` (new, in `@open-mercato/core`)
 
-Generic device registry. Owns `(tenant, org, user, device)` identity and lifecycle. Push-token storage **does not live here** to keep the module channel-agnostic.
+Generic device registry owning `(tenant, org, user, device)` identity and lifecycle.
 
-**Entities:**
-- `UserDevice` (`user_devices`)
-  - `id` (uuid PK), `tenant_id`, `organization_id` (nullable), `user_id`
-  - `device_id` (client-supplied stable id, e.g. iOS `identifierForVendor`), `platform` (`ios|android|web`)
-  - `client_app_version`, `os_version` (text|null)
-  - `push_token` (text|null), `push_provider` (text|null — `fcm|apns|expo|...`), `push_token_updated_at` (timestamptz|null)
-  - `last_seen_at` (timestamptz)
-  - `created_at`, `updated_at`, `deleted_at`
-  - Unique: `(tenant_id, coalesce(organization_id, nil-uuid), user_id, device_id)` for non-soft-deleted rows. `organization_id` is part of the identity (a device is scoped per organization); null is coalesced to the nil UUID in the partial unique index so null-org rows still dedupe per `(tenant, user, device)` rather than being treated as distinct.
+Device identity **includes the organization**: a device registered in a different org is a different row. The partial unique index coalesces a null `organization_id` to the nil UUID, because Postgres otherwise treats NULLs as distinct and null-org rows would stop deduping. "Active" means `deleted_at IS NULL`; push delivery additionally requires a non-null `push_token`.
 
-"Active" means `deleted_at IS NULL`. Push delivery additionally requires `push_token IS NOT NULL`.
+**`push_token` is a hard secret.** It is encrypted at rest (`devices/encryption.ts` → `findWithDecryption`/`findOneWithDecryption` at every read site), never returned by any list/detail response (only `push_provider` and `push_token_updated_at` are exposed), redacted to `'[redacted]'` from the command snapshots the audit log persists (and therefore from the derived `changesJson` exposed via `audit_logs.view_self`), and stripped from the mutation-guard payload so it cannot surface in enterprise record-lock conflict details. The real token survives only in the internal undo payload, which no API exposes, so register/update/deactivate stay undoable.
 
-**`push_token` is a secret.** It is never returned by list/detail responses (only `push_provider` and `push_token_updated_at` are exposed). Because the registry's writes go through the command bus, the token is also redacted (`'[redacted]'`) from the `snapshotBefore`/`snapshotAfter` the commands persist on each audit-log entry — and therefore from the `changesJson` the command bus derives from those snapshots — so it cannot leak through the `audit_logs.view_self` API (notably for admin register-on-behalf, where the snapshot would otherwise hold another user's token). It is likewise stripped from the mutation-guard payload so it cannot surface in enterprise record-lock conflict details returned to a conflicting client. The real token is retained only in the internal undo payload (which no API exposes), so register/update/deactivate stay fully undoable — undo/restore writes the original token back unchanged. The admin register form renders the token field as a password input.
+APIs split into self-serve and admin trees, matching the `customer_accounts` / `staff` convention. Both are org-scoped through the standard `orgField: 'organizationId'` rather than a hand-rolled narrowing — the query engine's `resolveOrganizationScope` is null-aware, so a nullable column does not hide rows from unrestricted admins.
 
-**APIs** — split into self-serve and admin trees, matching the codebase convention (`customer_accounts/api/admin`, `staff/api/.../self`). *(As implemented; the original draft listed all verbs under `/api/devices`.)*
+- **Self-serve** (`devices.view` / `devices.manage`): `POST /api/devices` (idempotent upsert of the caller's own device, revives a soft-deleted row), `GET /api/devices`, `PUT /api/devices/:id` (owner-only), `DELETE /api/devices/:id` (owner-only soft-delete).
+- **Admin** (`devices.admin`, under `api/admin/devices`): list/create/read/update/deactivate any in-scope device; 403 outside the admin's org scope.
 
-Self-serve (`devices.view` / `devices.manage`) — scoped to the acting user **and** the caller's active organization (standard org scoping, like every other module — `orgField: 'organizationId'`; the query engine's org scope is null-aware):
-- `POST /api/devices` — register/upsert the **caller's own** device. Idempotent on `(tenant, org, user, device_id)`; revives a soft-deleted row. Accepts optional `pushToken`/`pushProvider`.
-- `GET /api/devices` — the caller's own devices in the active org (does **not** honor `?userId`).
-- `PUT /api/devices/:id` — **owner-only** update of `client_app_version`, `os_version`, `push_token`, `push_provider`, scoped to the active org (a device outside the current org reads as 404). `last_seen_at` is advanced **only** when the client explicitly sends `lastSeenAt` — metadata edits do not touch presence (presence is maintained by the register heartbeat). Setting `push_token` to `null` signals revoked OS permission.
-- `DELETE /api/devices/:id` — **owner-only** soft-delete, scoped to the active org (404 otherwise).
+`last_seen_at` advances **only** when the client explicitly sends `lastSeenAt`. Metadata edits do not touch presence — presence is owned by the register heartbeat.
 
-Admin (`devices.admin`) under `api/admin/devices` — org scoping is enforced by the factory/route, so org-restricted admins only see/read devices in their orgs (unrestricted admins see the whole tenant):
-- `GET /api/devices/admin/devices` — org-scoped list; optional `?userId=` / `?platform=`.
-- `POST /api/devices/admin/devices` — register on behalf of any user (`userId` in body) into the admin's active org.
-- `GET` / `PUT` / `DELETE /api/devices/admin/devices/:id` — read/update/deactivate any in-scope device (403 for a device outside the admin's org scope).
+**Events:** `devices.user_device.registered`, `devices.user_device.deactivated`.
 
-All routes export `openApi`. List routes use `makeCrudRoute` with `indexer: { entityType: 'devices:user_device' }` **and** `events: { module: 'devices', entity: 'user_device' }` so the CRUD-cache resource tag matches the command's `resourceKind` and writes bust the list cache. Shared write boilerplate (guard → command bus → undo header) lives in `api/deviceOps.ts`; the shared list schema/fields/item in `api/deviceList.ts`. Server also soft-deletes a device when a provider returns "unregistered" (future `push_notifications` worker).
+### Module 2 — extensions to `notifications`
 
-**ACL features (`acl.ts`):**
-- `devices.view`, `devices.manage` (self-serve).
-- `devices.admin` — gates the entire `api/admin/devices` tree **and** the admin backend pages.
+**2a. DB-backed type registry.** New `NotificationType` (`notification_types`) mirrors the in-memory `NotificationTypeDefinition` aggregate so remote clients can enumerate types. The in-memory registry stays the source of truth for code; the table is a read-through mirror reconciled by a subscriber on `notifications.type_registry.sync`, and lazily by `GET /api/notifications/types`. The message title/body lives on the per-instance `Notification` row — this entity is only the catalogue. `label_key`/`description_key` resolve via locale JSON, not the runtime `translations.ts` system, because types are code-registered rather than tenant-defined.
 
-**Setup (`setup.ts`):** `defaultRoleFeatures` grants `devices.view`/`devices.manage` to `employee`; `admin`/`superadmin` get `devices.*`. *(Customer-role grants from the original draft are deferred — devices are employee/ops-facing in Phase 1.)*
+**2b. Channel-agnostic preferences.** New `NotificationPreference` (`notification_preferences`), unique on `(tenant, user, notification_type_id, channel)`, with a free-form `channel` string. Rows are **lazy-seeded**: absence means enabled. `NotificationPreferenceService` (DI) exposes `isChannelEnabled` / `setPreferences` / `listForUser`; channel modules consume the service, never the table.
 
-**Events (`events.ts`):**
-- `devices.user_device.registered`
-- `devices.user_device.deactivated`
+**2c. Module-registered channel catalogue.** `NotificationChannelDefinition` + an in-memory channel registry fed by a `generators.ts` plugin that discovers each module's `notification-channels.ts` and emits `notification-channels.generated.ts`. `GET /api/notifications/channels` serves the registry directly — no DB mirror, because the set is tiny. A third-party module registers a channel with **zero core edits**. Core dogfoods this by shipping `in_app`, `email`, and `push` through the same mechanism.
 
-### Module 2 — Extensions to `@open-mercato/core/modules/notifications`
+**2d. The single delivery gate.** `lib/shouldDeliver.ts` (`shouldDeliver` + `resolveEffectiveChannels`) composes: per-send target ∩ per-type eligibility ∩ registered strategies ∩ the recipient's preference (with `nonOptOut` bypassing it). `silent` composes orthogonally — it selects delivery *style*, never enforcement. The gate runs **once at create time** and its result is snapshotted onto `Notification.channels`; the dispatcher replays that set before each `strategy.deliver(ctx)`. Legacy `channels = NULL` rows recompute via `resolveEffectiveChannels` and are treated as "all channels / visible".
 
-Two additive surfaces — no breaking changes to existing in-app behavior.
+**Events:** `notifications.preference.updated`.
 
-#### 2a. DB-backed type registry
+### Module 3 — `push_notifications` (new, in `@open-mercato/core`)
 
-**New entity:** `NotificationType` (`notification_types`)
-- `id` (string PK, e.g. `orders.shipped`), `tenant_id` (nullable for system-wide types)
-- `label_key` (i18n key — short type name shown in the preferences UI, e.g. `notifications.types.orders_shipped.label`)
-- `description_key` (i18n key, nullable — optional helper text for the preferences UI)
-- `created_at`, `updated_at`
+Owns the delivery log, the fan-out, and the worker. It owns **no provider code**: the hub's `channelAdapterRegistry` is the provider seam.
 
-The actual notification message (title + body) lives on the per-instance `Notification` row, not the type — this entity is just the catalogue. Both keys resolve via locale JSON files (`packages/.../i18n/<locale>.json`); the runtime `translations.ts` system is not used here because types are code-registered, not tenant-defined.
+- `PushNotificationDelivery` (`push_notification_deliveries`) — append-only; snapshots `provider` and a last-8 `token_snapshot` so the audit trail survives token rotation and device deletion. Statuses: `pending | sending | sent | failed | skipped | expired`. `expired` (retries exhausted) is deliberately distinct from `failed` so the admin log carries real signal.
+- The `push` `NotificationDeliveryStrategy` is **enqueue-only** — it resolves devices, snapshots provider + token tail, inserts `pending` rows, and enqueues. This keeps notification creation off the provider's latency path.
+- `workers/send-push.worker.ts` claims a row with an atomic `pending → sending` transition (exactly-once *send* under an at-least-once queue), retries with exponential backoff to `MAX_ATTEMPTS = 3`, and on the uniform `device_unregistered` sentinel soft-deletes the source device through the `devices.devices.deactivate` command (no business-logic import).
+- `workers/reclaim-stuck.worker.ts` recovers rows a crashed worker stranded in `sending`, **and** orphaned `pending` rows whose enqueue was lost after the INSERT committed. `attempts` increments at claim time so `MAX_ATTEMPTS` caps real provider sends across crashes. `OM_PUSH_STUCK_RECLAIM_MINUTES` is floored at 1 — a `0` would re-open actively-sending rows and duplicate pushes. The same tick drives Expo receipt polling.
 
-**Mechanism:** at boot, a subscriber listens to `notifications.type_registry.sync` and reconciles registered `NotificationTypeDefinition` calls into the table. The in-memory definition seam stays the source of truth for code; the DB is a read-through mirror so remote clients (mobile apps) can enumerate types.
+Cross-module reads resolve softly via DI tokens; links are declared in `data/extensions.ts`. There are no token-management APIs here — tokens are device fields.
 
-**API:**
-- `GET /api/notifications/types` — registry read for clients (tenant-filtered).
+**Events:** `push_notifications.delivery.sent`, `push_notifications.delivery.failed`.
 
-#### 2b. Channel-agnostic preferences
+### Provider adapters — `packages/channel-{fcm,apns,expo}`
 
-**New entity:** `NotificationPreference` (`notification_preferences`)
-- `id` (uuid PK), `tenant_id`, `user_id`
-- `notification_type_id` (FK → `notification_types.id`)
-- `channel` (string — `in_app`, `push`, future `email`/`sms`)
-- `enabled` (bool)
-- `created_at`, `updated_at`
-- Unique: `(tenant_id, user_id, notification_type_id, channel)`.
+Each is a hub `ChannelAdapter` package mirroring `channel-gmail`: `channelType: 'push'`, `capabilities.realtimePush: true` (so `pollIntervalSeconds = null`), `channelScope: 'tenant'`, a credentials zod schema, a health check, and the SDK isolated behind an exported test seam (`setFcmMessagingFactory` / `setApnsSenderFactory` / `setExpoClientFactory`). The provider client is cached per credentials hash, LRU-bounded at 32 with `shutdown()`/`app.delete()` on eviction (an unbounded cache leaked a live HTTP/2 socket or an OAuth refresh timer per key rotation), and a **rejected** init promise self-evicts so a transient failure cannot poison the cache until process restart.
 
-**Service:** `NotificationPreferenceService` (DI-registered)
-- `isChannelEnabled(userId, typeId, channel): Promise<boolean>` — defaults to `true` when no row exists (lazy-seed pattern).
-- `setPreferences(userId, [{typeId, channel, enabled}]): Promise<void>`
-- `listForUser(userId): Promise<NotificationPreference[]>`
+**Push channels are tenant-wide infrastructure.** One FCM service account serves every device in the tenant, so the channel row is stored with `organization_id = NULL` and its credentials are pinned to `organizationId = tenantId`. Read and write therefore land on the same key regardless of which org the connecting admin had selected. Connecting is admin-gated (`communication_channels.connect_tenant_channel`); the per-user connect route refuses a tenant-scoped provider with `403 wrong_scope_for_route`.
 
-Channel modules consume this service via DI; they do not query the table directly.
+Each adapter maps its provider's permanent-token errors to the **uniform `device_unregistered` sentinel** so the worker's device soft-delete fires identically:
 
-**APIs:**
-- `GET /api/notifications/preferences` — current user's prefs (lazy-default to `true` for unset rows).
-- `PUT /api/notifications/preferences` — bulk update (client sends only the diff; last-write-wins).
-- `GET`/`PUT /api/notifications/admin/preferences?userId=` — admin-on-behalf; target-user access is gated by the shared `assertActorCanAccessUserTarget` guard (tenant + organization scoping).
+| Provider | Permanent-token errors → `device_unregistered` |
+|---|---|
+| FCM | `messaging/registration-token-not-registered`, `messaging/invalid-registration-token` |
+| APNs | `Unregistered` (410), `BadDeviceToken` (400) |
+| Expo | `DeviceNotRegistered` (receipt phase), malformed `!Expo.isExpoPushToken` |
 
-**ACL:** `notifications.manage_preferences` (self-serve, granted by default to all roles); `notifications.manage_user_preferences` (admin-on-behalf, admin/superadmin via `notifications.*`).
+### Design Decisions
 
-#### 2c. Extensible channel catalogue — DEFERRED FOLLOW-UP
+| Decision | Rationale |
+|----------|-----------|
+| `devices` is its own module, **not** folded into `communication_channels` | They are orthogonal axes: the hub routes *messages* between providers and the unified inbox and has no notion of devices or push tokens; a user can have 5 devices and 0 channels, or 1 device and 3 email channels. Folding device storage into `push_notifications` would force MFA (#539), session-aware auth, and audit-log consumers to depend on the push module. Subsuming it into the hub would be the "wrong kind of reuse" — one abstraction serving two unrelated purposes. |
+| Push *delivery* nevertheless rides the `communication_channels` hub | Maintainer mandate on #2595: *"push notifications support via the `communication_channels` hub … so it will be end2end feature."* Verified feasible with **no `ChannelAdapter` contract change**. This satisfies the end-to-end demand without collapsing the device registry into the hub. |
+| **No `PushProvider` interface** in `push_notifications` | The hub's `channelAdapterRegistry` *is* the provider seam. A second seam would be a parallel, divergent registry. The strategy calls `adapter.sendMessage(...)` once per device token, exactly as `channels/[id]/test-send` does — not the conversation/message pipeline. |
+| Type registry + preferences live in `notifications`, not `push_notifications` | Preferences are inherently cross-channel. A future `email_notifications` module would otherwise duplicate the table or depend on the push module — both wrong. There is one catalogue of "things a system can notify a user about"; in-app, push, and email are *renderings* of it. |
+| `NotificationPreference` = one row per `(user, type, channel)` with a free-form `channel` string | Adding `email`/`sms` is new rows, not a schema change. The downstream `(user, type)` + `push_enabled`/`email_enabled` columns require a migration per channel. |
+| Preferences are lazy-seeded (absent row ⇒ enabled) | Avoids backfilling a row for every user × every type whenever a new type is registered. Apps wanting default-off insert explicit `enabled=false` rows at type registration. |
+| `UserDevice` carries push-token fields directly | Single token per `(device, app install)` is the universal case for FCM/APNs/Expo. A separate token entity is YAGNI; splitting later is one migration. |
+| Device identity includes `organization_id` | Without it, re-registering the same device in a different org silently *moved* the existing row between orgs. |
+| The gate runs once at create time and is snapshotted onto `Notification.channels` | Behaviorally equivalent to a per-deliver gate but computed once. It also promotes `channels` from a descriptive audit field to the authoritative target set, so channel targeting can never bypass opt-out enforcement. |
+| `silent` selects delivery style; only `nonOptOut` bypasses preferences | A silent push is still a notification. Conflating the two would let any `silent` type ignore a user's opt-out. |
+| FCM `messaging/invalid-argument` is **excluded** from the permanent-token set | FCM v1 returns it for *any* malformed request field, not just a bad token. Mapping it to `device_unregistered` meant a single payload-shape bug would progressively soft-delete every targeted device tenant-wide. It now falls through to the retryable path. |
+| APNs returns an **empty** `externalMessageId` on success | node-apn has no message id. The previous `token.slice(-12)` persisted 12 characters of the raw token into the admin-exposed `provider_response`, undercutting the last-8-only secrecy contract. |
+| The delivery strategy is enqueue-only; a worker sends | Keeps notification creation off the provider's latency path. |
+| Exactly-once send via an atomic `pending → sending` claim | The queue is at-least-once; a redelivered job would otherwise re-send. `attempts` increments at claim so `MAX_ATTEMPTS` holds across worker crashes. |
+| `expired` is a distinct terminal state from `failed` | Retries-exhausted and hard-failure are different operational signals in the admin log. |
+| Push channel rows use `organization_id = NULL`, credentials pinned to `organizationId = tenantId` | Channel dedup/heal is org-agnostic. Keying credentials by the connecting admin's selected org meant an org-B key rotation wrote a credential row that the delivery path (reading at `channel.organizationId ?? tenantId`) never found. |
+| Tenant-scoped providers are **refused** (403) on the per-user connect route, not silently downgraded | The defensive `effectiveUserId = null` downgrade let a non-admin holding only `connect_user_channel` mint or overwrite the shared tenant-wide push channel — a privilege-escalation bypass of the admin-only `connect_tenant_channel` ACL. |
+| `setup.ts` swallows the `type_registry.sync` seed error | Contrary to the module norm (customers/sales/catalog throw to abort init for required reference data). Justified only because the emit is a best-effort nudge with a reliable fallback: `GET /api/notifications/types` reconciles lazily. Same pattern as `communication_channels` and `customer_accounts`. |
+| `findWithDecryption` is used even though `TenantEncryptionSubscriber.onLoad` auto-decrypts | The subscriber only resolves entities whose own `tenant_id`/`organization_id` it can read. Keeping the helper is both convention (~1000+ read sites; AGENTS.md guidance, not an enforced gate) and fail-safe if the subscriber is absent from that EM or the entity later gains encrypted fields. |
+| Provider-adapter tests use env-gated **in-process fakes** that swap the SDK *client*, never the adapter | `registerChannelAdapter` throws on a duplicate provider key, so the real adapter object stays registered and merely has its client swapped. This means real message construction, credential parsing, client caching, and every error→sentinel mapping execute end-to-end. |
+| The fake records native messages to a **JSONL sink**, not `provider_response` | See § Alternatives Considered — it is infeasible via the delivery row, and a file (not memory) is required because the adapter runs in a different *process* than the spec. |
+| Golden-file assertions use exact `toEqual` fixtures, not Jest snapshots | A snapshot silently re-records drift under `--updateSnapshot` instead of failing — the exact opposite of what the goldens exist for. |
+| The APNs golden builds against a real `apn.Notification` | Production builds via `buildApnsNotification(new Notification(), payload)`. Pinning a plain-object projection the SDK never serializes would leave a hole in exactly the drift-detection the goldens exist for. Writing them this way immediately caught a wrong assumption: the envelope's custom `data` rides as top-level keys beside `aps` on **every** branch, visible as well as silent. |
+| Root `resolutions` pin `node-forge@1.4.0` | `@parse/node-apn@6.5.0` declares `node-forge` as an **exact** version (`npm:1.3.1`), not a range, so no install can pick up a security patch. Documented in `packages/channel-apns/AGENTS.md` and `UPGRADE_NOTES.md`. |
 
-Phase 2 shipped the preferences matrix with the channel set (`in_app`, `push`) as a **hard-coded UI constant** (`PREFERENCE_CHANNELS` in `NotificationPreferenceMatrix.tsx`) while the backend `channel` column is free-form. **Deferred, not in this PR:** land this together with the work that moves **in-app and email delivery into the notification service** — that is when channels stop being labels and become real delivery paths, so the registry earns its keep. The goal is that a third-party module can register its own channel **without editing notifications-core or the UI** — mirroring the notification **type** registry exactly. Purely additive: no change to the send path, `NotificationPreferenceService`, existing routes, or DB schema (`channel` stays a free-form string; the registry defines only the *renderable/known* set, not a validation whitelist).
+### Alternatives Considered
 
-**Seam (one-time, additive):**
-- `packages/shared/src/modules/notifications/types.ts` — new `NotificationChannelDefinition` type: `{ id, module, labelKey, descriptionKey?, order? }`.
-- **Generator** — one extra `processStandaloneConfig` block in `packages/cli/src/lib/generators/extensions/notifications.ts` scanning a per-module `notification-channels.ts` (export `notificationChannels`) → new `notification-channels.generated.ts`.
-- `lib/notification-channel-registry.ts` — in-memory registry (`register` / `get` / `list`), fed at bootstrap via `registerNotificationChannels(notificationChannels, { replace: true })` next to `registerNotificationTypes`. **No DB mirror, no migration** — the set is tiny and served straight from the registry (unlike the type catalogue, remote clients enumerate channels directly via the route).
-- `api/channels/route.ts` — `GET /api/notifications/channels` returns the registered list (auth-gated, `notifications.view`), mirroring `GET /types`.
-- `notifications/notification-channels.ts` — core ships its own `in_app` channel through the same mechanism it asks others to use (dogfooding).
-- **UI** — both preference page clients fetch `/channels` alongside `/types`; `NotificationPreferenceMatrix` renders the fetched registry list as the primary source, falling back to the built-in `PREFERENCE_CHANNELS` constant only when the channels endpoint returns nothing (the constant is retained as the offline default, not removed; it ships `in_app`/`email`/`push`).
+| Alternative | Why Rejected |
+|-------------|--------------|
+| Fold `devices` into the `communication_channels` hub | Orthogonal concerns; the hub has no device/token axis. Would force one abstraction to serve two unrelated purposes. (Push *delivery* does ride the hub — the device *registry* does not.) |
+| A `PushProvider` interface + FCM/APNs implementations inside `push_notifications` (the original draft) | Superseded by the maintainer mandate on #2595. It would have created a second provider seam parallel to the hub's `channelAdapterRegistry`. |
+| A 1:1 port of the downstream `user_notifications` module | Deliberate re-architecture instead. Its combined module, boolean-column preferences, required-token device entity, and direct `node-pushnotifications` calls each fail an upstream platform constraint. |
+| A `sendSilentPush` primitive that writes no `Notification` row and bypasses preferences | Removed 2026-06-30. Silent push now rides the ordinary `notificationService.create()` flow: the row is still written, and preferences still apply unless the type is `nonOptOut`. Unifying on the create flow genuinely shrinks the surface, and the bypass conflated delivery style with enforcement. |
+| A separate `PushToken` entity | YAGNI. One token per `(device, app install)` is universal across FCM/APNs/Expo. |
+| A **fake HTTP provider server** for integration tests | Three independent reasons. (0) It does not buy what it appears to: it cannot validate conformance with the real provider, because its schema is our own belief about the contract — a wrong belief passes under either approach. (1) Its sole genuine gain is running the vendor SDK's client-side validation, and that is structurally unavailable for FCM: `firebase-admin@13.10.0` hardcodes `const FCM_SEND_HOST = 'fcm.googleapis.com'` and ships no messaging emulator, so FCM needs the in-process shim regardless — a server buys *nothing* for the provider that runs in production. (2) Every existing external-service fake in this repo is in-process and env-gated, while the one fake *service* (LocalStack) appears in no workflow file, so discovery silently drops its four `TC-ATT-004..007` specs from every CI run. A compose sidecar would repeat that failure mode. |
+| Surface the provider-native message through the delivery row's `provider_response` (the spec's original preference) | Infeasible without editing `adapter.ts`. No adapter returns `metadata` on success — the worker persists only `{ externalMessageId }`. FCM and Expo could smuggle it through the id string; **APNs cannot**, because it deliberately hardcodes an empty id that is admin-exposed and must never carry token material. |
+| An in-memory array to record fake sends | The adapter never runs in the spec's process, and *which* process it runs in is not fixed (app server inline / drain child / Playwright). A module-level array would live in whichever one happened to run it — the flakiest possible failure. The queue already crosses those boundaries via `QUEUE_BASE_DIR`; the sink rides the same directory. |
+| A new HTTP/IPC endpoint to read fake sends | A production surface for a test-only concern. |
+| Range-partitioning `push_notification_deliveries` | Present downstream; deferred. A 90-day purge worker is the cheaper first step. |
 
-**Contribution surface (zero core edits, forever after):** a module drops `src/modules/<module>/notification-channels.ts` exporting `notificationChannels: NotificationChannelDefinition[]` and runs `yarn generate`; the channel then appears in every preferences matrix. `push_notifications` uses exactly this in Phase 3 to register `push` (so `push` moves out of core's UI constant and into the push module).
+## Architecture
 
-**Future-proofing:** per-user runtime availability (e.g. grey out `push` until a device is registered) is a later **additive** optional field on the definition — out of scope for this PR.
+### Commands & Events
 
-**BC:** new generated file `notification-channels.generated.ts`, new bootstrap registrar `registerNotificationChannels`, new STABLE API URL `GET /api/notifications/channels`, new shared type `NotificationChannelDefinition` — all additive.
+- **Commands:** `devices.devices.register`, `devices.devices.update`, `devices.devices.deactivate` (one undoable command per file, matching `sales`/`customers`).
+- **Events:** `devices.user_device.{registered,deactivated}`, `notifications.preference.updated`, `push_notifications.delivery.{sent,failed}`.
 
-**Coverage:** unit test for the channel registry (register / list / replace); extend `TC-NOTIF-011` to assert `GET /channels` returns the built-in `in_app` and the matrix renders registry-driven columns.
+> `delivery.failed` carries `status: 'pending'` on a retryable failure. Subscribers must filter on `willRetry !== true`, not on `status`.
 
-**Events (`events.ts`):**
-- `notifications.preference.updated` — emitted after a successful `PUT /api/notifications/preferences` write so other components (e.g. channel modules, real-time UI) can react to a user toggling a channel preference.
-
-### Module 3 — `@open-mercato/core/modules/push_notifications` (new)
-
-> **Architecture revision (2026-06-25).** The original draft (below) put the provider seam (`PushProvider` interface + FCM/APNs implementations) inside this module. **Revised:** the actual provider send rides the existing **`communication_channels` hub**, per the maintainer's request on PR #2595 ("push notifications support via the `communication_channels` hub … so it will be end2end feature"). This was verified feasible with **no `ChannelAdapter` contract change**:
->
-> - **FCM / APNs / Expo are hub `ChannelAdapter`s** in separate npm packages (`packages/channel-fcm`, `packages/channel-apns`, `packages/channel-expo`), mirroring `packages/channel-gmail`. Each declares `channelType: 'push'`, `capabilities.realtimePush: true` (⇒ `pollIntervalSeconds = null`, no polling), implements `sendMessage` / `convertOutbound` / `validateCredentials` + health, no-ops `verifyWebhook` (`eventType: 'other'`), and omits history/oauth/registerPush.
-> - **Provider credentials vs device tokens are separate.** Provider creds (FCM service account, APNs `.p8`, Expo token) live on **one tenant-scoped `CommunicationChannel` per provider** (`channelType:'push'`), encrypted via `IntegrationCredentials` under `channel_<providerKey>`. Per-device push tokens stay in `UserDevice.push_token` (devices module). An operator enables push by connecting a channel via the **existing** `POST /api/communication_channels/channels/connect/credentials`.
-> - **`push_notifications` keeps the fan-out + audit.** The `MobilePushDeliveryStrategy` (registered via `registerNotificationDeliveryStrategy('push')`) resolves the recipient's devices + preferences, then for each device resolves the tenant's push channel + adapter + creds and invokes `adapter.sendMessage(...)` **directly** — the exact pattern `communication_channels/api/post/channels/[id]/test-send/route.ts` uses (`getChannelAdapter` → `integrationCredentialsService.resolve('channel_<providerKey>', scope)` → `convertOutbound` → `sendMessage`), **not** the conversation/message pipeline. `PushNotificationDelivery` rows + the `send-push` worker (retry/backoff, device soft-delete on `unregistered`) stay here.
-> - **No `PushProvider` interface in this module** — the hub's `ChannelAdapter` registry is the provider seam. The original `lib/providers/{types,fcm,apns}.ts` paths below are superseded by the channel packages; a `push_stub` adapter is used in tests.
-> - **Mapping:** call `adapter.sendMessage` **once per device token**; `content` carries the push envelope (`raw:{title,body,data}`), per-call `metadata` carries `{ pushToken, platform, userDeviceId, provider }`. The `unregistered` sentinel (`result.metadata.unregistered` or `error:'device_unregistered'`) must be identical across fcm/apns/expo so the worker's device soft-delete fires uniformly.
->
-> The remainder of this section is the original draft, retained for the delivery-row/worker/strategy-pipeline detail that still applies.
-
-Push channel only. Reads type registry + preferences from `notifications`, devices from `devices`. Owns deliveries, sender, worker, providers.
-
-**Entities:**
-
-- `PushNotificationDelivery` (`push_notification_deliveries`)
-  - `id` (uuid PK), `tenant_id`, `notification_id` (nullable soft FK → `notifications.notifications`), `notification_type_id` (string)
-  - `user_device_id` (soft FK → `devices.user_devices` via `data/extensions.ts`), `user_id`
-  - `provider` (string — snapshot of the provider used at send time), `token_snapshot` (text — last 8 chars only, for debugging without exposing the full token)
-  - `status` (`pending|sent|failed|skipped`), `attempts` (int), `last_error` (text|null)
-  - `payload` (JSONB), `provider_response` (JSONB|null)
-  - `created_at`, `sent_at`, `updated_at`
-
-  Snapshotting `provider` and the truncated token on the delivery row means the audit trail survives token rotation on the device.
-
-**Services (DI-registered in `di.ts`):**
-
-- `PushSenderService` — orchestrator. Resolves provider per token via `PushProvider` interface; returns `PushResult[]`.
-- `MobilePushDeliveryStrategy` — registered via the existing `registerNotificationDeliveryStrategy('push')` seam. Pipeline:
-  1. Resolve `NotificationType` from registry (skip if absent).
-  2. Check `NotificationPreferenceService.isChannelEnabled(user, type, 'push')` — skip if false.
-  3. Load `UserDevice` rows for `(tenant, user)` where `deleted_at IS NULL AND push_token IS NOT NULL`. Skip if none.
-  4. Insert `PushNotificationDelivery` rows (status=`pending`, snapshotting `provider` and truncated token).
-  5. Enqueue `push_notifications:send-push` worker job.
-
-**Provider interface:**
-
-```ts
-// lib/providers/types.ts
-export interface PushProvider {
-  id: string                                  // 'fcm' | 'apns' | 'expo' | ...
-  supports(platform: 'ios' | 'android' | 'web'): boolean
-  send(payload: PushPayload, tokens: DevicePushToken[]): Promise<PushResult[]>
-}
-
-export type PushPayload = {
-  title: string
-  body: string
-  data?: Record<string, string>
-  badge?: number
-  sound?: string
-}
-
-// PushProvider.send accepts UserDevice rows (with push_token, push_provider, platform).
-export type PushResult = {
-  userDeviceId: string
-  ok: boolean
-  providerMessageId?: string
-  error?: { code: string; message: string; retryable: boolean }
-}
-```
-
-Reference implementations: `lib/providers/fcm.ts`, `lib/providers/apns.ts`. Apps register additional providers via Awilix `resolveAll`.
-
-**Worker:**
-- `workers/send-push.worker.ts` — picks pending `PushNotificationDelivery` rows, batches by provider, retries with exponential backoff (3 attempts default). Marks `sent`/`failed`. On provider "unregistered" responses, soft-deletes the source `UserDevice` row. Idempotent on delivery id.
-
-**No token-management APIs in this module.** Push tokens are device fields, set/cleared via `PUT /api/devices/:id` in the `devices` module.
-
-**Backend admin pages** (under `/backend/push-notifications/`):
-- `page.tsx` — delivery log list (filter by status, user, date range).
-- `[id]/page.tsx` — delivery detail.
-
-**ACL features (`acl.ts`):**
-- `push_notifications.view_deliveries` (admin observability).
-
-**Events (`events.ts`):**
-- `push_notifications.delivery.sent`
-- `push_notifications.delivery.failed`
-
-### Designing for email/SMS without building them
-
-The shape this spec locks in for v1 is what makes future channels cheap:
-
-- `NotificationPreference.channel` is a free-form string. Adding `email` is new rows, no schema change.
-- The existing `registerNotificationDeliveryStrategy(channel)` seam in `notifications` is the integration point. A future `email_notifications` module:
-  1. Registers a `DeliveryStrategy` under `'email'`.
-  2. Owns its own credentials, identity (e.g. verified email addresses), worker, delivery log.
-  3. Reads `NotificationPreferenceService.isChannelEnabled(user, type, 'email')`.
-- `NotificationDispatcher` in `notifications` already fans out to registered strategies; preferences are consulted per channel inside each strategy (not centrally) so each channel can have its own skip-conditions.
-- No "send anything" facade — channel modules stay independent and swappable.
-
-The remaining governance items are additive: the `category` column on `NotificationType` is now implemented (see Changelog 2026-06-26); a future optional preference fallback (type → category) and an optional `FrequencyGuard` service remain deferred. Nothing in this spec blocks that.
-
-## Architecture (file-level map)
+### Delivery flow
 
 ```
-packages/core/src/modules/devices/          # as implemented (Phase 1)
-  index.ts
-  acl.ts
-  setup.ts
-  events.ts
-  di.ts
+notificationService.create()
+  └─ resolveChannelsFor()            # the gate, once, snapshotted onto Notification.channels
+       └─ dispatch subscriber        # pure "resolve copy → loop strategies", no channel branches
+            ├─ in_app strategy       # row already written; visibility filtered on channels
+            ├─ email strategy
+            └─ push strategy         # enqueue-only
+                 └─ fanOutPushDeliveries()      # per-device provider routing
+                      └─ PushNotificationDelivery (pending)  ──enqueue──┐
+                                                                        │
+   send-push worker ◄───────────────────────────────────────────────────┘
+     ├─ atomic pending→sending claim (attempts++)
+     ├─ resolve tenant push channel + adapter + credentials by delivery.provider
+     ├─ adapter.sendMessage()  →  channel-{fcm,apns,expo}
+     └─ sent | failed(retry) | expired | device_unregistered → devices.devices.deactivate
+
+   reclaim-stuck worker: stranded `sending` + orphaned `pending` + Expo receipt polling
+```
+
+### File-level map
+
+```
+packages/core/src/modules/devices/
   data/entities.ts                          # UserDevice
-  data/validators.ts
+  encryption.ts                             # push_token encrypted at rest
   commands/{register,update,deactivate}.ts  # one undoable command per file
-  commands/shared.ts                        # snapshot types + helpers (loadExistingDevice, …)
-  commands/index.ts                         # registers the three commands
-  lib/operationMetadata.ts                  # x-om-operation undo header helper
-  api/route.ts                              # self: GET (own) + POST (register self)
-  api/[id]/route.ts                         # self: PUT/DELETE (owner-only)
-  api/admin/devices/route.ts                # admin: GET (all) + POST (register for user)
-  api/admin/devices/[id]/route.ts           # admin: GET/PUT/DELETE (any device)
-  api/auth.ts                               # resolveDeviceActorUserId
-  api/deviceList.ts                         # shared list schema/fields/item
-  api/deviceOps.ts                          # shared guard→command→undo-header helpers
-  api/openapi.ts
-  backend/devices/page.tsx                  # admin list (gated devices.admin)
-  backend/devices/create/page.tsx           # admin: register on behalf of a user
-  backend/devices/[id]/page.tsx             # admin: edit a device
-  i18n/{en,de,es,pl}.json
-  migrations/Migration*.ts
-  AGENTS.md
-  __integration__/TC-DEV-001.spec.ts        # self-serve + TC-DEV-002 admin + TC-DEV-003 last_seen_at + TC-DEV-004 optimistic-lock
-  __integration__/TC-DEV-005.spec.ts        # organization dimension (per-org identity, org-scoped admin/self)
-  __integration__/TC-DEV-006.spec.ts        # TC-DEV-006 push_token encryption at rest + TC-DEV-007 optimistic-lock conflict (self) + TC-DEV-008 admin cross-org denial
+  api/route.ts, api/[id]/route.ts           # self-serve
+  api/admin/devices/**                      # admin tree
+  backend/devices/**                        # admin list / create / edit
+  __integration__/TC-DEV-00{1,5,6}.spec.ts
 
-packages/core/src/modules/notifications/        # extending existing module (as implemented, Phase 2)
-  data/entities.ts                              # ADD: NotificationType, NotificationPreference
-  data/validators.ts                            # ADD: updatePreferencesSchema, type/preference item schemas
-  lib/notification-type-registry.ts             # ADD: in-memory registry (fed at bootstrap) + syncNotificationTypes reconcile
-  lib/notification-channel-registry.ts          # ADD (2c): in-memory channel registry (fed at bootstrap) — no DB mirror
-  lib/notificationPreferenceService.ts          # ADD: NotificationPreferenceService (+ resolve helper)
-  lib/routeHelpers.ts                           # EDIT: NOTIFICATION_PREFERENCE_RESOURCE_KIND
-  notification-channels.ts                      # ADD (2c): core-owned in_app channel definition (generator-discovered)
-  subscribers/sync-notification-types.ts        # ADD: re-sync on notifications.type_registry.sync
-  api/types/route.ts                            # ADD: GET catalogue (lazy read-through sync)
-  api/channels/route.ts                         # ADD (2c): GET channel catalogue (registry-driven)
-  api/preferences/route.ts                      # ADD: GET + PUT (service + mutation guard)
-  acl.ts / setup.ts / events.ts / di.ts         # EDIT: manage_preferences feature, seedDefaults sync emit, 2 events, preference service DI
-  migrations/Migration20260625122947_notifications.ts  # ADD migration for two new tables (+ snapshot)
-  AGENTS.md                                     # ADD
-  __integration__/TC-NOTIF-011.spec.ts          # ADD (type catalogue + preferences)
-  lib/__tests__/notification-type-registry.test.ts  # ADD unit test
+packages/core/src/modules/notifications/     # extended, not replaced
+  data/entities.ts                          # + NotificationType, NotificationPreference, Notification.channels
+  lib/shouldDeliver.ts                      # the single gate
+  lib/notification-type-registry.ts
+  lib/notification-channel-registry.ts
+  lib/strategies/{in-app,email}-delivery-strategy.ts
+  generators.ts                             # delivery-strategies + notification-channels plugins
+  notification-channels.ts                  # core ships in_app/email/push through its own mechanism
+  api/{types,channels,preferences}/**
+  __integration__/TC-NOTIF-01{1,2,3,4}.spec.ts
 
-apps/mercato/src/bootstrap.ts                   # EDIT: registerNotificationTypes(...) + registerNotificationChannels(...) (2c)
-packages/shared/src/modules/notifications/types.ts  # EDIT: additive optional labelKey/descriptionKey on NotificationTypeDefinition; ADD NotificationChannelDefinition (2c)
-packages/cli/src/lib/generators/extensions/notifications.ts  # EDIT (2c): scan notification-channels.ts → notification-channels.generated.ts
+packages/core/src/modules/push_notifications/
+  lib/push-delivery-strategy.ts             # enqueue-only
+  lib/push-fanout.ts                        # shared device/channel fan-out
+  lib/push-delivery.ts                      # claim + send + retry + soft-delete
+  lib/send-custom-push.ts                   # admin one-off send
+  lib/push-stub-adapter.ts                  # OM_ENABLE_PUSH_STUB_ADAPTER
+  lib/fake-provider-recorder.ts             # OM_PUSH_FAKE_PROVIDERS JSONL sink
+  workers/{send-push,reclaim-stuck}.worker.ts
+  backend/**                                # read-only delivery log
+  __integration__/TC-PUSH-00{1..9}.spec.ts
 
-packages/core/src/modules/push_notifications/          # as implemented (Phase 3)
-  index.ts                                             # requires: auth, devices, notifications, communication_channels, integrations
-  acl.ts                                               # push_notifications.view_deliveries
-  setup.ts                                             # defaultRoleFeatures: admin/superadmin → push_notifications.*
-  events.ts                                            # delivery.sent / delivery.failed
-  di.ts                                                # registers PushNotificationDelivery + (test) push_stub adapter
-  data/entities.ts                                     # PushNotificationDelivery (append-only; optimistic-lock-exempt)
-  data/validators.ts                                   # delivery list/detail zod schemas (no full token)
-  data/extensions.ts                                   # links to devices.user_device + notifications.notification
-  notifications.delivery-strategies.ts                 # exports the `push` strategy (discovered by the generator plugin)
-  lib/push-delivery-strategy.ts                        # the `push` NotificationDeliveryStrategy (enqueue-only)
-  lib/queue.ts                                         # push-deliveries queue + enqueue + local-worker bootstrap
-  lib/push-delivery.ts                                 # processPushDeliveryJob: hub send + retry/backoff + unregistered soft-delete
-  lib/push-stub-adapter.ts                             # in-process test ChannelAdapter (OM_ENABLE_PUSH_STUB_ADAPTER)
-  lib/__tests__/push-delivery.test.ts                  # worker-branch unit suite
-  lib/__tests__/push-delivery-strategy.test.ts         # strategy-branch unit suite
-  workers/send-push.worker.ts                          # auto-discovered queue worker
-  api/openapi.ts
-  api/deliveries/route.ts                              # GET list (makeCrudRoute, view_deliveries)
-  api/deliveries/[id]/route.ts                         # GET detail (payload + provider response)
-  backend/page.tsx + page.meta.ts                      # delivery-log list
-  backend/[id]/page.tsx + page.meta.ts                 # delivery detail (read-only)
-  i18n/{en,de,es,pl}.json
-  migrations/Migration20260625150049_push_notifications.ts  (+ .snapshot-open-mercato.json)
-  __integration__/TC-PUSH-001.spec.ts                  # delivery-log API: ACL + scoping + token secrecy
-  __integration__/TC-PUSH-002.spec.ts                  # admin custom push send: route → guard → fan-out
-  __integration__/TC-PUSH-003.spec.ts                  # real pipeline: create notification → send-push worker → sent (org propagation)
+packages/channel-{fcm,apns,expo}/src/modules/channel_{fcm,apns,expo}/
+  integration.ts, di.ts, setup.ts, acl.ts
+  lib/{adapter,credentials,health,fake-provider}.ts
+  lib/__tests__/{message-golden,fake-provider}.test.ts
+  __integration__/TC-CHANNEL-PUSH-00{1..7}.spec.ts
 
-packages/core/src/modules/notifications/               # Phase 3 additions (strategy registration seam)
-  generators.ts                                        # `delivery-strategies` GeneratorPlugin (bootstrap registration)
-  lib/delivery-strategies-registry.ts                  # registerNotificationDeliveryStrategyEntries (idempotent)
-
-apps/mercato/src/modules.ts                            # EDIT: enable { id: 'push_notifications', from: '@open-mercato/core' }
+packages/core/src/helpers/integration/{pushFake,appRoot}.ts
+packages/shared/src/modules/notifications/types.ts   # additive optional fields
 ```
 
 ## Data Models
 
-See entity definitions above. Key design notes:
+### UserDevice (`user_devices`)
+- `id` (uuid PK), `tenant_id`, `organization_id` (nullable), `user_id`
+- `device_id` (client-supplied stable id, e.g. iOS `identifierForVendor`), `platform` (`ios|android|web`)
+- `client_app_version`, `os_version`, `locale` (text|null)
+- `push_token` (text|null, **encrypted at rest**), `push_provider` (text|null), `push_token_updated_at`
+- `last_seen_at`, `created_at`, `updated_at`, `deleted_at`
+- Unique (non-deleted): `(tenant_id, coalesce(organization_id, nil-uuid), user_id, device_id)`
+- Optimistic-locked on metadata edits; deactivate is exempt (idempotent soft-delete of a registry row has no lost-update risk).
 
-- `UserDevice` carries push-token fields directly. Splitting tokens into a separate entity is YAGNI for v1 — single token per `(device, app install)` is the universal case for FCM/APNs/Expo, and a future split is a single migration if a real edge case ever shows up.
-- Soft-delete via the standard `deleted_at` column; no separate `is_active` flag.
-- **Optimistic locking**: `UserDevice` is a genuinely editable entity, so metadata edits are version-checked (detail GET exposes `updated_at`; `CrudForm` sends the expected-version header; `executeUpdate` enforces it). Deactivate is exempt because an idempotent soft-delete of a registry row has no lost-update risk.
-- `PushNotificationDelivery` references `user_device_id` and snapshots `provider` + a truncated `token_snapshot` so the delivery audit trail survives both token rotation and device deletion.
-- `NotificationPreference.channel` is a free-form string for forward compatibility with email/SMS.
-- `NotificationPreference` rows are **lazy-seeded**: when no row exists, the channel is treated as enabled (default-on). This avoids backfilling preferences for every existing user when a new type is added.
-- `NotificationType.label_key` / `description_key` resolve via locale JSON files, not the runtime `translations.ts` system, because types are code-registered, not tenant-defined.
-- Cross-module references use `data/extensions.ts` (`defineLink`), not direct ORM relationships.
+### NotificationType (`notification_types`)
+- `id` (string PK, e.g. `orders.shipped`), `tenant_id` (nullable for system-wide)
+- `label_key`, `description_key` (i18n keys), `category` (free-form string|null)
+- `silent`, `non_opt_out`, `hidden_from_settings` (bool)
+- Type IDs are **FROZEN** per `BACKWARD_COMPATIBILITY.md`.
+
+### NotificationPreference (`notification_preferences`)
+- `id` (uuid PK), `tenant_id`, `user_id`, `notification_type_id`, `channel` (free-form), `enabled`
+- Unique: `(tenant_id, user_id, notification_type_id, channel)`; absent row ⇒ enabled.
+
+### Notification (`notifications`) — additive columns
+- `channels` (JSONB|null — the resolved delivery-channel set; `NULL` ⇒ all channels / visible)
+- `data` (JSONB|null — arbitrary app-readable string map), `push_options` (JSONB|null — push-only)
+
+### PushNotificationDelivery (`push_notification_deliveries`)
+- `id` (uuid PK), `tenant_id`, `organization_id`, `notification_id` (soft FK|null), `notification_type_id`
+- `user_device_id` (soft FK via `data/extensions.ts`), `user_id`
+- `provider` (snapshot), `token_snapshot` (**last 8 chars only**), `silent` (bool)
+- `status` (`pending|sending|sent|failed|skipped|expired`), `attempts`, `last_error`, `next_retry_at`
+- `payload` (JSONB), `provider_response` (JSONB|null), `created_at`, `sent_at`, `updated_at`
+- Append-only; optimistic-lock exempt. Cross-module references use `defineLink`, never a direct ORM relationship.
 
 ## API Contracts
 
-Schemas in `data/validators.ts` (zod). Highlights:
+Schemas live in each module's `data/validators.ts` (zod); every route exports `openApi`.
+
+| Method & path | ACL | Notes |
+|---|---|---|
+| `POST` / `GET /api/devices` | `devices.manage` / `devices.view` | Idempotent upsert; caller's own devices, active org |
+| `PUT` / `DELETE /api/devices/:id` | `devices.manage` | Owner-only; 404 outside active org |
+| `GET|POST /api/devices/admin/devices` | `devices.admin` | Org-scoped; `?userId=`, `?platform=` |
+| `GET|PUT|DELETE /api/devices/admin/devices/:id` | `devices.admin` | 403 outside org scope |
+| `GET /api/notifications/types` | authed | Tenant-filtered; excludes `hiddenFromSettings` types |
+| `GET /api/notifications/channels` | `notifications.view` | Registry-driven |
+| `GET|PUT /api/notifications/preferences` | `notifications.manage_preferences` | PUT sends only the diff; `setPreferences` refuses opt-out rows for `nonOptOut` types |
+| `GET|PUT /api/notifications/admin/preferences?userId=` | `notifications.manage_user_preferences` | Target gated by `assertActorCanAccessUserTarget` (tenant **and** org) |
+| `GET /api/push_notifications/deliveries[/:id]` | `push_notifications.view_deliveries` | Read-only; never exposes the full token |
+| `POST /api/push_notifications/custom-send` | `push_notifications.send_custom` | Returns `200` + `enqueued: 0` + `no_matching_devices_in_scope` on the no-op branch |
+| `POST /api/communication_channels/channels/connect/tenant-credentials` | `communication_channels.connect_tenant_channel` | The only path that connects a push provider |
 
 ```ts
-// POST /api/devices
-const RegisterDeviceSchema = z.object({
-  deviceId: z.string().min(1).max(128),
-  platform: z.enum(['ios', 'android', 'web']),
-  clientAppVersion: z.string().optional(),
-  osVersion: z.string().optional(),
-  pushToken: z.string().min(1).optional(),
-  pushProvider: z.string().min(1).optional(),
-})
-
-// PUT /api/devices/:id
+// PUT /api/devices/:id — null clears the token (user revoked OS permission)
 const UpdateDeviceSchema = z.object({
   clientAppVersion: z.string().optional(),
   osVersion: z.string().optional(),
-  pushToken: z.string().min(1).nullable().optional(),  // null clears (e.g. user revoked OS permission)
+  pushToken: z.string().min(1).nullable().optional(),
   pushProvider: z.string().min(1).nullable().optional(),
 })
 
@@ -412,362 +294,233 @@ const UpdatePreferencesSchema = z.object({
     enabled: z.boolean(),
   })),
 })
-
-// GET /api/notifications/channels (2c) — registry-driven channel catalogue
-const NotificationChannelItemSchema = z.object({
-  id: z.string(),
-  labelKey: z.string(),
-  descriptionKey: z.string().nullable().optional(),
-})
 ```
-
-All routes wire `openApi` via `createCrudOpenApiFactory`.
-
-## Integration Test Coverage
-
-Per `.ai/qa/AGENTS.md` — self-contained, fixtures created in setup, cleaned in teardown.
-
-**`devices` module:**
-- Register → list → update last-seen → soft-delete.
-- Register with `pushToken` set on first call; later `PUT` with `pushToken: null` clears it.
-- ACL: a non-admin user cannot list another user's devices.
-- Idempotency: re-registering same `(user, device_id)` upserts, does not duplicate.
-
-**`notifications` module (new surfaces):**
-- Boot fires `notifications.type_registry.sync`; subscribers register types; `notification_types` reflects DB state.
-- `NotificationPreferenceService.isChannelEnabled` returns `true` when no row exists; `false` after explicit opt-out; round-trips across `setPreferences`.
-
-**`push_notifications` — strategy + provider:**
-- With a stub `PushProvider`, fire `notificationService.create()` for a push-enabled type → assert `PushNotificationDelivery` row enqueued (status=`pending`) → run worker → status transitions to `sent`, `provider_response` populated. *(Landed as `TC-PUSH-003`: real `POST /api/notifications` → `push` strategy → `send-push` worker via the `push_stub` adapter → `sent`, asserting the plaintext `token_snapshot` and organization propagation through `resolveNotificationContext`. The `push_stub` adapter is enabled in the ephemeral harness via `OM_ENABLE_PUSH_STUB_ADAPTER`.)*
-- Failed provider call → retried 3× → final status `failed`, `last_error` populated.
-- Provider returns "unregistered" → worker soft-deletes the source `UserDevice` row.
-- Opt-out via `PUT /api/notifications/preferences` (`channel='push'`, `enabled=false`) → next dispatch skips delivery (no row enqueued).
-- Device with `push_token=null` → strategy skips it (no row enqueued).
-
-**`push_notifications` — admin pages:**
-- Filter by status/user/date.
-- Detail page renders payload + provider response.
-- ACL: page gated by `push_notifications.view_deliveries`.
-
-**Real provider adapters — `channel-{fcm,apns,expo}` (Phase 8, implemented 2026-07-09):**
-
-Before Phase 8 the provider packages carried only `TC-CHANNEL-PUSH-001..004`, which assert hub registration and credential-connect wiring; the delivery path itself was always exercised through `push_stub`, so no adapter code ran. Phase 8 adds, gated on `OM_PUSH_FAKE_PROVIDERS`:
-- Per provider (`TC-CHANNEL-PUSH-005..007`): connect a fake tenant channel via the real credential-connect route → register a device whose `pushProvider` matches → `POST /api/notifications` → drain `events` + `push-deliveries` → delivery row reaches `sent` **and** the recorded **provider-native** message is correct (`aps.badge`, the `apns-push-type: background` header for silent, `android.notification.channelId`, Expo `sound`/`priority`).
-- Shared branches, once each (`TC-PUSH-004..008`): `unregistered` token → row `failed` + device soft-deleted through `devices.devices.deactivate`; `fail` token → retried to `MAX_ATTEMPTS=3` → terminal `expired` with the device left active; silent type → data-only content-available, no user-facing copy; `pushOptions` round-trip; Expo's async `checkReceipts()` → `DeviceNotRegistered`.
-- One UI path (`TC-PUSH-009`): admin send page → delivery log shows `sent`.
-
-Note on APNs fidelity: production builds via `buildApnsNotification(new Notification(), payload)` (`channel-apns/lib/adapter.ts:143`). The fake and the goldens therefore build against a **real `apn.Notification`** too and assert the wire form node-apn transmits — request `headers()` (where `apns-push-type` lives) and the compiled `aps` payload — rather than a plain-object projection the SDK never serializes. Pinning the projection would have left a hole in exactly the drift-detection the goldens exist for. (Writing them this way immediately caught a wrong assumption: the envelope's custom `data` is carried as top-level keys beside `aps` on **every** branch, visible as well as silent.)
-
-Not covered by any fake, by design: conformance with the real providers (see Phase 8 § Known gap). Drift in *our* message builders is covered instead by golden-file unit assertions against each provider's published reference payloads; drift in *theirs* stays a manual live-key check.
-
-## Risks & Impact Review
-
-| Risk | Severity | Area | Mitigation | Residual |
-|---|---|---|---|---|
-| Module-shape bikeshed: reviewers prefer one merged module over three | Medium | Module boundary | Spec lists explicit reuse cases for `devices` (MFA #539, audit, sessions) and channel-agnostic justification for putting prefs/registry in `notifications`. Reversible if reuse never materializes. | Low. |
-| Provider abstraction adds complexity for apps that only need FCM+APNs | Low | DX | Default `di.ts` registration ships FCM+APNs out of the box. Apps that don't extend never see the provider seam. | Low. |
-| FCM/APNs credentials in env are sensitive; misconfig leaks tokens to logs | High | Security | Provider implementations MUST NOT log tokens or full payloads. Add a redact filter in `push-sender.ts` and a unit test asserting redaction. Document env keys in `AGENTS.md`. | Low after redaction test. |
-| `push_token` leaks through generic platform surfaces that echo write payloads/snapshots back to clients (audit-log `snapshotBefore`/`snapshotAfter` + derived `changesJson` via `audit_logs.view_self`; enterprise record-lock conflict details) | High | Security | Redact the token from the persisted command snapshots and strip it from the mutation-guard payload; keep the real token only in the non-exposed undo payload so commands stay undoable. Never add `push_token` to list/detail field sets. | Low. |
-| Lazy preference seeding = surprise opt-in for existing users when a new type is added | Medium | UX | Default-on contract documented. Apps that want default-off insert explicit `enabled=false` rows during type registration. | Low. |
-| `push_notification_deliveries` table grows unbounded | Medium | Storage | Periodic purge worker (90-day default, configurable per tenant). Declared in this spec; landed as a Phase 6 follow-up if it slips. | Medium until purge ships. |
-| Notification type IDs are FROZEN (per BACKWARD_COMPATIBILITY.md) — typos stick forever | High | BC contract | Document the frozen-id contract in `AGENTS.md`. Migration tooling for renames left to a future spec. | Low. |
-| Mobile clients depend on stable token-register endpoint shapes | High | API contract | Lock request/response schemas in this spec; mark routes STABLE per BC contract. Additive-only changes thereafter. | Low. |
-| Existing `notifications` module's in-memory registry diverges from new DB registry | Medium | Module overlap | DB registry is a read-through mirror, not a replacement. Same source of truth (`registerNotificationTypes` calls), two storage layers. Sync subscriber reconciles on boot. | Low. |
-| Preferences service introduces an extra DB read per dispatch | Low | Performance | Service caches per-request via DI; bulk-loads when dispatching to many users. Worst case is a few extra ms per send. | Low. |
-| Splitting prefs/registry from `push_notifications` means push module depends on `notifications` | Low | Coupling | This is correct: every channel depends on the channel-agnostic registry. The dependency is unidirectional and matches the existing strategy seam. | None. |
 
 ## Migration & Backward Compatibility
 
-This change is **purely additive** across every contract surface defined in `BACKWARD_COMPATIBILITY.md`. No FROZEN/STABLE surface (types, function signatures, import paths, event IDs, widget spot IDs, API routes, DB columns, DI keys, ACL features, notification IDs, CLI commands, generated files) is changed non-additively. No deprecation bridge is required because nothing is removed, renamed, or narrowed.
+**Purely additive across every contract surface** in `BACKWARD_COMPATIBILITY.md`. Nothing is removed, renamed, or narrowed, so no deprecation bridge is required — with one deprecation and one intentional corrective behavior change, both below.
 
-**Edits to existing shared surfaces (all ADDITIVE):**
-- `packages/shared/src/modules/notifications/types.ts` — 6 new **optional** fields on `NotificationTypeDefinition` (`labelKey`, `descriptionKey`, `category`, `silent`, `nonOptOut`, `hiddenFromSettings`) + optional `NotificationDto.data`. Required fields untouched.
-- `notifications/data/entities.ts` — 2 new **nullable** JSON columns on `Notification` (`data`, `push_options`); 2 brand-new tables (`notification_types`, `notification_preferences`).
-- `notifications/{acl,events,di,setup}.ts` — 2 new ACL features, 2 new event IDs, 1 new DI name (`notificationPreferenceService`), 1 added `seedDefaults` hook (best-effort, try/catch). All net-new identifiers.
-- `auth/notifications.ts` — `nonOptOut: true` added to 2 existing security types (`auth.account.locked`, `auth.login.new_device`). Type IDs unchanged; only a new optional flag value is set. Since per-channel preferences are introduced by this same branch, there is no prior opt-out behavior to regress.
+- `packages/shared/.../notifications/types.ts` — 6 new **optional** fields on `NotificationTypeDefinition` (`labelKey`, `descriptionKey`, `category`, `silent`, `nonOptOut`, `hiddenFromSettings`), plus optional `channels` eligibility and `NotificationDto.data`. Required fields untouched.
+- `notifications/data/entities.ts` — 3 new **nullable** JSON columns on `Notification` (`channels`, `data`, `push_options`); 2 brand-new tables.
+- `auth/notifications.ts` — `nonOptOut: true` set on 2 existing security types. Type IDs unchanged; per-channel preferences arrive in this same branch, so there is no prior opt-out behavior to regress.
 
-**Database migration safety (fork-safe — no backfill required):**
-Every migration is `CREATE TABLE` (new), `ADD COLUMN ... NULL`, or `ADD COLUMN ... NOT NULL DEFAULT <const>`. The only pre-existing core table touched is `notifications` (two nullable JSON adds). No rename, drop, type-narrowing, or index removal anywhere. A downstream fork (covo-backend) applies these migrations cleanly against existing data.
+**Deprecation.** `NotificationDeliveryContext` splits into a channel-agnostic `NotificationDeliveryContextCore` and `EmailDeliveryExtras` (`panelUrl`, `panelLink`, `actionLinks`, `recipient.email`). The flat intersection is retained so existing strategies compile and run unchanged; the email-shaped fields are `@deprecated` and move behind an email-scoped accessor in a future major.
 
-**App-boilerplate replication (forks):**
-`apps/mercato/src/bootstrap.ts` wires `registerNotificationTypes(notificationTypes, { replace: true })` and `apps/mercato/src/modules.ts` enables the new module ids. A fork that adopts these modules must replicate the `modules.ts` entries and run `yarn generate` so its own generated registry + bootstrap call resolve. This is expected app-level boilerplate, not a contract change.
+**Intentional corrective behavior change.** Per-channel opt-out and the `nonOptOut`/`silent` flags are now enforced on **every** channel, not just push. Previously, disabling `in_app` or `email` for a type was silently ignored. A user who never changed their preferences sees no difference (preferences default to on). `Notification.channels` becomes authoritative rather than merely descriptive; legacy `NULL` rows and untargeted sends behave exactly as before. A shared tenant-wide (`organization_id = NULL`) push channel is now visible and deletable from any org in the tenant — previously it was unmanageable and could not be removed at all.
 
-**Frozen-id contract:** notification **type IDs** are FROZEN per `BACKWARD_COMPATIBILITY.md` — no new IDs are minted here (the DB registry mirrors the existing in-memory `NotificationTypeDefinition` aggregate). Mobile clients depend on the STABLE `/api/devices`, `/api/notifications/types`, and `/api/notifications/preferences` request/response schemas; all future changes to them must remain additive.
+**Database safety (fork-safe, no backfill).** Every migration is `CREATE TABLE`, `ADD COLUMN ... NULL`, or `ADD COLUMN ... NOT NULL DEFAULT <const>`. The only pre-existing core table touched is `notifications` (nullable JSON adds). No rename, drop, type-narrowing, or index removal.
 
-## Open Questions
+**Post-merge:** run `yarn mercato auth sync-role-acls` for the new ACL features. Forks adopting these modules replicate the `modules.ts` entries and run `yarn generate` — expected app boilerplate, not a contract change.
 
-- `PushProvider` discovery: Awilix `resolveAll` (DI-idiomatic in this codebase) vs. an explicit `registerPushProvider()` registry? **Recommendation:** Awilix `resolveAll` over an `Array<PushProvider>` token; mirrors how the codebase wires other plugin seams.
-- Should `NotificationPreference` carry an optional `tenant_id`-scoped row to support tenant-level defaults (admin overrides "all users default to push-off for marketing types")? **Recommendation:** out of scope for this spec; revisit when categories/governance return.
-- Should the `notifications` module's existing `Notification.channels` JSONB column be deprecated in favor of resolving channels per-dispatch from preferences? **Recommendation:** no — `channels` records what was attempted at create time (audit), preferences gate what gets attempted. Distinct concerns.
+## Implementation Plan
 
-## Implementation Phases
+Each phase is a self-contained, demoable vertical slice that ships its own admin UI. The phase list is the unit of work and review; the branch ships as one PR.
 
-Each phase ends with passing integration tests + green build. **Delivery: a single end-to-end PR** (revised 2026-06-29) — Phases 1–5 ship together on `feat/devices-push-e2e` as one PR against `develop` (fullstackhouse PR #10), rather than the originally-planned one-PR-per-phase. The phase breakdown below remains the unit of work and review, but the branch is not split per phase; Phase 6 follows as a separate PR. **Admin UI is split per phase** (revised 2026-06-25): each phase ships the UI for the surface it introduces, rather than deferring all UI to a single late phase — so every phase is a self-contained, demoable vertical slice. The former Phase 5 ("Backend admin + preferences UI") is therefore dissolved into Phases 2 (preferences settings page) and 3 (push delivery-log pages); Phase 4 needs no new admin screen because push-provider credentials use the existing `communication_channels` connect UI.
-
-1. **Phase 1 — `devices` module.** Entities, migrations, APIs, ACL, setup, integration tests. Standalone — no dependents yet. *(Complete: implemented, optimistic-lock pass present, self-serve `TC-DEV-001` + admin-tree `TC-DEV-002` integration suites colocated.)*
-2. **Phase 2 — `notifications` extensions.** *(Complete.)* `NotificationType` + `NotificationPreference` entities, migration + snapshot, runtime type registry (bootstrap-fed, mirroring `messages/lib/message-types-registry.ts`) consuming the **existing** per-module `notifications.ts` `NotificationTypeDefinition` aggregate + `syncNotificationTypes` DB read-through mirror, `NotificationPreferenceService`, `GET /api/notifications/types` + `GET`/`PUT /api/notifications/preferences` (preferences write = service + mutation guard via `runGuardedNotificationWrite`, **not** the command bus — mirrors the existing `settings` route), `TC-NOTIF-011` integration suite. **UI (this phase):** (1) a **self-serve** preferences page under **Profile** (`/backend/profile/notification-preferences`, `notifications.manage_preferences`) — a type×channel toggle matrix backed by `GET /types` + `GET`/`PUT /preferences`; (2) an **admin** page (`/backend/notifications/user-preferences`, new `notifications.manage_user_preferences`) to search a user and edit their matrix, backed by `GET`/`PUT /api/notifications/admin/preferences?userId=` (target-user access validated via the standard `assertActorCanAccessUserTarget` guard — tenant **and** organization scoping, like `auth` user management, **not** a hand-rolled tenant-only check). Shared `NotificationPreferenceMatrix` component; saves send only the **diff** from the loaded state (last-write-wins, bounded payload). The pages **persist** preferences today; **no channel consumes them yet** — the existing in-app delivery path is unchanged, and `push` consumption lands in Phase 3 (its strategy calls `isChannelEnabled(..., 'push')`). No new channels yet. **BC:** new ACL feature `notifications.manage_preferences`, new DI name `notificationPreferenceService`, STABLE API URLs, FROZEN type ids (sourced from existing module definitions — no new ids minted), additive optional `labelKey`/`descriptionKey` on `NotificationTypeDefinition`. **Deferred follow-up — §2c extensible channel catalogue:** replace the hard-coded `PREFERENCE_CHANNELS` UI constant with a generator-discovered, bootstrap-fed channel registry (`notification-channels.ts` aggregate → `registerNotificationChannels` → `GET /api/notifications/channels`) so modules add channels with zero core edits. Additive, no schema/logic change; **to land with the in-app/email-into-notification-service work**, not this PR.
-3. **Phase 3 — `push_notifications` rails (hub-based) + push delivery-log UI.** *(Complete.)* `PushNotificationDelivery` log (append-only; optimistic-lock-exempt), the `push` delivery strategy (resolves devices + the tenant push `CommunicationChannel` softly via DI tokens, checks Phase-2 `isChannelEnabled(..., 'push')`, snapshots provider + truncated token, inserts pending rows, enqueues per device), `send-push` worker + `lib/queue.ts` (retry/backoff up to 3 attempts; on the uniform `unregistered` sentinel soft-deletes the device through the devices `devices.devices.deactivate` command with a `systemActor` ctx — no business-logic import), in-process `push_stub` adapter for tests (gated by `OM_ENABLE_PUSH_STUB_ADAPTER`). **Strategy registration:** a new notifications `delivery-strategies` generator plugin (`generators.ts` + `lib/delivery-strategies-registry.ts`) discovers each module's `notifications.delivery-strategies.ts` and wires a `runBootstrapRegistrations()` call — mirrors the security MFA-provider plugin; no app-bootstrap edit. **UI:** read-only push delivery-log list + detail backend pages (`push_notifications.view_deliveries`, under settings → Module Configs). **No `PushProvider` interface** — uses the hub `channelAdapterRegistry`. **BC:** new ACL feature `push_notifications.view_deliveries`, 2 new event ids (`push_notifications.delivery.{sent,failed}`), 1 new entity, 1 new generator-plugin convention file (all additive). Tests: `push-delivery` + `push-delivery-strategy` unit suites (11 cases: sent / idempotent / skip / no-adapter / unregistered-soft-delete / retry→fail; opt-out / no-channel / no-device / fan-out), `TC-PUSH-001` API suite (ACL + tenant scoping + token-secrecy + detail 400/404 + org-dimension: restricted admin 200 in-scope / 403 out-of-scope / 403 tenant-level NULL-org). **Org scoping:** delivery-log read routes use the platform-standard `orgField` (like devices) — NULL-org rows are visible to org-unrestricted admins only.
-4. **Phase 4 — Reference provider adapters (hub channel packages) + `push_token` encryption at rest.** *(Complete.)* `packages/channel-fcm` (`firebase-admin`), `packages/channel-apns` (`@parse/node-apn`, native HTTP/2 + token `.p8`), `packages/channel-expo` (`expo-server-sdk`) — each a `ChannelAdapter` package mirroring `channel-gmail`: credentials schema, health check, uniform `device_unregistered` sentinel, SDK isolated behind a test seam, provider client cached per credentials hash. Shared `pushChannelCapabilities` baseline + `readPushEnvelope` helper added to `communication_channels/lib` (stub refactored to reuse the baseline). Per-device provider routing added to the push strategy (`device.pushProvider` → matching channel). `push_token` **encrypted at rest** via `devices/encryption.ts` `defaultEncryptionMaps` — every device read that serializes the token routes through `findWithDecryption`/`findOneWithDecryption` (device commands + push strategy). **No new admin UI** — operators connect a push provider through the existing `communication_channels` credentials-connect flow. **Tests:** per-adapter unit suites (fcm/apns/expo) cover success / transient / permanent-token→`device_unregistered` mapping (all provider error codes) / missing-token / `validateCredentials` accept+reject; `devices/__tests__/encryption-map.test.ts` pins the `push_token` encryption declaration; `__integration__` specs assert each adapter is registered + reachable through the shared credential-connect route, mirroring the `channel-imap` `TC-CHANNEL-EMAIL-001` pattern. Numbering (reconciled 2026-07-07 to keep ids unique — fcm carries two): `TC-CHANNEL-PUSH-001` (fcm — registered + tenant-scoped, so the per-user connect route refuses it with 403 `provider_is_tenant_scoped`) + `TC-CHANNEL-PUSH-002` (fcm — tenant-wide connect route); `TC-CHANNEL-PUSH-003` (apns — registered, bad-creds → 422); `TC-CHANNEL-PUSH-004` (expo — registered, bad-creds → 422). **APNs HTTP/2 risk retired** by `@parse/node-apn` (the transport the downstream covo build runs in prod). **BC:** 3 new provider packages + 3 module ids (`channel_{fcm,apns,expo}`), new `channel_{fcm,apns,expo}.{view,configure}` ACL features, 2 additive `communication_channels/lib` helpers, additive `devices/encryption.ts` map — all additive; the `ChannelAdapter` contract is unchanged.
-5. **Phase 5 — Silent push + flexible push payload.** *(Implemented.)* The original Phase-5 admin/preferences UI was dissolved into Phases 2–3; the slot is reused for the highest-priority deferred item. (a) **Silent push:** a silent push is delivered through the ordinary `notificationService.create()` flow — there is **no dedicated `sendSilentPush` primitive** (an earlier draft's `push_notifications/lib/send-silent-push.ts` was removed 2026-06-30; see Changelog). Silent-ness is a property of the registered notification **type** (`NotificationTypeDefinition.silent: true`; mirrored to a `notification_types.silent` column as of 2026-06-26 — see Changelog), validated at fan-out time; it is never a per-call flag. The `push` strategy derives `silent` from the type and sends a content-available (data-only) wake-up that skips the user-facing copy; unlike the removed primitive, the in-app `Notification` row **is** still written and per-channel preferences **do** still apply (force delivery with `nonOptOut: true`). The shared device/channel fan-out is extracted into `lib/push-fanout.ts` (`fanOutPushDeliveries`) and reused by both the `push` strategy and the admin `sendCustomPush` primitive (`lib/send-custom-push.ts`, DI `pushNotificationService`); it keeps the Phase-3 org-scoped device load + `INSERT ... ON CONFLICT DO NOTHING` idempotency. A `silent` boolean snapshot column is added to `push_notification_deliveries`. (b) **Flexible payload:** notifications gain optional `data` (arbitrary app-readable string map — persisted, exposed in the DTO, delivered in the push data payload) and `pushOptions` (flat `sound`/`badge`/`image`/`priority`/`channelId`/`body` map — persisted, push-only). The push envelope (`communication_channels/lib/push-envelope.ts`) carries `options`/`silent`; the FCM/APNs/Expo adapters branch on `silent` (data-only content-available) and map `pushOptions` onto each provider's native message. **No new HTTP route / ACL / event** — silent push is a server-side primitive other modules trigger via DI (e.g. event subscribers). **BC:** additive `silent`/`nonOptOut` on `NotificationTypeDefinition`; additive `data`/`pushOptions` on the create schemas + `Notification` entity (2 nullable JSON columns); additive `silent` column on `push_notification_deliveries`; additive `options`/`silent` on `PushEnvelope`; new DI name `pushNotificationService` — all additive, no contract break. Tests: extended `push-delivery-strategy`/`push-delivery`/`push-envelope` + per-adapter silent/options unit suites; `TC-NOTIF-013` integration (visible `data`/`pushOptions` round-trip). (The former dedicated `send-silent-push` unit suite was removed alongside the primitive; silent-type behavior is now covered by the `push-delivery-strategy` suite.) Silent push has no dedicated HTTP trigger, so it is unit-covered + manually verified end-to-end.
-6. **Phase 6 (follow-up).** Purge worker (90-day default) for `push_notification_deliveries`, web push, additional providers. Categories and non-opt-out are **implemented** (see Changelog 2026-06-26); priority/frequency caps land as a separate later spec when an app needs them.
-7. **Phase 7 (follow-up).** *(Implemented.)* Unify all channels on the delivery-strategy seam — in-app and email extracted into first-class strategies, per-channel preference + `nonOptOut`/`silent` enforcement lifted into one shared `shouldDeliver` gate, module-registered channel catalogue. See the dedicated section below.
-8. **Phase 8 (follow-up).** *(Implemented 2026-07-09.)* **Provider-adapter integration coverage without live credentials.** `push_stub` replaces the whole provider adapter, so no line of `channel-{fcm,apns,expo}` runs in any integration test — native message construction, credential parsing, client caching, and every error→`device_unregistered` mapping are unit-tested only. Make each adapter's already-exported client seam (`setFcmMessagingFactory` / `setApnsSenderFactory` / `setExpoClientFactory`) installable from a new `OM_PUSH_FAKE_PROVIDERS` env flag via each package's `di.ts`, copying the `ensurePushStubAdapterRegistered()` production-safety pattern; add `TC-PUSH-004+` / `TC-CHANNEL-PUSH-005+` integration specs that connect a fake tenant channel through the real credential-connect route, drive `POST /api/notifications` → worker → real adapter, and assert both the delivery row and the **provider-native** message. Also add golden-file unit assertions on the native message builders, the only tests that catch serialization drift in our own code. A fake HTTP provider server was considered and rejected: no fake validates conformance with the real provider (its schema is our own belief), its sole marginal gain is the vendor SDK's client-side validation, and that gain is structurally unavailable for FCM — `firebase-admin` hardcodes `fcm.googleapis.com` and ships no emulator — so a server could never cover the provider that runs in production. This repo's three existing external-service fakes are all in-process and env-gated. **Known gap:** conformance with the real providers stays covered only by manual live-key verification, under any option. Test-only and fully additive. See the dedicated section below.
-
-## Phase 7 (follow-up) — Unify all channels on the delivery-strategy seam
-
-> **Status: implemented (branch `feat-unify-notification-delivery-strategies`).** Landed additively on the mature notifications runtime. Two spec-vs-code divergences surfaced during implementation and were corrected here: (1) `Notification.channels` did **not** exist (the spec assumed it did) — it is now an additive nullable JSONB column + migration/snapshot; (2) the §2c channel catalogue was documented as deferred-to-this-work but was **never built** — it is now implemented as a module-level `generators.ts` plugin mirroring the `delivery-strategies` plugin (superseding the CLI-extension sketch at the architecture-map line for `packages/cli/.../extensions/notifications.ts`). Maintainer decisions locked before coding: in_app model = **suppressed-visibility row** (row always written; hidden from bell/inbox when `in_app ∉ channels`); **absent per-send `channels` ⇒ all channels** (legacy behavior preserved; new rows store the resolved set, legacy `NULL` rows treated as all/visible); gate **snapshotted at create time**; **full §2c generator surface**. See the Changelog entry dated 2026-07-06 for the file-by-file summary.
-
-**Problem.** The `NotificationDeliveryStrategy` seam (interface + registry in `notifications/lib/deliveryStrategies.ts`, bootstrap via the `delivery-strategies` generator plugin) is correct, and the `push` strategy is a model citizen of it. But the **two pre-existing channels do not use the seam**:
-- **in-app** delivery is the implicit act of writing the `Notification` row in `notificationService.create()` — never a strategy.
-- **email** is hard-coded inline inside the dispatch subscriber (`notifications/subscribers/deliver-notification.ts:144–174`), gated only on `deliveryConfig.strategies.email.enabled`.
-
-Because per-channel preference enforcement lives *inside each strategy* (by design — see "Designing for email/SMS without building them"), the channels that bypass the seam get **no enforcement**:
-1. The preferences matrix (`NotificationPreferenceMatrix`) renders `in_app` (and email) toggles, but only `push` actually calls `isChannelEnabled(..., 'push')`. Disabling `in_app`/email for a type currently still delivers it.
-2. `nonOptOut` / `silent` type-level governance flags are honored **only** on push; the in-app/email paths ignore them.
-3. Two different "is this channel enabled for this tenant" mechanisms coexist (subscriber config-gating vs. the push strategy's fan-out short-circuit).
-
-This makes the system *read* as "push bolted alongside email/in-app" even though push is the clean one — the legacy channels are the nonconformists.
-
-**Plan (additive, ranked by value):**
-1. **Extract in-app and email into first-class strategies** (`inAppDeliveryStrategy` id `in_app`, `emailDeliveryStrategy` id `email`) registered through the same seam. The dispatch subscriber becomes a pure "resolve copy → loop strategies" loop with no channel-specific branches.
-2. **Lift per-channel preference + `nonOptOut`/`silent` enforcement into one shared gate** (`shouldDeliver` / `resolveEffectiveChannels`), instead of each strategy re-implementing (and potentially forgetting) opt-out logic. *(As implemented: the gate runs **once at create time** and its result is snapshotted onto `notification.channels`; the dispatcher then replays that target set before each `strategy.deliver(ctx)` — behaviorally equivalent to a per-deliver gate but computed once. Legacy `NULL`-channels rows recompute via `resolveEffectiveChannels`.)* Closes the silent in-app/email enforcement gap.
-3. **Add a strategy capability hook** (`isConfigured(tenant)` / `supports(notification)`) so the dispatcher's enable-check and push's fan-out short-circuit are one mechanism, not two.
-4. **Split `NotificationDeliveryContext`** into a channel-agnostic core (`notification`, recipient identity) and email-specific extras (`recipient.email`, `panelLink`, `actionLinks`), so the contract stops leaking one channel's assumptions onto all others as more channels land.
-5. **Honor explicit channel targeting on a per-notification basis.** A caller should be able to restrict a notification to a specific set of channels — e.g. "deliver this *push-only*, no in-app row, no email" — rather than always fanning out to every configured strategy. Two complementary levers, both gated by the same `shouldDeliver` from point 2:
-   - **Run-time (per-send):** `notificationService.create({ ..., channels: ['push'] })` — the existing `Notification.channels` JSONB already records *what was attempted at create time*; this elevates it from an audit field to an authoritative **target filter** so the dispatcher only loops the requested strategies. (Note: today `channels` is descriptive and the dispatcher ignores it — this point makes the dispatcher intersect `notification.channels ∩ registered strategies ∩ enabled-for-user`.)
-   - **Register-time (per-type):** an optional `channels?: string[]` on `NotificationTypeDefinition` declaring the channels a type is *eligible* for (e.g. a marketing type that should never hit in-app). The per-send target, when present, narrows within the type's eligible set; absent a per-send target, the type default applies; absent both, all configured channels (current behavior) is the fallback. `silent`/`nonOptOut` compose orthogonally with this.
-
-   This keeps the model intuitive: **type-level eligibility** (which channels make sense for this kind of notification at all) and **send-level targeting** (which of those to actually use for this one event), unified through the single `shouldDeliver` gate so preference/opt-out enforcement is never bypassed by channel targeting.
-
-**BC:** all five are additive (new strategy registrations, a new optional gate helper, an optional capability hook, an additive context split with a deprecation bridge for the email-shaped fields, and an optional `channels` target/eligibility field that defaults to current all-channels behavior when unset). Behavior change is intentional and corrective: `in_app`/email preferences and `nonOptOut`/`silent` start being enforced where they silently were not, and `Notification.channels` becomes authoritative instead of merely descriptive. Requires its own spec entry + integration coverage for in-app/email opt-out before landing.
-
-## Phase 8 (follow-up) — Provider-adapter integration coverage without live credentials
-
-> **Status: implemented (2026-07-09).** Scoped to push. The email counterpart (un-skipping `TC-CHANNEL-EMAIL-027/028`) is deliberately a separate PR — see "Follow-up" below.
-
-**Problem.** Verifying this feature currently requires **live FCM/APNs/Expo credentials**, which makes a 22.7k-line PR impractical to review and blocks any automated check.
-
-`push_stub` (`push_notifications/lib/push-stub-adapter.ts`) already drives the full chain — `POST /api/notifications` → `push` strategy → `fanOutPushDeliveries` → delivery row → `send-push` worker → `sendMessage` — against real Postgres (`TC-PUSH-003`). But it **replaces the entire provider adapter**. Consequently **zero lines of `channel-fcm`, `channel-apns`, or `channel-expo` execute in any integration test.** Everything provider-specific is unit-tested only:
-
-- native message construction (`buildFcmMessage`, `buildApnsNotification`, Expo token validation + chunking)
-- credential parsing (`parseFcmServiceAccount`, `resolveApnsCredentials`)
-- provider-client caching (`appCache`, `providerCache`, LRU eviction)
-- **every error → `device_unregistered` mapping** — three provider error vocabularies (`messaging/registration-token-not-registered`, APNs `Unregistered`/`BadDeviceToken`, Expo `DeviceNotRegistered`) collapsing to one sentinel that soft-deletes a user's device via the `devices.devices.deactivate` command. This is the highest-risk code in the feature and has no integration coverage.
-
-**Decision: env-installable in-process fakes, not a fake provider server.**
-
-A fake HTTP server was considered and rejected. Three independent reasons.
-
-*(0) A fake server would not buy the thing it appears to buy.* It cannot validate conformance with the real provider — its schema is our own belief about the contract, so a wrong belief passes under either approach. Its only genuine gain over an in-process fake is running the vendor SDK's **client-side** validation/serialization step — and, per (1), that gain is structurally unavailable for FCM, the provider that runs in production. See § Known gap.
-
-*(1) The SDKs are not equally redirectable.*
-
-| SDK | Version | Redirectable to localhost? |
+| Phase | Scope | Status |
 |---|---|---|
-| `@parse/node-apn` | 6.5.0 | Yes — public `options.address` / `port` (`lib/config.js:28,103-108`), passed to `http2.connect` |
-| `expo-server-sdk` | 3.15.0 | Yes — `EXPO_BASE_URL` env, read at module-load (`build/ExpoClientValues.js:10`) |
-| `firebase-admin` | 13.10.0 | **No** — `const FCM_SEND_HOST = 'fcm.googleapis.com'` (`lib/messaging/messaging.js:29`) |
+| 1 | `devices` module — entities, migrations, APIs, ACL, setup | Done |
+| 2 | `notifications` extensions — type catalogue, preferences, both preference UIs | Done |
+| 3 | `push_notifications` rails — delivery log, `push` strategy, worker, `push_stub`, delivery-log UI | Done |
+| 4 | Provider adapters (`channel-{fcm,apns,expo}`) + `push_token` encryption at rest | Done |
+| 5 | Silent push + flexible push payload (`data`, `pushOptions`) | Done |
+| 6 | Per-device locale, admin custom send, hygiene | Done |
+| 7 | Unify **all** channels on the delivery-strategy seam | Done |
+| 8 | Provider-adapter e2e coverage without live credentials | Done |
 
-FCM has **no emulator** (Auth, Storage and RTDB each expose a `*_EMULATOR_HOST`; messaging does not) and its default transport is HTTP/2, so `nock`/`undici` interception does not apply. Redirecting it would require DNS overrides for `fcm.googleapis.com` **and** `oauth2.googleapis.com` plus a custom CA — fragile across macOS/Linux/CI runners. A fake server would therefore cover APNs and Expo but **not the provider running in production**, which would need the in-process path regardless.
+**Phase 4** was re-scoped mid-review — an 82-file PR was judged unreviewable, so it split into a core-only contract PR (`BasePushChannelAdapter`, `push-capabilities`, `readPushEnvelope`, token encryption, per-device provider routing) plus three independent provider PRs, mergeable in any order once the core landed.
 
-*(2) The repo has already settled this pattern.* Three env-gated, network-free in-process fakes exist:
-- `push_notifications/lib/push-stub-adapter.ts` — `ensurePushStubAdapterRegistered()`, `OM_ENABLE_PUSH_STUB_ADAPTER`
-- `communication_channels/lib/test-seed.ts` — `ensureTestSeedAdapterRegistered()`, `OM_ENABLE_TEST_CHANNEL_SEEDING`, provider key `__test_seed__`
-- `packages/create-app/template/src/modules/example/lib/mock-gateway-adapter.ts`
+**Phase 7** shipped in ordered sub-phases: (7.0) the additive `Notification.channels` column and per-type eligibility; (7.1) the single `shouldDeliver` gate; (7.2) the module-registered channel catalogue and registry-driven preferences UI; (7.3) in-app and email extracted into first-class strategies, with `isConfigured`/`supports` capability hooks and the context split; (7.4) the gate wired at create time, and push's now-redundant inline gate deleted; (7.5) in-app visibility applied to the inbox, unread count, `markAllAsRead`, and the bell SSE; (7.6) coverage.
 
-No fake server exists for **any** channel. Gmail's integration specs assert `401`/`503` and defer the happy path to manual QA markdown (`TC-CHANNEL-EMAIL-C01`); IMAP's assert `401`/`400` (`TC-CHANNEL-EMAIL-021`). `TC-CHANNEL-EMAIL-027` and `028` are `test.skip(...)` with the reason *"Playwright E2E is infeasible — provider mock seams are process-local"* — precisely the limitation this phase removes. And the one fake external service that does exist, LocalStack (`docker-compose.yml:88-108`), appears in **no** `.github/workflows/` file, so `integration-discovery.ts` silently drops its four `TC-ATT-004..007` specs from every CI run. A compose sidecar would repeat that failure mode.
+> Broadcast paths resolve channels for the whole recipient set *before* the write transaction, reusing one forked EM (R forks → 1). The remaining R×C preference reads are inherent to the default-on per-user/per-channel model; a set-keyed batch query is a follow-up if broadcast size warrants it.
 
-**Plan.**
+**Phase 8** makes each adapter's already-exported client seam installable from `OM_PUSH_FAKE_PROVIDERS` via each package's `di.ts`, copying the `ensurePushStubAdapterRegistered()` production-safety pattern (no-op unless the flag is set, never installed at import, inert in production). Installing in `di.ts` `register()` is safe because `createRequestContainer()` runs every registrar and the queue builds a fresh container per job — a hard barrier before the first `sendMessage`. The registry is a `globalThis` singleton *per process* and the worker runs in its own process, so the flag must reach both harness env blocks. `push_stub`, `TC-PUSH-003`, and `TC-CHANNEL-PUSH-001..004` are untouched.
 
-1. **Make each adapter's already-exported client seam installable from `OM_PUSH_FAKE_PROVIDERS`.** The seams exist and are used by unit tests today; they are simply unreachable from the app-server process:
-   - `setFcmMessagingFactory` — `packages/channel-fcm/src/modules/channel_fcm/lib/adapter.ts:50`
-   - `setApnsSenderFactory` — `packages/channel-apns/src/modules/channel_apns/lib/adapter.ts:45`
-   - `setExpoClientFactory` — `packages/channel-expo/src/modules/channel_expo/lib/adapter.ts:102`
+### Testing Strategy
 
-   Each package gains `lib/fake-provider.ts` + an `ensure<Provider>FakeProviderInstalled()` call in its `di.ts`, copying `ensurePushStubAdapterRegistered()` (`push-stub-adapter.ts:76`) exactly: no-op unless the flag is set, never installed at module import, inert in production. Parse the flag with `parseBooleanToken` from `@open-mercato/shared/lib/boolean`. **No `adapter.ts` changes** — the seams are already exported.
+Integration specs are colocated in `__integration__/`, self-contained (fixtures created in setup, cleaned in teardown), and gated by a sibling `.meta.ts` where they need an env flag.
 
-2. **Token sentinels match `push_stub`'s existing convention**, so specs stay uniform: a token containing `unregistered` → that provider's **native** permanent-token error (so the real mapping code runs); containing `fail` → a retryable error; otherwise success.
+| Spec | Covers |
+|---|---|
+| `TC-DEV-001..008` | Self-serve + admin trees, `last_seen_at` presence semantics, optimistic lock, org dimension, `push_token` encryption at rest, admin cross-org denial |
+| `TC-NOTIF-011..014` | Type catalogue, preferences round-trip, `data`/`pushOptions` payload, in-app/email opt-out + per-send channel targeting |
+| `TC-PUSH-001..003` | Delivery-log ACL/scoping/token secrecy; admin custom send; real pipeline → `sent` (org propagation) via `push_stub` |
+| `TC-PUSH-004..009` | Real adapters: `unregistered` → `failed` + device soft-deleted; `fail` → `MAX_ATTEMPTS` → `expired`, device survives; silent → data-only; `pushOptions` round-trip; Expo async receipt → device pruned; admin send page → delivery log |
+| `TC-CHANNEL-PUSH-001..004` | Each adapter registered and reachable through the real credential-connect route (fcm carries two: per-user refusal + tenant-wide connect) |
+| `TC-CHANNEL-PUSH-005..007` | Each **real** adapter drives a delivery to `sent` and records a correct provider-native message (`aps.badge`, `apns-push-type: background`, `android.notification.channelId`, Expo `sound`/`priority`) |
 
-3. **Harness wiring** — `packages/cli/src/lib/testing/integration.ts`: add `OM_PUSH_FAKE_PROVIDERS` beside the two existing `OM_ENABLE_PUSH_STUB_ADAPTER` entries, at **line 1707** (`buildReusableEnvironment`, the reused-env path) and **line 3045** (the fresh `commandEnvironment`). Both are required; missing either breaks one of the two run modes.
+Unit suites cover each adapter's success / transient / permanent-token mappings, the gate, both new strategies, the channel registry, and — via `message-golden.test.ts` — serialization drift in our own message builders.
 
-4. **Integration specs** — colocated in `__integration__/` per `.ai/qa/AGENTS.md`, each gated with `integrationMeta.requiredEnvVars` via a sibling `.meta.ts` (following `attachments/__integration__/TC-ATT-004.meta.ts`). Per provider, following `TC-PUSH-003`'s shape: connect a tenant channel via `POST /api/communication_channels/channels/connect/tenant-credentials` with valid-shaped fake credentials (push adapters are `channelScope='tenant'`; the per-user route refuses them with 403 `provider_is_tenant_scoped`) → register a device whose `pushProvider` equals the channel's `providerKey` (fan-out keys on this) → `POST /api/notifications` → `drainIntegrationQueue('events')` then `drainIntegrationQueue('push-deliveries')` → assert the `push_notification_deliveries` row reaches `sent` **and** assert the recorded provider-native message.
+Three harness notes. `TC-PUSH-005` cannot reach its terminal state in one drain, because each retry re-enqueues behind exponential backoff + jitter; it drains repeatedly inside an `expect.poll`. `TC-PUSH-008` needs the receipt reaper, which no scheduler runs under Playwright (the spec enqueues a tick itself) and which skips rows younger than `OM_PUSH_RECEIPT_MIN_AGE_MINUTES` (the harness pins it to `0`). And any spec whose own waits approach a minute must call `test.setTimeout(...)` explicitly: `test.slow()` merely triples the config's `timeout: 20_000`, so a 60s poll inside a `slow()` test consumes the entire budget and the test dies before the poll can reach its deadline.
 
-   Branch cases, once each (shared worker code, not per-provider): `unregistered` → row `failed` + device soft-deleted; `fail` → retried to `MAX_ATTEMPTS=3` → terminal `expired`; silent notification → `content-available` / data-only, no user-facing copy; `pushOptions` round-trip → `badge`/`sound`/`channelId` present in the native message; Expo only → async `checkReceipts()` reports `DeviceNotRegistered` (FCM/APNs prune synchronously).
+**Locating `CrudForm` fields from a UI spec.** `CrudForm` renders a field's `<label>` as a sibling of the control, with no `htmlFor` and without wrapping it, so `page.getByLabel(...)` never resolves a CrudForm field. `ComboboxInput` likewise renders its suggestions as `<Button>`s in a popover rather than ARIA `option`s. Locate the field through its label's wrapper and click suggestions by their visible label.
 
-   One UI spec: admin send page → delivery log shows `sent`.
+**Fake-sink safety.** The JSONL sink is append-only and is **not** truncated on the reused-environment path. A compile-time-constant token tail would let a *previous* run's entry satisfy an assertion before this run's worker wrote anything — a false pass, which is worse than a failure because it hollows out the evidence the phase exists to produce. Two guards, both required: every spec draws a run-unique tail from `uniquePushTokenTail()` (`crypto.randomBytes`), and `findFakePush(provider, tail, sinceIso)` rejects entries older than the caller. Reads skip malformed lines, since a reader can observe a line the writer has not finished appending.
 
-   Final ids (allocated 2026-07-09): per-provider `TC-CHANNEL-PUSH-005` (fcm), `TC-CHANNEL-PUSH-006` (apns — visible + silent), `TC-CHANNEL-PUSH-007` (expo). Shared branches in `push_notifications/__integration__/`: `TC-PUSH-004` (unregistered → `failed` + device soft-deleted), `TC-PUSH-005` (`fail` → `MAX_ATTEMPTS` → `expired`, device survives), `TC-PUSH-006` (silent → data-only), `TC-PUSH-007` (`pushOptions` round-trip, incl. the push-only `body` override), `TC-PUSH-008` (Expo async receipt → `DeviceNotRegistered` → device pruned), `TC-PUSH-009` (admin send page → delivery log shows `sent`). Each carries a sibling `.meta.ts` with `requiredEnvVars: ['OM_PUSH_FAKE_PROVIDERS']`.
+## Risks & Impact Review
 
-   Two implementation notes discovered while writing them. `TC-PUSH-005` cannot reach the terminal state in one drain: each retry re-enqueues behind exponential backoff + jitter (`push-delivery.ts:89-97`, base 1000ms × 2^(n-1)), so the spec drains repeatedly inside an `expect.poll`. `TC-PUSH-008` needs two things the scheduler normally supplies: the receipt reaper rides the `push-stuck-reclaim` queue (`workers/reclaim-stuck.worker.ts`), which no scheduler runs under Playwright — the spec enqueues a tick itself — and it skips rows younger than `OM_PUSH_RECEIPT_MIN_AGE_MINUTES` (15 min in production), which the harness pins to `0`.
+#### Push token leaks through a generic platform surface
+- **Scenario**: A surface that echoes write payloads or snapshots back to clients — audit-log `snapshotBefore`/`snapshotAfter` and the derived `changesJson` via `audit_logs.view_self`, or enterprise record-lock conflict details — carries the raw token. Admin register-on-behalf is the sharpest case: the snapshot would hold another user's token.
+- **Severity**: High · **Affected area**: `devices`, `audit_logs`, enterprise mutation guard
+- **Mitigation**: Encrypted at rest; redacted from persisted command snapshots; stripped from the mutation-guard payload; never in any list/detail field set; retained only in the non-exposed undo payload. Asserted by `devices/__tests__/push-token-redaction.test.ts`.
+- **Residual risk**: Low.
 
-5. **Golden-file unit assertions on the native message builders.** A sibling `lib/__tests__/message-golden.test.ts` per package pins `buildFcmMessage` / `buildApnsNotification` / `buildExpoMessage` against payloads transcribed from each provider's published reference — one case each for visible, silent, and full-`pushOptions`, with the reference URL in a comment beside each fixture. Written as exact `toEqual` fixtures rather than Jest snapshots: a snapshot would silently re-record drift under `--updateSnapshot` instead of failing. These are the only tests that address **serialization drift in our builders**, and they need no fake of any kind.
+#### A payload bug soft-deletes every device in the tenant
+- **Scenario**: A provider error that is *not* actually a permanent token error is mapped to `device_unregistered`; the worker then soft-deletes each targeted device. FCM's `messaging/invalid-argument` is returned for any malformed request field.
+- **Severity**: High · **Affected area**: `push_notifications` worker, `devices`
+- **Mitigation**: Only `registration-token-not-registered` and `invalid-registration-token` are permanent for FCM. `invalid-argument` falls through to the retryable path. Every mapping is unit-tested per adapter and exercised end-to-end in `TC-PUSH-004`.
+- **Residual risk**: Low.
 
-   Additionally, a `lib/__tests__/fake-provider.test.ts` per package drives the **real** adapter against the fake client in-process (installed exactly as `di.ts` does). It covers the same semantics as the integration specs minus HTTP/DB/worker — send → recorded native message, each provider's native permanent-token error → `device_unregistered`, `fail` → retryable, Expo's two-phase ticket/receipt split — plus an inertness case proving the flag-less `ensure…()` installs nothing. This keeps the fakes themselves under test in environments where the Playwright suite cannot run.
+#### Duplicate push from an at-least-once queue
+- **Scenario**: The dispatch subscriber is at-least-once, so redelivery re-runs the strategy; and a reaper that reclaims an in-flight `sending` row causes a double send.
+- **Severity**: Medium · **Affected area**: `push_notifications` worker
+- **Mitigation**: Atomic `pending → sending` claim; fan-out inserts use `ON CONFLICT DO NOTHING`; `attempts` increments at claim so `MAX_ATTEMPTS` holds across crashes; `OM_PUSH_STUCK_RECLAIM_MINUTES` floored at 1 (a `0` re-opened actively-sending rows).
+- **Residual risk**: Low. The invariant `send timeout < reclaim minutes` is documented, not enforced.
 
-6. **`push_stub` is untouched.** It remains the fast path for the delivery rails; `TC-PUSH-003` and `TC-CHANNEL-PUSH-001..004` must keep passing unchanged.
+#### Cross-org credential orphaning
+- **Scenario**: Tenant-wide push credentials keyed by the connecting admin's selected org, while channel dedup is org-agnostic — an org-B key rotation writes a credential row the delivery path never reads, and push silently stops.
+- **Severity**: High · **Affected area**: `communication_channels`, `push_notifications`
+- **Mitigation**: Tenant-scoped credentials are pinned to `organizationId = tenantId` and the channel row stores `organization_id = NULL`, so read and write land on the same key. Covered by `2026-07-03-push-channels-tenant-scope.md`.
+- **Residual risk**: Low.
 
-**Open design questions — both resolved during implementation (2026-07-09).**
+#### Privilege escalation onto the shared push channel
+- **Scenario**: A non-admin holding only `connect_user_channel` posts FCM credentials to the per-user connect route and mints or overwrites the tenant-wide push channel.
+- **Severity**: High · **Affected area**: `communication_channels`
+- **Mitigation**: The connect command refuses a tenant-scoped provider arriving with a non-null `userId` (`wrong_scope_for_route` → 403) instead of silently downgrading; the per-user route short-circuits tenant-scoped providers with 403.
+- **Residual risk**: Low.
 
-1. *Where the fake is installed.* **Resolved: each channel package's `di.ts` `register()`, as hoped.** `createRequestContainer()` loops every module's `di.ts` `register()` (`packages/shared/src/lib/di/container.ts:176`), and the queue's per-job handler builds a fresh container *before* invoking the worker (`packages/cli/src/lib/worker-job-handler.ts:29-33`). Container construction is therefore a hard barrier before the first `sendMessage`, which resolves its adapter from the DI-bound `channelAdapterRegistry` (`push-delivery.ts:220-221`). The floated fallback (installing from the adapter's lazy-resolve path) is **not needed**. Two constraints the original draft missed: (a) `registerChannelAdapter` throws on a duplicate provider key (`communication_channels/lib/registry.ts:34-39`), so the fake MUST only call the SDK-client setter and never re-register an adapter — the real adapter object stays registered and merely has its client swapped; (b) the registry is a `globalThis` singleton **per process**, and the worker runs in its own process, so the env flag must reach the worker too (both harness env blocks do this).
+#### Cross-org push silently drops
+- **Scenario**: Notifications are stamped with the *creator's* org, and the push strategy scopes the recipient's device lookup to that org. An admin in org A notifying a user whose devices live in org B delivers in-app but no push.
+- **Severity**: Medium · **Affected area**: `push_notifications`
+- **Mitigation**: Same-org and self are the paths in use; skipped devices are warn-logged with a count so a provider-config gap is diagnosable. Scoping the device lookup by the *recipient's* org is the fix if cross-org push is ever required.
+- **Residual risk**: Medium — accepted, documented, not yet exercised.
 
-2. *How specs read the provider-native message across processes.* **Resolved: option (a), a JSONL sink — the preferred option (b) is infeasible.** The fake replaces the SDK *client*, not the adapter, so the native message exists only inside the fake. It cannot reach `provider_response` without editing `adapter.ts` (which this phase forbids), because **no adapter returns `metadata` on success**: FCM returns `{externalMessageId, status:'sent'}` (`channel-fcm/lib/adapter.ts:212`), Expo `{externalMessageId: ticket.id ?? '', …}`, and APNs `{externalMessageId: '', …}` — the worker then persists only `{ externalMessageId }` (`push-delivery.ts:295`). Smuggling the message through the returned id string works for FCM/Expo but is **impossible for APNs**, which hardcodes an empty id with an explicit comment that the value lands in the admin-exposed `provider_response` and must never carry token material. Doing it anyway would also perturb the production payload shape — exactly the condition under which the spec said to prefer (a).
+#### Lazy preference seeding surprises existing users
+- **Scenario**: A new notification type is registered; every existing user is opted in by default.
+- **Severity**: Medium · **Affected area**: UX
+- **Mitigation**: Default-on is a documented contract. Apps wanting default-off insert explicit `enabled=false` rows at type registration.
+- **Residual risk**: Low.
 
-   The sink lives at `<QUEUE_BASE_DIR>/push-fake-messages.jsonl` (the dir the queue already creates and the drain child already inherits), one `O_APPEND` line per send, keyed by `{provider, tokenTail}`. Raw tokens are never written as a key — only the last-8 tail, mirroring `token_snapshot`. Helper: `push_notifications/lib/fake-provider-recorder.ts`; spec-side harness: `@open-mercato/core/helpers/integration/pushFake`.
+#### `push_notification_deliveries` grows unbounded
+- **Scenario**: Every push writes an append-only row; no purge exists.
+- **Severity**: Medium · **Affected area**: Storage
+- **Mitigation**: A 90-day purge worker is specified but deferred.
+- **Residual risk**: Medium until the purge ships.
 
-   Reuse over reinvention: the harness leans on the existing `communicationChannelsFixtures.deleteChannelIfExists`, `notificationsFixtures.createNotificationFixture` / `listNotifications`, and `generalFixtures.expectId` / `deleteEntityByPathIfExists` rather than hand-rolling them; `connectFakePushChannel` is genuinely new because `seedConnectedChannel` only seeds the `__test_seed__` provider, whereas these specs must drive the real `fcm`/`apns`/`expo` connect route so each adapter's own `validateCredentials` runs. App-root resolution, previously re-derived privately in `queue.ts` and `dbFixtures.ts`, is consolidated into one exported `helpers/integration/appRoot.ts`. The env flag uses the sanctioned `parseBooleanToken`, **not** the hand-rolled `['1','true','yes','on']` check that `isPushStubEnabled()` and `ensureTestSeedAdapterRegistered()` still carry (those predate the rule; converting them is a separate cleanup). One duplication is knowingly left: the `.mercato/queue` default literal now appears in `resolveQueueBaseDir()` as well as inside `@open-mercato/queue`'s local strategy, which does not export its constant — the recorder runs in the worker process and must not import test helpers, so a shared constant would require an additive export from the queue package.
+#### Notification type IDs are FROZEN — a typo sticks forever
+- **Scenario**: A misspelled type ID is registered and mirrored to `notification_types`; mobile clients bind to it.
+- **Severity**: High · **Affected area**: BC contract
+- **Mitigation**: The frozen-id contract is documented in the module `AGENTS.md`. No new IDs are minted here — the DB mirrors the existing in-memory aggregate. Rename tooling is left to a future spec.
+- **Residual risk**: Low.
 
-   **The sink is append-only and is never truncated on the reused-environment path** — `startEphemeralEnvironment` wipes `QUEUE_BASE_DIR` (`integration.ts:3007`) but `tryReuseExistingEnvironment` does not. A compile-time-constant token tail would therefore let a *previous* run's entry satisfy an assertion before this run's worker wrote anything: a **false pass**, which is worse than a failure because it hollows out the evidence this phase exists to produce. Two guards, both required: every spec draws a run-unique tail from `uniquePushTokenTail()` (`crypto.randomBytes`), and `findFakePush(provider, tail, sinceIso)` additionally rejects entries older than the caller. Reads also skip malformed lines rather than throwing, since a reader can observe a line the writer has not finished appending.
+#### Provider-client cache leaks sockets or poisons itself
+- **Scenario**: An unbounded cache keyed by credentials hash leaks an HTTP/2 socket (APNs) or an OAuth refresh timer (FCM) per key rotation; and a rejected init promise stays cached forever, so every later `getApp()` returns the cached rejection until the process restarts.
+- **Severity**: Medium · **Affected area**: `channel-{fcm,apns,expo}`
+- **Mitigation**: LRU-bounded at 32 with `shutdown()`/`app.delete()` on eviction; rejected promises self-evict.
+- **Residual risk**: Low.
 
-**Known gap — stated deliberately, and *not* closed by a fake server either.**
+#### Conformance drift with the real providers
+- **Scenario**: Our belief about a provider's payload shape is wrong. Every fake accepts it identically and CI stays green.
+- **Severity**: Medium · **Affected area**: `channel-{fcm,apns,expo}`
+- **Mitigation**: None available in CI, under *any* option — a fake server has the same blind spot, since its schema is also our own belief. Drift in **our** builders is caught by golden-file assertions against each provider's published reference. Drift in **theirs** stays a manual live-key check.
+- **Residual risk**: Medium — stated deliberately; a periodic live smoke test is the only closure.
 
-No fake of any kind validates **conformance with the real provider**. Whatever a fake accepts, we wrote; if our belief about FCM's payload shape is wrong, the fake is wrong identically and CI goes green. Only live credentials catch that. This is true of the in-process fakes *and* of the fake server that was rejected — so it is not a reason to prefer one over the other.
+## Deferred Follow-ups
 
-The genuine delta between the two options is exactly **one step**: the vendor SDK's own client-side transformation of our message object into wire bytes.
-- *In-process fake*: we replace `getMessaging()`, so `firebase-admin` never runs and `buildFcmMessage()`'s output is never validated by the SDK.
-- *Fake server*: `firebase-admin.send()` runs — validating fields, serializing, throwing on a malformed message — then posts to the fake.
+Present in the downstream module or raised in review, intentionally not in scope here.
 
-That catches one real bug class ("we built a message **the SDK** would reject"), not the one people assume ("we built a message **Google** would reject"). And decisively: **under the fake-server option FCM still requires the in-process shim**, because its host is hardcoded — so for the provider that actually runs in production, a fake server buys *nothing* over an in-process fake. The SDK-validation gain would apply only to APNs and Expo.
+| Item | Why deferred |
+|---|---|
+| Delivery-log purge worker (90-day default) + range partitioning | Storage hygiene; no app has hit the volume yet. |
+| Web push (browser Push API) | Plausible follow-up; needs its own credential and subscription model. |
+| Email/SMS channel modules | The registry, preferences, and strategy seam are shaped to accept them additively. |
+| Governance: `priority`, `group_key`, daily/weekly frequency caps (`FrequencyGuardService`) | A clean upstream design for how these compose with per-channel preference rows is still open. `category`, `non_opt_out`, `silent`, and `hidden_from_settings` are implemented. |
+| GDPR data-export collectors + consumer-deletion purge for push data | Cross-cutting; belongs with a platform-wide GDPR pass. |
+| Cross-user token handoff (deactivate a token that reappears under another user) | Rare; needs a decision on which user wins. |
+| Actionable push buttons | Feasible, not blocked. iOS registers `UNNotificationCategory` client-side (backend only picks the category); Android has no OS-level category→buttons and must build them from a data message via Notifee. The clean design projects the existing `NotificationTypeDefinition.actions` onto push rather than inventing a parallel `pushOptions.category` — one action model for in-app + iOS + Android. Parked on client-side work and an i18n decision, and it cannot be verified end-to-end in the current harness (Android emulator + FCM only). |
+| `delivered` delivery state (device-confirmed receipt) | `sent` means the provider *accepted* the message. Only a client ack (delivery id echoed in the push `data`, posted back to a device-scoped, replay-guarded route) truly confirms receipt — APNs and FCM expose no device-delivery receipt, and Expo's receipts confirm handoff only. Deferred because the authoritative path is client-driven and not e2e-verifiable here. |
+| Un-skipping `TC-CHANNEL-EMAIL-027/028` via the Phase-8 technique on `setImapClient`/`setSmtpClient` | Kept out of scope so this PR does not expand into `channel-imap`. |
+| A fake push provider *server* | Rejected on testing grounds (§ Alternatives Considered). The stronger case would be **product**: giving a downstream mobile app a live endpoint to develop against. Revisit on that basis. |
+| RFC-4122-correct `stableScheduleUuid` | The helper is a verbatim copy of the `communication_channels` original and produces a uuid-*shaped* string Postgres accepts. Kept identical on purpose; fixing it is a cross-cutting change to both modules. |
+| Wiring or removing `channel_{fcm,apns,expo}.{view,configure}` ACL features | Granted in each package's `setup.ts` but never consulted by a `requireFeatures` guard — the connect flow uses `communication_channels.connect_tenant_channel`. Brand-new and unmerged, so not yet a BC concern. |
 
-What does address serialization drift, and is in scope for this phase:
-- **Golden-file assertions** (unit, cheap) on `buildFcmMessage`, `buildApnsNotification`, and the Expo message, compared against payloads transcribed from each provider's published reference — visible, silent, and `pushOptions` variants. These catch drift in **our** builders, which is the half we control. Add them alongside the existing per-adapter unit suites.
-- **A periodic live smoke test** with real keys remains the only thing that catches drift in **theirs**. Out of scope here; it stays a manual pre-merge step, as today.
+## Final Compliance Report — 2026-07-09
 
-**Net effect.** Push becomes the only channel in the codebase whose provider-adapter code is exercised end-to-end in CI — strictly better than the `channel-gmail` / `channel-imap` bar, at conventional cost, using seams that already exist.
+### AGENTS.md Files Reviewed
+- `AGENTS.md` (root), `BACKWARD_COMPATIBILITY.md`
+- `packages/core/AGENTS.md`, `packages/shared/AGENTS.md`, `packages/ui/AGENTS.md`
+- `packages/core/src/modules/{communication_channels,notifications,customers}/AGENTS.md`
+- `packages/{queue,events,cli}/AGENTS.md`, `.ai/qa/AGENTS.md`, `.ai/specs/AGENTS.md`
 
-**BC:** fully additive and test-only. Two new env vars (`OM_PUSH_FAKE_PROVIDERS`, off by default; `OM_PUSH_RECEIPT_MIN_AGE_MINUTES`, which already existed as a tunable and is merely pinned to `0` by the harness), one new helper module per channel package plus `push_notifications/lib/fake-provider-recorder.ts` and the `helpers/integration/pushFake` spec harness, one `ensure…FakeProviderInstalled()` line per channel `di.ts`, four harness env lines (two per run mode), and the new unit + integration specs. No adapter, contract, schema, route, ACL, or event change. Production behavior is unchanged when the flag is unset — the same guarantee `OM_ENABLE_PUSH_STUB_ADAPTER` and `OM_ENABLE_TEST_CHANNEL_SEEDING` already provide, and now directly asserted by the per-package `fake-provider.test.ts` inertness case.
+### Compliance Matrix
 
-**Follow-up (separate PR, not this phase).** The same env-gated technique applied to `setImapClient` / `setSmtpClient` (`channel-imap/.../lib/{imap-client.ts:357,smtp-client.ts:201}`) would un-skip `TC-CHANNEL-EMAIL-027` and `028`, whose skip reason is exactly the process-local-seam limitation. Kept out of scope here so this PR does not expand into `channel-imap`. Separately optional: a fake push provider server. Its only technical gain is running the APNs/Expo SDKs' client-side validation (never FCM's — see § Known gap), which is thin. The stronger reason to build one would be **product, not testing**: giving a downstream mobile app a live endpoint to develop against. Revisit on that basis, not on a testing-coverage basis.
+| Rule Source | Rule | Status | Notes |
+|---|---|---|---|
+| root AGENTS.md | No direct ORM relationships between modules | Compliant | `defineLink` in `data/extensions.ts`; cross-module reads via DI tokens |
+| root AGENTS.md | Filter by `organization_id` for tenant-scoped entities | Compliant | Standard `orgField: 'organizationId'` on every list route |
+| root AGENTS.md | Validate inputs with zod in `data/validators.ts` | Compliant | |
+| root AGENTS.md | Use `findWithDecryption` / `findOneWithDecryption` | Compliant | Every device read that serializes the token |
+| root AGENTS.md | Never hard-code user-facing strings | Compliant | `i18n/{en,de,es,pl}.json` per module |
+| root AGENTS.md | No hardcoded status colors / arbitrary text sizes | Compliant | Delivery-log + preference pages use status tokens |
+| root AGENTS.md | Boolean parsing via `parseBooleanToken` | Compliant | `OM_PUSH_FAKE_PROVIDERS`. Pre-existing `isPushStubEnabled()` / `ensureTestSeedAdapterRegistered()` retain a hand-rolled check — separate cleanup |
+| root AGENTS.md | Optimistic locking on new user-editable entities | Compliant | `UserDevice` version-checked on update; deactivate exempt (idempotent soft-delete); delivery rows append-only |
+| packages/core/AGENTS.md | All API routes export `openApi` | Compliant | |
+| packages/core/AGENTS.md | Write routes use the Command pattern or `makeCrudRoute` | Compliant | Devices via command bus; preferences via mutation guard (mirrors `settings`) |
+| packages/core/AGENTS.md | `AGENTS.md` ships with each new module | Compliant | `devices` + three `channel-*` packages; `notifications/AGENTS.md` covers new surfaces |
+| BACKWARD_COMPATIBILITY.md | Type IDs FROZEN; API URLs STABLE; columns additive-only | Compliant | No new type IDs minted |
+| BACKWARD_COMPATIBILITY.md | Deprecation protocol for contract changes | Compliant | `NotificationDeliveryContext` split ships behind an `@deprecated` flat-intersection bridge |
+| .ai/qa/AGENTS.md | Integration tests self-contained, colocated | Compliant | Fixtures created in setup, cleaned in teardown |
 
-## Pre-PR Hygiene Checklist
+### Internal Consistency Check
 
-Must be cleared before opening the upstream PR (against `develop`):
+| Check | Status | Notes |
+|---|---|---|
+| Data models match API contracts | Pass | Token never appears in any response schema |
+| Risks cover all write operations | Pass | Register/update/deactivate, preference writes, channel connect, delivery claim |
+| Commands defined for all mutations | Pass | Devices via command bus; preferences deliberately via mutation guard, per the `settings` precedent |
+| Phases in the plan match shipped code | Pass | 1–8 all implemented |
+| Deferred items are not silently implied as done | Pass | Consolidated in § Deferred Follow-ups |
 
-- [x] **Move `docs-devices-and-push-getting-started.md` out of the repo root** into `apps/docs/` (done — relocated to `apps/docs/docs/tutorials/devices-and-push-getting-started.mdx` and registered in `sidebars.ts`).
-- [ ] **Purge `report-high.md` (+ the dangling `report.md` reference) from the upstream branch.** It is a local security-audit ops artifact that leaks `packages/enterprise/` internals (16 findings + commit SHAs) — exactly what the root `AGENTS.md` Never-list forbids in upstream-friendly branches. **Caveat:** it predates this branch's base (`48e34f80a`) and already exists on `develop`, so it is a develop-wide hygiene problem to coordinate with maintainers, not a regression introduced here.
-- [x] **"Migration & Backward Compatibility" section present** (added 2026-06-29 — see above).
-- [x] **Reconcile the `TC-DEV-*` numbering** with the shipped suites (done 2026-07-07). Canonical scheme: `TC-DEV-001` self-serve + `TC-DEV-002` admin + `TC-DEV-003` last_seen_at + `TC-DEV-004` optimistic-lock (all in `TC-DEV-001.spec.ts`); `TC-DEV-005` organization dimension (`TC-DEV-005.spec.ts`); the previously-colliding standalone file was renamed `TC-DEV-003.spec.ts` → `TC-DEV-006.spec.ts` and its blocks renumbered `TC-DEV-006` push_token encryption at rest / `TC-DEV-007` optimistic-lock conflict (self route) / `TC-DEV-008` admin cross-org denial. Note: `TC-DEV-007` overlaps `TC-DEV-004` and `TC-DEV-008` overlaps `TC-DEV-005` in coverage — kept as independent standalone e2e probes; consolidate only if the redundancy is unwanted.
-- [x] **Verify channel-package version ranges resolve at publish time** (done 2026-07-07). Root cause was a version-alignment gap, not the `workspace:*` protocol (which matches the published `channel-gmail`/`channel-imap` reference and rewrites to concrete ranges at publish). The three packages were pinned at `0.1.0` while the whole monorepo is lockstep at `0.6.5`, so `scripts/check-version-alignment.sh` (run by every `release:{patch,minor,major}` before `yarn workspaces foreach version`) failed on them. Bumped `channel-fcm`/`channel-apns`/`channel-expo` to `0.6.5`; all 23 publishable packages are now aligned and the gate + `check:dep-versions` pass.
-- [ ] PR targets `develop` (not `main`) per CONTRIBUTING; run `yarn mercato auth sync-role-acls` post-merge for the new ACL features.
+### Verdict
 
-## Verification
+**Compliant, with the integration suite repaired.** When Phase 8 landed, its Playwright specs had **never been executed** (no Docker in the authoring environment). Running them for the first time on 2026-07-09 exposed four defects in the specs themselves — not in the shipped code — all fixed and re-verified; see the Changelog entry below.
 
-### Local
-
-1. `yarn db:migrate` applies new tables.
-2. Boot — `notifications.type_registry.sync` fires; types appear in `notification_types`.
-3. Register a device with a `pushToken` via `/api/devices` → fire a `notificationService.create()` for a known type → verify delivery row enqueued, worker processed, stub provider called.
-4. `PUT /api/notifications/preferences` with `(type, 'push', enabled=false)` → repeat dispatch → verify no new delivery row.
-
-### Automated
-
-- `packages/core/src/modules/devices/__integration__/`
-- `packages/core/src/modules/notifications/__integration__/types-and-preferences.spec.ts`
-- `packages/core/src/modules/push_notifications/__integration__/`
-- `yarn test:integration` runs all green.
-
-### Compliance
-
-- `packages/core/AGENTS.md` patterns: `makeCrudRoute`, `openApi`, `setup.ts`, `acl.ts`, `events.ts`, cross-module links via `data/extensions.ts`, integration suites colocated.
-- `BACKWARD_COMPATIBILITY.md`: type IDs treated FROZEN; entity columns ADDITIVE-ONLY going forward; API URLs STABLE.
-- Design system: backend admin pages use `DataTable`, `StatusBadge` (delivery status map: `pending→info`, `sent→success`, `failed→error`, `skipped→neutral`), `EmptyState`, `LoadingMessage`. No hardcoded status colors.
-
-## Final Compliance Report
-
-**Phase 1 (`devices` module) — complete.** `yarn generate` clean, `yarn typecheck` green, `yarn db:generate` reports no drift, and `yarn test` is green (one unrelated `communication_channels/access-control` suite occasionally aborts on a jest-worker `SIGSEGV` — flaky infra, passes on isolated re-run). Integration suites pass under the cache-enabled ephemeral harness: `TC-DEV-001` (self-serve) + `TC-DEV-002` (admin), plus `TC-DEV-003` (last_seen_at presence semantics), `TC-DEV-004` (optimistic-lock 409 on update), and `TC-DEV-005` (organization dimension — per-org identity, org-narrowed admin list, restricted-admin list+detail 403, and active-org scoping of the self routes). `yarn lint` is blocked by a pre-existing `eslint-plugin-react`/ESLint 10 toolchain crash unrelated to this change. Phase 1 items below are met (`devices`-scoped); provider/redaction/worker items remain for Phases 3–4.
-
-- [x] All routes export `openApi` *(Phase 1)*
-- [x] Module entities follow snake_case table names *(`user_devices`)*
-- [x] No direct ORM relationships across module boundaries *(Phase 1 has none)*
-- [x] All write routes use the Command pattern *(register/update/deactivate via command bus)*
-- [x] Integration suites self-contained and stable *(poll-based; cache-tag fix removes flakiness)*
-- [x] `AGENTS.md` shipped with the `devices` module
-- [x] No hardcoded design-system colors or arbitrary text sizes *(admin pages)*
-- [x] BC contract honored (type IDs frozen, additive-only schema changes thereafter)
-- [x] `push_token` treated as a secret: **encrypted at rest** (`devices/encryption.ts` `defaultEncryptionMaps` → `findWithDecryption`/`findOneWithDecryption` at every read site, no-op when tenant encryption is disabled), excluded from list/detail responses, redacted from audit-log command snapshots + derived `changesJson`, and stripped from the mutation-guard payload; real token retained only in the non-exposed undo payload. Redaction asserted by `devices/__tests__/push-token-redaction.test.ts`.
-
-Phases 2–4 (complete):
-
-- [x] All routes export `openApi` *(notifications types/preferences + push_notifications deliveries routes)*
-- [x] Module entities follow snake_case table names with `<module>_` prefix *(`notification_types`, `notification_preferences`, `push_notification_deliveries`)*
-- [x] No direct ORM relationships across module boundaries *(links declared via `data/extensions.ts`; cross-module reads resolved softly via DI tokens)*
-- [x] All write routes use the Command pattern OR `makeCrudRoute` *(preferences via mutation guard; deliveries append-only via command path)*
-- [x] Provider implementations redact tokens and payloads from logs *(adapters carry only `metadata.pushToken`; delivery rows store last-8 `token_snapshot` only — never the full token)*
-- [x] Integration suites self-contained and stable *(`TC-DEV-001`/`TC-DEV-002`, `TC-PUSH-001`; ORM-backed seeding + teardown)*
-- [x] `AGENTS.md` shipped with each new module *(devices + the three `channel-*` packages; `notifications/AGENTS.md` covers the new surfaces)*
-- [x] No hardcoded design-system colors or arbitrary text sizes *(preferences + delivery-log admin pages use status tokens)*
-- [x] BC contract honored (type IDs frozen, additive-only schema changes — `labelKey`/`descriptionKey` added additively to `NotificationTypeDefinition`)
-- [x] `yarn build` / `yarn typecheck` green across all packages. **`yarn lint` remains blocked by the pre-existing ESLint-10 toolchain crash (unrelated to this work).**
-
-Phases 5–6: dissolved / deferred — see "Downstream Parity Review → Deferred to a later spec" below.
-
-## Downstream Parity Review (`user_notifications`)
-
-On 2026-06-26 the three upstream modules were diffed against the downstream production module `apps/mercato/src/modules/user_notifications/` (covo-backend, the implementation this spec was originally informed by) to decide how close a "1:1 logic" port should be. Outcome: this spec is a **deliberate re-architecture, not a 1:1 port**. The differences below fall into two buckets — *intentional divergences to keep* and *features deferred to a later spec*.
-
-### Intentional divergences — keep as-is (do NOT "fix" toward downstream)
-
-These are platform-correctness decisions; a future implementer should not treat them as gaps:
-
-- **Module shape:** one combined `user_notifications` module downstream → three upstream modules (`devices`, `notifications` extensions, `push_notifications`). Keeps the device registry reusable (MFA/audit/session) and preferences/registry channel-agnostic.
-- **Provider integration:** downstream sends FCM+APNs directly via `node-pushnotifications`; upstream rides the **`communication_channels` hub** (`channelAdapterRegistry` + `IntegrationCredentials`), per the maintainer's mandate on PR #2595. Real adapters land as Phase-4 channel packages; the only push adapter today is the test-only `push_stub`.
-- **Preference schema:** downstream stores one row per `(user, type)` with `push_enabled`/`email_enabled` boolean columns; upstream stores one row per `(user, type, channel)` with a free-form `channel` string + `enabled` bool (forward-compatible with email/SMS without a schema change).
-- **Device entity:** downstream `push_notification_tokens` requires a token and uses an `is_active` flag; upstream `user_devices` is a generic registry with a **nullable** token, soft-delete via `deleted_at`, and `push_provider` metadata.
-- **Token handling:** downstream masks the token (last-8) in admin surfaces; upstream treats it as a hard secret — never returned by any list/detail response, redacted from audit snapshots and the mutation-guard payload, retained only in the non-exposed undo payload.
-- **Delivery trigger:** downstream uses a `notification.created` subscriber (its `mobile_push` strategy fn is intentionally left unregistered to avoid double-send); upstream uses a registered `push` delivery strategy via the notifications seam. Same effect, cleaner seam.
-
-### Deferred to a later spec (out of scope here)
-
-Present downstream, intentionally not ported now — see the expanded "Out of scope" list above. Summary, in rough priority order:
-
-1. ~~**Silent push** (highest priority)~~ — **implemented in Phase 5** (see Implementation Phases). `sendSilentPush`: content-available wake-ups gated on a `silent: true` type. ~~create no `Notification` row and bypass preferences~~ **superseded 2026-06-30** — now routes through `notificationService.create()` like a visible push (persists a row, respects preferences; force with `nonOptOut: true`). Frequency caps remain deferred (item 3).
-2. **Governance/type metadata** — ~~`category`~~, `priority`, ~~`non_opt_out`~~, ~~`silent`~~, `hidden_from_settings`, `group_key` on `NotificationType`. **`non_opt_out` implemented** (see Changelog 2026-06-26): `nonOptOut?` on `NotificationTypeDefinition`, a `non_opt_out` column on `notification_types`, server-side enforcement in the `push` delivery strategy, exposure on `GET /api/notifications/types`, and a `setPreferences` write-guard. **`category` + `silent` implemented** (see Changelog 2026-06-26): free-form `category?` string + `silent?` (already enforced in Phase 5) on `NotificationTypeDefinition`, mirrored to `category`/`silent` columns on `notification_types`, exposed on `GET /api/notifications/types` so a mobile client can list/group types. **`hidden_from_settings` implemented** (`hiddenFromSettings?` on `NotificationTypeDefinition`; hidden types are excluded from the client `GET /api/notifications/types` catalogue in `notification-type-registry.ts`). `priority`/`group_key` remain deferred.
-3. **Frequency guard** — `FrequencyGuardService` daily/weekly caps per category with `non_opt_out` bypass.
-4. **Admin custom / one-off send** — `admin.custom_message` type + send backend page + API + command.
-5. **Operational** — weekly range-partitioning of `push_notification_deliveries` + scheduled partition worker, GDPR data-export collectors + consumer-deletion purge, cross-user token-handoff deactivation, and **Expo receipt polling** (`getPushNotificationReceiptsAsync`) (per-device locale resolution with title/body rewrite was in this list but is now **implemented** — see Phase 6): Expo's `DeviceNotRegistered` for a stale-but-well-formed token surfaces in the receipt phase, not the ticket the adapter returns synchronously, so the common "app uninstalled" case is not yet soft-deleted for Expo — a receipt-polling pass is needed to close it (see the limitation comment in `channel-expo/lib/adapter.ts`).
-6. **Actionable-notification action buttons on the push (buildable — deferred design)** — clickable buttons on the *delivered push* itself. This is **feasible**; it is parked only because it needs a cross-platform design pass + client-side work, not because of a blocker. The two platforms differ fundamentally:
-   - **iOS (APNs):** OS-native. Payload carries `aps.category = "<id>"`; the buttons are registered **client-side** as a `UNNotificationCategory`/`UNNotificationAction` under that id. Backend controls only *which* category. Minimal backend change: a recognized `category` mapped to `aps.category` in the APNs adapter and FCM's `apns.payload.aps.category`, plus Expo `categoryId`.
-   - **Android (FCM):** **no** OS-level category→buttons in the payload. Buttons are built by the app from a **data message** (`NotificationCompat.Builder.addAction` + `PendingIntent`), which for background display in React Native needs a local-notification library (e.g. Notifee). So parity requires echoing the button descriptors into the FCM `data` payload for the client handler to read — an `aps.category`-only mapping does not reach Android.
-   - **Reuse the existing `actions` model (recommended shape):** the platform *already* defines notification actions — `NotificationTypeDefinition.actions` (`{id, labelKey, variant, href?, icon?}`), today only driving the in-app bell UI. The clean design is to project that **same** `actions` set onto push instead of inventing a parallel `pushOptions.category`: derive an iOS category id from the type (client registers matching `UNNotificationCategory`s) and serialize `actions` into the FCM `data` payload for Android/Notifee to render. One action model → in-app + iOS + Android, no duplicate source of truth. (A raw `pushOptions.category` escape hatch can still exist for app-defined categories that don't map to a notification type.)
-   - **Why deferred, not dropped:** the backend mapping is small (prototyped 2026-07-02 across all three adapters, then reverted to keep Phase 5 payload-only), but shipping real buttons also requires **client-side registration** (iOS categories, Android Notifee handler + action-tap → deep link/command) and a decision on how `actions` labels/i18n travel to each platform. It also **can't be verified end-to-end** in the current harness (Android emulator + FCM only; no iOS simulator, no connected APNs `.p8` channel, reference app registers no categories). Reintroduce as a dedicated slice: extend `PushOptions`/adapters, project `type.actions` → payload, add client registration, and add an iOS/APNs e2e path.
-7. **`delivered` delivery state (device-confirmed receipt).** The terminal success status is currently `sent` (`PUSH_DELIVERY_STATUSES = ['pending','sending','sent','failed','skipped','expired']`) — it means the provider (FCM/APNs/Expo) **accepted** the message, **not** that the device received or displayed it. A `delivered` state would record confirmed receipt, shown in the delivery log as distinct from `sent`. Two possible signals, neither trivial:
-   - **Client ack (authoritative).** Embed the `PushNotificationDelivery.id` in the push `data` payload; the app's push handler posts it back (e.g. `POST /api/push_notifications/deliveries/:id/ack`, device-scoped + replay-guarded), flipping the row to `delivered` and stamping a new `delivered_at`. This is the only signal that truly confirms the device got it — but it needs client-side work in the reference app and a new authenticated ack route.
-   - **Provider receipts (partial only).** Expo's `getPushNotificationReceiptsAsync` confirms **handoff to FCM/APNs**, not device delivery (already tracked separately as receipt polling in item 5); APNs and FCM expose **no** true device-delivery receipt. So provider receipts cannot fully back a `delivered` state — client ack is required for real confirmation.
-   - **Scope when picked up:** add `'delivered'` to `PUSH_DELIVERY_STATUSES` + a nullable `delivered_at` column (additive migration + snapshot), the device-scoped ack endpoint, embed the delivery id in the push `data`, a `push_notifications.delivery.delivered` event, and a `delivered` status badge/filter in the delivery-log UI. **Deferred** because the authoritative path is client-driven and not e2e-verifiable in the current harness (Android emulator + FCM only).
-
-A clean upstream design for the remaining items 2–4 (how categories/priority compose with the existing channel-row preferences and the hub strategy) is still an **open question** — this is why they are deferred rather than scoped now. Non-opt-out has since been resolved and implemented (item 2).
+Three caveats are recorded rather than waived:
+- Conformance with the real providers is untestable in CI under any option (§ Risks).
+- `yarn lint` covers only `apps/mercato`, because no package in the repo defines a lint script.
+- Under the **full** parallel integration suite (32 tests across `push_notifications` + the three channel packages) the worker-dependent specs timed out, while the same specs pass in 3.4 min when scoped to `push_notifications` alone. This points at resource contention rather than a logic fault, but CI runs the suite sharded, so it must be confirmed before merge.
 
 ## Changelog
 
-- **2026-07-09** — **Phase 8 implemented — provider-adapter e2e coverage without live credentials.** Test-only and fully additive; no adapter, contract, schema, route, ACL, or event change. Each channel package gains a `lib/fake-provider.ts` exporting `ensure{Fcm,Apns,Expo}FakeProviderInstalled()`, called as the first statement of its existing `di.ts` `register()` and gated on the new `OM_PUSH_FAKE_PROVIDERS` flag via `parseBooleanToken`. The fake swaps **only the SDK client** through each adapter's already-exported seam — never `registerChannelAdapter`, which throws on a duplicate provider key — so the real adapter's message construction, credential parsing, client caching, and error→`device_unregistered` mapping all execute. Token sentinels reuse `push_stub`'s convention, but each fake raises its provider's **native** permanent-token error (FCM `err.code = 'messaging/registration-token-not-registered'`; APNs `{ok:false, reason:'Unregistered'}`; Expo an accepted ticket whose *receipt* reports `DeviceNotRegistered`) so the real mapping code runs. **Both of the spec's open design questions were resolved during implementation, and the second went against its stated preference:** (1) `di.ts` install is safe — `createRequestContainer()` runs every registrar (`container.ts:176`) and `worker-job-handler.ts:29-33` builds a container per job, a hard barrier before the first `sendMessage`; (2) the native message **cannot** be surfaced via the delivery row's `provider_response` as hoped, because no adapter returns `metadata` on success and APNs deliberately hardcodes an empty `externalMessageId` (that value is admin-exposed and must never carry token material) — so the fakes write to a JSONL sink at `<QUEUE_BASE_DIR>/push-fake-messages.jsonl`, keyed by `{provider, tokenTail}`, read back by the new `@open-mercato/core/helpers/integration/pushFake` harness. New coverage: integration `TC-CHANNEL-PUSH-005..007` (per provider), `TC-PUSH-004..008` (shared branches: unregistered→soft-delete, `fail`→`expired`, silent, `pushOptions`, Expo async receipt), `TC-PUSH-009` (admin UI), each with a `.meta.ts` `requiredEnvVars` gate; plus per-package `message-golden.test.ts` (exact `toEqual` fixtures against each provider's published reference — not Jest snapshots, which would re-record drift) and `fake-provider.test.ts` (drives the real adapter against the fake in-process, including an inertness case proving the flag-less `ensure…()` installs nothing). Harness wiring adds `OM_PUSH_FAKE_PROVIDERS` **and** `OM_PUSH_RECEIPT_MIN_AGE_MINUTES=0` to both env blocks in `packages/cli/src/lib/testing/integration.ts` (reused-env `:1707` and fresh `commandEnvironment` `:3045`) — the latter because Expo's receipt reaper otherwise ignores rows younger than 15 minutes. `push_stub`, `TC-PUSH-003`, and `TC-CHANNEL-PUSH-001..004` are untouched. Validation: `yarn typecheck` + `yarn lint` green; unit suites green (core 888 suites / 6919 tests; fcm 27, apns 25, expo 23 tests); Playwright discovery confirms all 10 new tests appear with the flag set and are correctly skipped without it. **Not verified here:** the integration specs were never executed — this environment has no Docker, so `yarn test:integration` could not start an ephemeral Postgres/app. The in-process `fake-provider.test.ts` suites were added specifically to cover the same adapter/fake semantics in the meantime; the Playwright specs still need one real run before merge.
-- **2026-07-09** — **Added Phase 8 (planned, spec-only) — provider-adapter integration coverage without live credentials.** No code changed. Motivated by review feedback that this branch cannot be verified without live FCM/APNs/Expo keys. Documents the concrete gap: `push_stub` replaces the whole provider adapter, so **no line of `channel-{fcm,apns,expo}` executes in any integration test** — native message construction, credential parsing, client caching, and all three error→`device_unregistered` mappings are unit-tested only. Phase 8 makes each adapter's already-exported client seam (`setFcmMessagingFactory` `adapter.ts:50` / `setApnsSenderFactory` `adapter.ts:45` / `setExpoClientFactory` `adapter.ts:102`) installable from a new `OM_PUSH_FAKE_PROVIDERS` flag through each package's `di.ts`, copying the `ensurePushStubAdapterRegistered()` production-safety pattern (`push-stub-adapter.ts:76`); adds `TC-PUSH-004+` / `TC-CHANNEL-PUSH-005+` specs driving the real credential-connect route → `POST /api/notifications` → `send-push` worker → **real adapter**, asserting the delivery row *and* the provider-native message; and adds golden-file unit assertions on the message builders. **Rejected alternative — a fake HTTP provider server**, for three reasons: (a) no fake validates conformance with the real provider, since its schema is our own belief about the contract, so this is not a differentiator; (b) its only genuine gain — running the vendor SDK's client-side validation — is structurally unavailable for FCM, because `firebase-admin@13.10.0` hardcodes `const FCM_SEND_HOST = 'fcm.googleapis.com'` (`lib/messaging/messaging.js:29`) and ships no messaging emulator, so FCM would need the in-process shim regardless and a server would buy *nothing* for the provider that runs in production; (c) every existing external-service fake in this repo is in-process and env-gated (`push-stub-adapter.ts`, `communication_channels/lib/test-seed.ts`, the template's `mock-gateway-adapter.ts`), while the sole fake *service* — LocalStack in `docker-compose.yml:88-108` — appears in no `.github/workflows/` file, so `integration-discovery.ts` silently drops its four `TC-ATT-004..007` specs from every CI run. Phase 8 also removes the limitation recorded in `TC-CHANNEL-EMAIL-027`/`028`'s `test.skip` reason ("provider mock seams are process-local"); applying the same technique to `setImapClient`/`setSmtpClient` to un-skip them is noted as a **separate follow-up PR**, kept out of scope so this work does not expand into `channel-imap`. Also backfilled the missing Phase 7 bullet in `## Implementation Phases` (the section existed; the list stopped at 6).
-- **2026-07-07** — **Reconciled the `TC-CHANNEL-PUSH-*` numbering (spec↔code sync).** The Phase 4 integration ids were out of sync: `channel-fcm` shipped **two** specs (`TC-CHANNEL-PUSH-001` per-user-route refusal + `TC-CHANNEL-PUSH-002` tenant-wide connect), which collided with `channel-apns`'s `TC-CHANNEL-PUSH-002`. Renamed to a unique sequential scheme — fcm `001`+`002`, apns `002`→`003`, expo `003`→`004` (`git mv` + describe/header id updates) — and corrected the Phase 4 test-coverage clause (which had claimed "one spec per package, `001/002/003`"). No test logic changed.
-- **2026-07-06** — **Merge-readiness wiring + e2e coverage pass (no behavior change).** Closed three wiring/coverage gaps found in review. (1) **create-app template ships a functional push stack** — `packages/create-app/template/src/modules.ts` now registers `devices` (after `api_keys`) and `push_notifications` (after `communication_channels`), matching `apps/mercato/src/modules.ts` ordering, plus the provider-comment block; both modules come from `@open-mercato/core`, already a template dependency, so no `package.json.template` change was needed. (2) **The three channel packages declare their React/UI deps** — `packages/channel-{fcm,apns,expo}` each ship a `widget.client.tsx` importing `react` + `@open-mercato/ui/*` but declared neither; added `@open-mercato/ui` to `dependencies`, `react`/`react-dom` to `peerDependencies`, and `@types/react`/`@types/react-dom`/`react`/`react-dom` to `devDependencies` (matching `channel-gmail`); `yarn.lock` updated for the three workspace entries. (3) **First real e2e integration test** — `TC-PUSH-003` drives `POST /api/notifications` → the `push` strategy → the `send-push` worker via the network-free `push_stub` adapter → asserts the delivery row reaches `sent` with the plaintext `token_snapshot` and the creator's `organization_id` (locking in the `resolveNotificationContext` org-propagation fix from `2026-07-01-push-delivery-e2e-findings.md` at the integration layer). The ephemeral harness (`packages/cli/src/lib/testing/integration.ts`) now sets `OM_ENABLE_PUSH_STUB_ADAPTER=1` for the app server + Playwright/drain processes (production-safe; the adapter is inert unless a delivery row carries `provider='push_stub'`). Docs: the getting-started guide moved to `apps/docs/docs/tutorials/devices-and-push-getting-started.mdx` (registered in `sidebars.ts`, `yarn mercato auth sync-role-acls` step documented) + a CHANGELOG entry. **Follow-ups (not done here):** the "dead ACL features" cleanup was reassessed — `communication_channels.{admin,channel.push.manage,channel.import_history}` are NOT dead (they gate live routes: the admin bypass in `lib/access-control.ts`, `channels/[id]/push/register`, `channels/[id]/import-history`), so they were left intact; only `channel_{fcm,apns,expo}.{view,configure}` are genuinely unreferenced (granted in each package's `setup.ts`, never consulted by a `requireFeatures` guard — the connect flow uses `communication_channels.connect_tenant_channel`). Removing-vs-wiring those three provider-package feature pairs is deferred as a follow-up (they are brand-new, unmerged, so not yet a BC concern).
-- **2026-07-06** — **Phase 7 implemented — all channels unified on the delivery-strategy seam.** Additive + BC-preserving; one intentional corrective behavior change (in_app/email opt-out and `nonOptOut`/`silent` are now enforced on every channel, and `Notification.channels` is authoritative instead of merely descriptive). Shipped in ordered sub-phases: **(7.0)** additive nullable `Notification.channels` JSONB column (`Migration20260706120000_notifications_channels` + snapshot), `channels?` on the create/batch/role/feature schemas, persisted in `notificationFactory` + the group-key refresh path, `channels` surfaced on `NotificationDto`; optional per-type `channels?` eligibility on `NotificationTypeDefinition`. **(7.1)** single gate `notifications/lib/shouldDeliver.ts` (`shouldDeliver` + `resolveEffectiveChannels`) composing per-send target ∩ per-type eligibility ∩ registered ∩ preference/`nonOptOut` (`silent` orthogonal); unit-covered. **(7.2)** full §2c channel catalogue — `NotificationChannelDefinition` (shared), `notification-channel-registry.ts`, a second `generators.ts` plugin (`notification-channels.ts` convention → `notification-channels.generated.ts` → bootstrap `registerNotificationChannelEntries`), core `in_app`/`email`/`push` channel defs, `GET /api/notifications/channels`, and the preferences UI + helpers switched from the hardcoded `PREFERENCE_CHANNELS` list to the fetched catalogue (list kept only as a resilient fallback). **(7.3)** in-app + email extracted into first-class strategies (`lib/strategies/{in-app,email}-delivery-strategy.ts`, registered via the new `notifications/notifications.delivery-strategies.ts`), `NotificationDeliveryStrategy` gains optional `isConfigured`/`supports` capability hooks, `NotificationDeliveryContext` split into `NotificationDeliveryContextCore` + `@deprecated EmailDeliveryExtras` (flat intersection kept for BC), and the dispatch subscriber rewritten into a pure "resolve copy → loop strategies" loop with the target-channel filter (`notification.channels`, `NULL ⇒ all`) and capability short-circuits — no channel-specific branches, no inline email. **(7.4)** `notificationService` create/createBatch/createForRole/createForFeature resolve the effective channel set at create time (`resolveChannelsFor`, `NULL` when no strategies registered so un-bootstrapped envs stay all-channels) and persist it; push's inline `nonOptOut`+`isChannelEnabled` gate deleted (now enforced upstream; push keeps `silent` + its `push-fanout` short-circuit). **(7.5)** in_app visibility read-paths — shared `inAppVisibleFilter()`/`isInAppVisible()` applied to the inbox list route, `getUnreadCount`, `getPollData`, and the cached unread-count route (`channels IS NULL OR channels @> ["in_app"]`), and the live bell SSE (`create` + batch) gated so suppressed rows never bump a badge. **(7.6)** unit coverage for the gate, channel registry, and both new strategies; integration `TC-NOTIF-014` (in_app opt-out hides the row, email opt-out drops email from the resolved set but keeps in-app, push-only/`in_app`-only per-send targeting, default-send BC). **BC:** legacy `channels = NULL` rows and untargeted sends both behave exactly as before; every new field/route/hook is additive; the context split ships behind a `@deprecated` bridge per `BACKWARD_COMPATIBILITY.md`. Validation: `yarn typecheck` green (26 pkgs); notifications + push_notifications unit suites green (147); `yarn generate` clean (both generator plugins discovered + bootstrap-wired).
-- **2026-07-02** — **Deferred item added: `delivered` delivery state (device-confirmed receipt).** Documented item 7 in "Deferred to a later spec": the current terminal success status `sent` means provider-accepted, not device-received; a future `delivered` state (client-ack authoritative, provider receipts only partial) would add `'delivered'` to `PUSH_DELIVERY_STATUSES` + a `delivered_at` column, a device-scoped ack endpoint, the delivery id embedded in the push `data`, a `push_notifications.delivery.delivered` event, and a delivery-log badge/filter. Documentation/scope only — no code change.
-- **2026-07-02** — **Phase 5 review follow-ups (PR #20, patrykbojczuk — approved).** (1) **Concurrent enqueue** — replaced `fanOutPushDeliveries`' sequential per-row enqueue loop with a single `Promise.allSettled` over all inserted rows (independent jobs, no reason to serialize queue round-trips); failed enqueues are grouped by reason and marked in one `UPDATE ... where id in (...)` per reason instead of one round-trip per row. Added a batched-failure unit test. Resolves Patryk's inline suggestion. (2) **Actionable action buttons investigated + deferred** — prototyped `pushOptions.category` → iOS `aps.category` (APNs adapter + FCM `apns.payload.aps.category`) + Expo `categoryId` with unit tests across all three adapters, then **reverted**: iOS needs client-side `UNNotificationCategory` registration, Android has no payload-level button mechanism (needs a data message + Notifee), and neither path is e2e-verifiable in the current harness (Android emulator + FCM only). Recorded as deferred item 6 in "Deferred to a later spec". Validation: `push_notifications` unit suites green (28); `yarn typecheck` green.
-- **2026-07-01** — Phase 3 maintainer review (PR #18, patrykbojczuk — approved with two comments). (1) **Schedule UUID kept consistent with the platform convention** — Patryk asked whether `setup.ts` `stableScheduleUuid` always yields a valid uuid. It hashes a stable key into a uuid-shaped sha256 slice and is a **verbatim copy of the `communication_channels` `stableScheduleUuid`**, which exists **unchanged on `open-mercato/open-mercato` main** (i.e. an established upstream pattern, not introduced by this stack). Decision: keep the two identical rather than diverge in one module — if the version/variant nibbles should be RFC-4122-forced, that is a cross-cutting change to the shared convention (both modules), to be raised separately, not a one-off here. (2) **`next_retry_at` in `deliveryListFields`** — already resolved in the prior review-round commit (added to the list projection), matching the same drift the automated review flagged.
-- **2026-07-01** — Phase 3 second review round (PR #18). Addressed the automated review findings against the delivery pipeline. (1) **🟠 Duplicate fan-out made idempotent** — the `push` strategy runs inside the at-least-once persistent `notifications:deliver` subscriber, so a redelivered event re-ran the fan-out and inserted a second set of `pending` rows → a duplicate push. Added a **partial unique index** `push_notification_deliveries_notif_device_unique` on `(notification_id, user_device_id) where notification_id is not null` (entity `@Index` expression + creation migration + snapshot; `db:generate` reports no drift) and switched the strategy insert to kysely `INSERT ... ON CONFLICT DO NOTHING RETURNING id`, enqueuing only the rows actually inserted — so a re-run is a no-op. (Direct/silent pushes without a `notification_id` are out of scope and not covered by the index.) (2) **🔵 Credential-scope bug fixed** — the worker resolved channel credentials with the *notification's* org (`job.organizationId ?? job.tenantId`), but credentials are stored keyed by the *channel's* org context (`channel.organizationId ?? tenantId`); a tenant-level channel serving an org-scoped notification would miss its creds. Now uses `channel.organizationId ?? job.tenantId`. (3) **🟡 `delivery.failed` retry event** now reports `status: 'retrying'` (the logical attempt outcome) instead of the reset row status `pending`, so subscribers keying off `status` aren't misled (`willRetry` still gates ultimate-failure counters). (4) **🟡 Reaper invariant documented** — `OM_PUSH_STUCK_RECLAIM_MINUTES` must exceed the worst-case provider send time (no mid-send heartbeat), else a slow in-flight send is reclaimed → double send; documented at the knob. (5) **🔵 Nits** — detail route `openApi` now declares `pathParams`; `next_retry_at` added to `deliveryListFields` (list schema/projection no longer drift); `from`/`to` list filters validated as ISO date/datetime (`z.string().date()`/`.datetime()`) so a malformed value 400s instead of reaching Postgres. (6) **🔵 Confirmed non-issues** — `UserDevice.pushToken` and the channel fields the worker reads are **plaintext at rest** (no `encryption.ts` in devices; token secrecy is API-level), so plain `em.findOne`/`em.find` is correct (not `findOneWithDecryption`). Tests: `push-delivery-strategy` suite rewritten for the kysely path + new idempotent-re-fan-out and enqueue-failure cases; `push-delivery` suite gains credential-org-scope (org-less + org-bound channel) and `retrying`-status assertions; new `data/__tests__/validators.test.ts` for date-filter validation; `TC-PUSH-001` gains a malformed-date 400 case. Validation: `yarn typecheck` green; `push_notifications` unit suites green (31); `optimistic-lock-*` + `module-decoupling` guards green (112); `yarn db:generate` reports `push_notifications: no changes`.
-- **2026-07-01** — **Phase 4 rebased onto the updated Phase 3 base (PR #18, second review round).** Replayed the Phase 4 commits onto the new Phase 3 head, which now also carries the second-review-round changes (idempotent kysely `INSERT ... ON CONFLICT DO NOTHING` fan-out, `channel.organizationId ?? tenantId` credential scope, `retrying` failure-event status). Conflict resolution merged Phase 4's per-provider routing **into** Phase 3's idempotent path in `push-delivery-strategy.ts`: the fan-out builds one row **per device routed to the channel whose `providerKey` matches `device.pushProvider`** (devices with no provider or no matching channel are skipped — so the row set can be empty even when the user has devices, guarded by an early return), then inserts that set via the kysely `ON CONFLICT (notification_id, user_device_id) DO NOTHING RETURNING id` and enqueues only the inserted rows. Device load keeps `findWithDecryption` (Phase 4 `push_token`-at-rest) alongside Phase 3's org scoping. Also re-applied the earlier decrypt-into-command-split port (`shared.ts` `loadExistingDevice` org-aware decrypt scope; `register`/`update`/`deactivate` snapshot reads on `findOneWithDecryption`; undo reads stay on `em.findOne`). `push-delivery-strategy` unit suite reconciled to the merged kysely + per-provider model. No behavior change beyond the merge; validation re-run below.
-- **2026-07-01** — **Phase 4 PR #19 review-comment resolution.** Three self-review threads addressed. (1) 🔴 **FCM `messaging/invalid-argument` de-scoped from the permanent-token set** — FCM v1 returns it for any malformed request field, not just a bad token, so mapping it to `device_unregistered` let a single payload-shape bug progressively soft-delete every targeted device tenant-wide; it now falls through to the generic retryable `failed` path. Only `registration-token-not-registered` + `invalid-registration-token` remain permanent (this supersedes the three-code list noted in the 2026-06-26 entry below). Test updated: `invalid-argument` now asserts a transient failure, NOT `device_unregistered`. (2) 🟡 **APNs no longer leaks token material** — the successful-send `externalMessageId` was `token.slice(-12)`, which the worker persists into the admin-exposed `provider_response`; node-apn has no real message id, so it now returns an empty `externalMessageId` (the module only ever surfaces the last-8 via `token_snapshot`). (3) 🟡 **Expo ticket-vs-receipt limitation documented** — `DeviceNotRegistered` for a well-formed-but-stale token arrives in the receipt phase (`getPushNotificationReceiptsAsync`), not the synchronous ticket, so the common "app uninstalled" case isn't soft-deleted for Expo yet; added a code comment and tracked receipt polling as a Phase 6 operational follow-up. Validation: typecheck green (3 channel pkgs); adapter suites green (fcm 16 / apns 15 / expo 8).
-- **2026-07-01** — **Phase 4 review follow-ups (post-rebase).** Cross-checked the rebased Phase 4 against the #16/#17/#18 review themes (most are N/A here — Phase 4 adds no commands, CRUD, or hand-rolled GET routes; license is already MIT) and against a convention/encryption/test-coverage audit. Encryption port verified complete (every token-exposing/​re-persisting device read decrypts; no leak; no double-encryption). Closed the cheap high-value test gaps: FCM permanent-error mapping now covers all three codes + the credentials-factory-throw path; `BasePushChannelAdapter.validateCredentials` (previously untested) now has accept+reject cases; added `devices/__tests__/encryption-map.test.ts` as a `push_token`-encryption regression guard; routed the `push_stub` through the shared `readPushToken` helper. Added one `__integration__` spec per channel package (`TC-CHANNEL-PUSH-001/002/003`) proving hub registration + `validateCredentials` wiring via the credential-connect route (unregistered → 404, registered+bad-creds → 422), mirroring `channel-imap`'s `TC-CHANNEL-EMAIL-001`. Validation: typecheck green (core + 3 channel pkgs); unit suites green (fcm 16 / apns 15 / expo 8; devices+push_notifications 30; comm_channels+guards 341; license 3). Integration specs require the Playwright harness (server + DB) to execute.
-- **2026-07-01** — Phase 3 review-parity follow-ups (PR #18), after rebasing onto the updated Phase 2 base (PR #17). Applies the PR #16 findings that also recur in Phase 3, and aligns delivery-log org scoping with the platform standard. (1) **Standard org scoping on the delivery-log routes** — the list route dropped its `orgField: null` + hand-rolled `$or` narrowing for the standard `orgField: 'organizationId'`, exactly like devices (PR #16) and every other module; the detail route dropped its NULL-org special-case and now runs the row's `organizationId` (including `null`) through `isOrganizationReadAccessAllowed`. **Behavior change:** an org-restricted admin now sees only deliveries in an allowed org — tenant-level (NULL-org) rows are visible to org-unrestricted admins only (the query engine's `resolveOrganizationScope` only includes NULL when the caller's own scope includes NULL). Decision recorded: for an observability log, consistency with platform scoping wins over showing tenant-wide rows to restricted admins. (2) **openapi.ts cleanup** — removed the redundant `defaultCreateResponseSchema`/`defaultOkResponseSchema` re-exports and factory args (the factory already falls back to the shared defaults, and this read-only module has no create/del ops), the same fix PR #16 landed on devices; kept only `createPagedListResponseSchema` (the non-pure wrapper adding `paginationMetaOptional`). (3) **Coverage** — `TC-PUSH-001` extended with an org-dimension test (mirroring devices `TC-DEV-005`): an org-restricted admin gets 200 in-scope, 403 out-of-scope, and **403 on a tenant-level NULL-org row**; the existing NULL-org readability test is re-labelled as the org-unrestricted-admin case. (4) **Checked, not recurring:** kebab-case filenames (already kebab), one-file-per-command split (read-only module, no commands), dead org read-check (the detail-route guard is live — the row is loaded tenant-scoped so `organizationId` can be an unreadable org), `setup.ts` seed safety (no seed hook). Validation: `yarn typecheck` green across `@open-mercato/core` (incl. the colocated `__integration__` spec).
-- **2026-07-01** — Phase 2 review follow-ups (PR #17). (1) **Consistency fixes** applied to the preference routes/UI: emit `notifications.preference.updated` through the typed `emitNotificationEvent` seam (scope moved into the payload — `EmitOptions` only carries `persistent`), surface zod field detail via `notificationValidationErrorResponse`, admin existence check via `findOneWithDecryption`, `em.getKysely<any>()` instead of an `as any` cast, and `LoadingMessage`/`ErrorMessage` DS helpers in both clients. (2) **Admin user-picker de-reinvented** — the bespoke debounced `/api/auth/users` search + `<ul>` list is replaced by the shared `LookupSelect` (`@open-mercato/ui/backend/inputs`, `defaultOpen`, graceful `x-om-forbidden-redirect: 0` degrade), matching `staff/TeamMemberForm`; `TC-NOTIF-011` selector updated. Devices UI audited — already uses the shared FilterBar combobox, no reinvention. (3) **Added §2c — deferred follow-up:** an extensible, module-registered **channel catalogue** (generator-discovered `notification-channels.ts` aggregate → in-memory registry → `GET /api/notifications/channels`, UI reads it) so third-party modules add channels with **zero core edits**, replacing the hard-coded `PREFERENCE_CHANNELS` UI constant. Additive, no schema/logic change; **deferred to land with the work that moves in-app + email delivery into the notification service** (when channels become real delivery paths), not this PR. (4) **Reaffirmed decision:** preferences stay last-write-wins (no optimistic lock) — a per-cell idempotent toggle matrix with diff-only saves has no lost-update hazard; documented via `optimistic-lock-exempt` markers.
-- **2026-06-30** — Phase 2 review round (PR #17), rebased onto the updated Phase 1 base (PR #16). Adopts the conventions #16 settled on plus the Phase 2 review findings. (1) **Standard org scoping on the admin route** — `GET`/`PUT /api/notifications/admin/preferences` now authorize the target user via the shared `assertActorCanAccessUserTarget` guard (tenant + organization, super-admin/`__all__` bypass), replacing the hand-rolled `assertTargetUserInTenant` tenant-only check; an org-restricted admin is refused (403) for out-of-org users. Preference rows stay `(tenant, user)` — no org column (they are per-user personal settings); the gate is on *which users an admin may manage*. (2) **Race-safe + self-pruning type registry sync** — `syncNotificationTypes` writes through kysely `INSERT ... ON CONFLICT (id) DO NOTHING` (closing the concurrent cold-start duplicate-PK 500, mirroring `query_index/lib/jobs.ts`), bumps `updated_at` only on real drift, and prunes system-wide rows no longer in the catalogue (guarded by a non-empty catalogue). (3) **Diff-only preference saves** — both preference pages send only entries that differ from the loaded state (last-write-wins), so the payload is bounded by the number of toggles and the table is no longer bloated with redundant default-on rows on first save; `setPreferences` returns the changed-row count and the routes **emit `notifications.preference.updated` only on a real change**. (4) **In-module service resolution corrected** — `resolveNotificationPreferenceService` constructs from a directly-resolved request-scoped `em` (the module convention, mirroring `resolveNotificationService`), because the request container does not expose the module's scoped service bindings. The `notificationPreferenceService` DI registration is **retained** as the cross-module/worker seam advertised by `AGENTS.md` (it is a contract surface; consumed by the future Phase 3 push strategy). (5) **Decision:** preferences stay last-write-wins (no optimistic lock) — a personal toggle matrix, not a concurrent field edit. (6) Coverage: new `NotificationPreferenceMatrix` diff unit test, `TC-NOTIF-011` extended (catalogue idempotency / empty-diff no-op), new `TC-NOTIF-012` (admin org-dimension scoping, mirroring `TC-DEV-005`).
-- **2026-06-30** — Phase 1 review round (PR #16). (1) **Organization scoping** — both list routes moved from `orgField: null` (tenant-only) to the standard `orgField: 'organizationId'` like every other module; the column stays nullable and the query engine's org scope is null-aware (unrestricted callers / scopes including null still see null-org rows). (2) **Org added to device identity** — the active-unique index is now `(tenant, coalesce(org, nil-uuid), user, device)`, **superseding** the 2026-06-03 note that identity stays `(tenant, user, device)`; this removes the inconsistency where a re-registration in another org silently moved an existing row between organizations. Shipped as a dedicated migration (`Migration20260630120000`) so existing databases pick up the new index, not as an in-place edit of the table-creation migration. (3) **Self routes scoped to the active org** (option B) — `PUT`/`DELETE /api/devices/:id` now load the device with the caller's active-org filter (a device outside the current org reads as 404), matching the list and the user-owned-resource convention (e.g. progress jobs). (4) **`last_seen_at` fix** — the update command only advances `last_seen_at` when the client explicitly sends `lastSeenAt`; metadata-only edits (e.g. an admin changing `push_provider`) no longer bump presence. (5) Removed the dead `isOrganizationReadAccessAllowed` pre-check in admin register-on-behalf (it could never fail once `loadExistingDevice` became org-scoped; per-org identity makes the scenario moot). (6) Commands split one-file-per-command (`register`/`update`/`deactivate` + `shared` + `index`) and redundant OpenAPI re-exports dropped. (7) Fixed the `devices` module `license` metadata from `Proprietary` → `MIT` (it is an OSS core module; was tripping `license-metadata-consistency`). (8) Added integration coverage `TC-DEV-003` (last_seen_at), `TC-DEV-004` (optimistic lock), `TC-DEV-005` (organization dimension).
-- **2026-06-30** — **`sendSilentPush` removed; silent push is now just the normal notification flow.** Per maintainer request, there is no dedicated silent-push primitive at all. A silent push is simply a notification whose **type** is declared `silent: true`, created through the ordinary `notificationService.create()` path — exactly the same flow as a visible push. The `push` delivery strategy already derives `silent` from the type, sends a content-available (data-only) push, and skips user-facing copy; the in-app `Notification` row is still created and per-channel preferences still apply (force with `nonOptOut: true`). **Removed:** `push_notifications/lib/send-silent-push.ts` + its unit suite. The DI service object `pushNotificationService` (now exposing only `sendCustomPush`) + the `PushNotificationService` interface moved to `lib/send-custom-push.ts`; `di.ts` + `api/custom-send/route.ts` imports updated. **Reverted:** the interim `deliver-notification.ts` email guard for silent types — per-channel respect-of-`silent` (email/in-app) is deferred to the Phase 7 channel-seam work, not handled here. `sendCustomPush` (visible admin one-off) is unchanged. This supersedes the earlier Phase 5 "no `Notification` row / no preference check" statements. **BC:** none — the entire `push_notifications` feature (incl. the now-deleted `sendSilentPush`) is unreleased; the `pushNotificationService` DI name is unchanged. Validation: `send-custom-push` + `deliver-notification` + `push-delivery-strategy` + `push-delivery` + `push-fanout` suites green; `grep sendSilentPush` → no matches in `src`.
-- **2026-06-26** — **Notification `category` + `silent` type metadata implemented** (downstream parity, governance item 2). (a) **`category`:** added optional free-form `category?: string` to `NotificationTypeDefinition` (`packages/shared/src/modules/notifications/types.ts`) — a grouping label (e.g. `security`, `orders`) so a client (typically a mobile app) can list/group types. Not an enum. (b) **`silent` DB mirror:** Phase 5 added `silent` to the in-memory type registry only; it now also gets a `notification_types.silent` column so remote clients can read it. (c) **DB columns:** added `category text null` + `silent boolean not null default false` to `notification_types` (additive migration `Migration20260626140000_notifications_type_category_silent` + snapshot), persisted by `syncNotificationTypes` (create + drift, alongside `label_key`/`description_key`/`non_opt_out`). (d) **API:** `GET /api/notifications/types` now returns `category` (nullable) + `silent`, added to `notificationTypeItemSchema`. No module sets a `category` value yet — it is opt-in per type definition. **BC:** fully additive (optional type-def field, additive columns, additive API fields). Tests: extended `notification-type-registry` suite (sync mirrors category/silent on create + drift). Validation: `yarn generate`, `yarn typecheck`, affected core suites. No HTTP write trigger — category/silent are type-level metadata fed from code definitions, surfaced read-only via the types API.
-- **2026-06-26** — **`non_opt_out` types implemented** on `feat/push-silent-and-flexible-payload` (downstream parity, governance item 2). A type may now be declared forced-on: added optional `nonOptOut?: boolean` to `NotificationTypeDefinition` (`packages/shared/src/modules/notifications/types.ts`) — a recipient cannot opt out and a preferences UI should render it locked. (a) **Enforcement:** the `push` delivery strategy (`push_notifications/lib/push-delivery-strategy.ts`) now skips the `isChannelEnabled` opt-out gate when `type.nonOptOut === true` (second type-level bypass alongside `silent`); a forced type stays a **visible** notification (`silent:false`). (b) **DB mirror:** added a `non_opt_out boolean not null default false` column to `notification_types` (additive migration `Migration20260626130000_notifications_non_opt_out` + snapshot), persisted by `syncNotificationTypes` (create + drift). (c) **API:** `GET /api/notifications/types` now returns `nonOptOut` (added required field to `notificationTypeItemSchema`) so clients can lock the toggle. (d) **Write-guard:** `NotificationPreferenceService.setPreferences` filters out items whose type is `nonOptOut` (via the in-memory `getNotificationType`), so the stored per-channel state can never contradict enforcement. (e) **Seed types:** marked `auth.account.locked` and `auth.login.new_device` `nonOptOut: true` (security alerts). **BC:** fully additive (optional type-def flag, additive column with default, additive API field, stricter-but-internal preference write). Tests: extended `push-delivery-strategy` (forced-type bypass) and new `notificationPreferenceService` suite (write-guard drop/keep). Validation: `yarn generate` clean, `yarn typecheck` green (24 pkgs), affected core suites green (15). Frequency-cap `non_opt_out` bypass (governance item 3) remains deferred.
-- **2026-06-26** — **Phase 5 (silent push + flexible push payload) implemented** on `feat/devices-push-e2e`. (a) **Silent push:** added `pushNotificationService.sendSilentPush` (`push_notifications/lib/send-silent-push.ts`, DI `pushNotificationService`) — a content-available wake-up to one user's devices with **no** in-app `Notification` row and **no** preference check, gated on a notification type registered `silent: true` (new optional `silent?` on `NotificationTypeDefinition`, in-memory registry only — validated per call, never a runtime flag). The strategy's device/channel fan-out was extracted into `lib/push-fanout.ts` (`fanOutPushDeliveries`, preference-agnostic) and reused by both the `push` strategy and `sendSilentPush`; the strategy now derives `silent` from the type and skips the preference gate for silent types. Added a `silent` boolean snapshot column to `push_notification_deliveries` (additive migration + snapshot). (b) **Flexible payload:** added optional `data` (arbitrary app-readable string map — persisted on `Notification`, exposed in the DTO, delivered in the push data payload) and `pushOptions` (flat `sound`/`badge`/`image`/`priority`/`channelId`/`body` map — persisted, push-only) to the notification create/batch/role/feature schemas + `Notification` entity (two nullable JSON columns + additive migration + snapshot) + factory + `toNotificationDto` (`data` only). The push envelope (`communication_channels/lib/push-envelope.ts`) now carries `options` + `silent` (`PushOptions`, `readPushEnvelope`, `resolvePushBody`); the worker threads them into `content.raw`; the FCM/APNs/Expo adapters branch on `silent` (data-only content-available — FCM omits `notification`, APNs sets `contentAvailable`/`pushType:'background'`, Expo sends `_contentAvailable`) and map `pushOptions` onto each provider's native message (extracted pure `buildFcmMessage`/`buildApnsNotification`/`buildExpoMessage` for testability); the `push_stub` records `silent`/`data`/`options`. **No new HTTP route / ACL / event** — silent push is a server-side primitive other modules trigger via DI from a subscriber/command (mirrors covo's `esims`/`dns_filtering` subscribers). **BC:** all additive (type-def flag, create-schema + entity columns, delivery `silent` column, envelope `options`/`silent`, new DI name `pushNotificationService`). Tests: `send-silent-push` unit; extended `push-delivery-strategy` (silent + data/options), `push-delivery` (envelope), `push-envelope` (options/silent/`resolvePushBody`), and per-adapter silent/options suites; `TC-NOTIF-013` integration (visible `data`/`pushOptions` round-trip). Silent push has no HTTP trigger → unit-covered + documented manual e2e. Reframes the dissolved Phase 5 and moves silent push out of the deferred tier (frequency caps remain deferred).
-- **2026-06-26** — **Phase 4 review-fix pass** (sync + DRY). (1) **Workspace sync:** added the three new packages to the four files that enumerate channel packages alongside `channel-gmail`/`channel-imap` — `apps/mercato/package.json` deps, `.github/workflows/package-previews.yml` (pkg-pr-new publish list), and the create-app template's `src/modules.ts` + `package.json.template`. (Root `workspaces` is a `packages/*` wildcard; generated registries + integration auto-discovery + `official-modules.json` were already in sync.) (2) **DRY:** extracted a shared `communication_channels/lib/push-adapter.ts` — `BasePushChannelAdapter` (abstract; provides `channelType:'push'` + `pushChannelCapabilities` + the no-op outbound-only inbound surface + passthrough `convertOutbound` + schema-driven `validateCredentials`), the `DEVICE_UNREGISTERED` constant + `deviceUnregisteredResult()` helper (single source of truth for the uniform sentinel, now also consumed by `push-delivery.ts`), and `readPushToken`/`MISSING_PUSH_TOKEN_RESULT`. The three provider adapters **and** the `push_stub` now extend the base, so each concrete adapter is just `providerKey` + `credentialsSchema` + `sendMessage` (~60 lines of boilerplate removed per adapter). This is push-family-specific and does NOT change the per-package standalone convention the email adapters (gmail/imap) use. (3) Added `apiVersions` to each integration for parity with gmail/imap. (4) Confirmed the per-user `widgets/injection/connect` widget is intentionally **omitted** — that surface is for per-user account connect (gmail/imap OAuth/IMAP); push providers are tenant-level credentials connected through the integrations credentials flow (like stripe/akeneo). Re-validated: typecheck green (24 pkgs), build:packages clean, adapter suites (fcm 11 / apns 7 / expo 5) + core push/guard suites (128) green.
-- **2026-06-26** — **Phase 4 (reference provider adapters) implemented** on `feat/devices-push-e2e`. Three new hub `ChannelAdapter` packages — `packages/channel-fcm` (`firebase-admin`), `packages/channel-apns` (`@parse/node-apn`, native HTTP/2 + token `.p8` auth — retiring the flagged APNs risk by reusing the transport the downstream covo build runs in prod via `node-pushnotifications`), `packages/channel-expo` (`expo-server-sdk`) — each mirroring `channel-gmail`'s scaffold (`package.json`/`build.mjs`/`watch.mjs`/`jest.config.cjs`/`tsconfig.json` + `index/setup/di/acl/integration` + `lib/{adapter,credentials,health}`), `providerKey` `fcm|apns|expo`, `channelType:'push'`, registered at import via `setup.ts` + `di.ts` (guarded by `hasChannelAdapter`), provider creds on `IntegrationCredentials` for `channel_<providerKey>` (FCM service-account JSON; APNs `{p8Key,keyId,teamId,bundleId,production}`; Expo optional `accessToken`), connected through the **existing** `communication_channels` credentials-connect flow (no new admin UI). Each adapter reads `metadata.pushToken` + the push envelope via the new shared `communication_channels/lib/push-envelope.ts` (`readPushEnvelope`), draws capabilities from the new shared `communication_channels/lib/push-capabilities.ts` (`pushChannelCapabilities`, which the `push_stub` adapter was refactored to reuse — single source of truth), and maps each provider's permanent-token errors to the **uniform** `device_unregistered` sentinel (`error:'device_unregistered'`, `metadata.unregistered:true`) so the Phase-3 worker's device soft-delete fires identically: FCM `messaging/registration-token-not-registered` / `messaging/invalid-registration-token` / `messaging/invalid-argument`; APNs `Unregistered` (410) / `BadDeviceToken` (400); Expo `DeviceNotRegistered` ticket + malformed `!Expo.isExpoPushToken`. Each adapter caches its provider client per credentials hash (firebase-admin app / `apn.Provider` / `Expo`) — re-init per send is wasteful and firebase-admin errors on duplicate app names — and isolates the SDK behind a test seam (`setFcmMessagingFactory` / `setApnsSenderFactory` / `setExpoClientFactory`) so unit suites run network-free. **Per-device provider routing:** `push-delivery-strategy.ts` now loads **all** active push channels indexed by `providerKey` and snapshots a provider **per device** (`device.pushProvider` → matching channel; devices with no provider or no matching channel are skipped), replacing Phase 3's single-channel-for-all-devices behavior — the worker already resolves adapter + creds by `delivery.provider`, so no worker change. Wired into `apps/mercato/src/modules.ts` (`channel_fcm`/`channel_apns`/`channel_expo`). Validation: `yarn install` (firebase-admin@13, @parse/node-apn@6.5, expo-server-sdk@3.15), `yarn generate` clean (structural-cache purge OK once `dist` built), `yarn build:packages` green (no esbuild require-in-ESM warnings after switching Expo to dynamic `import`), `yarn typecheck` green across all 24 packages, three adapter unit suites green (fcm 11, apns 7, expo 5), updated `push-delivery-strategy` suite green (multi-provider routing), and the wider communication_channels/notifications/devices/push core suites green (860 suites / 6724 tests). Real provider sends are SDK-mocked in CI; documented manual end-to-end (connect channel → register device → notify → `sent` row → revoke token → device soft-delete). Post-merge: `yarn mercato auth sync-role-acls` (new `channel_{fcm,apns,expo}.{view,configure}` features). `yarn lint` remains blocked by the pre-existing ESLint-10 toolchain crash (unrelated).
-- **2026-06-26** — **Downstream parity review + scope update.** Diffed the three upstream modules against the downstream `user_notifications` module (covo-backend) to settle how close a "1:1 logic" port should be. Decision: keep the upstream re-architecture (3-module split, `communication_channels` hub provider seam, channel-row preferences, generic `user_devices` registry, hard token secrecy) as **intentional divergences**, and **defer the downstream governance/operational tier** — notification categories, priority, `non_opt_out` enforcement, `silent`/`hidden_from_settings`/`group_key` metadata, frequency caps (`FrequencyGuardService`), **silent push** (highest-priority deferred item), admin custom-send, delivery-table partitioning + scheduled worker, GDPR export/purge, per-device locale, and cross-user token-handoff deactivation. Recorded all of this in the expanded "Out of scope" list and the new "Downstream Parity Review" section. No code change — documentation/scope only.
-- **2026-06-26** — **Phase 3 review-fix pass #2** on `feat/devices-push-e2e` (worktree code review). (1) **Nullable-org delivery visibility:** tenant-level notifications produce delivery rows with `organization_id IS NULL`; the read APIs were hiding them from org-restricted admins. The list route (`api/deliveries/route.ts`) now scopes a restricted principal to `organization_id ∈ allowed **OR** NULL` via a `$or` filter, and the detail route (`api/deliveries/[id]/route.ts`) skips the per-organization read-access check for org-less rows (tenant scope already isolates them). Unrestricted principals are unchanged. (2) **Credential refresh on send:** `processPushDeliveryJob` now calls `refreshCredentialsIfNeeded` before `sendMessage`, mirroring the reference `test-send` flow, so Phase-4 OAuth-token providers (FCM/APNs) don't send with a near-expiry token; it's a no-op for adapters without `refreshCredentials` (the `push_stub`). (3) **Event contract:** documented that `push_notifications.delivery.failed` fires on every failed attempt and carries `willRetry:true` for retries — subscribers counting ultimate failures MUST filter `willRetry !== true` (added `description` to the event declaration). (4) **`TC-PUSH-001` hardening:** added an ORM-backed detail describe block that seeds real `push_notification_deliveries` rows via SQL (`dbFixtures.withClient`) and exercises the entity-backed detail route — proving token secrecy against real data (full token never in the response body; only the last-8 `token_snapshot`), tenant isolation (a foreign-tenant row → 404), and tenant-level (org-less) row readability. The list route reads the eventually-consistent query index, so the authoritative secrecy/scoping coverage now lives on the detail route. Validation: `yarn typecheck` green across all 21 packages; `push_notifications` unit suites green (15) and `optimistic-lock-*`/`module-decoupling` guards green (112).
-- **2026-06-26** — **Phase 3 review-fix pass** on `feat/devices-push-e2e`. (1) **Strategy ordering:** the push strategy now checks the per-tenant active push `CommunicationChannel` **before** the per-recipient `isChannelEnabled` preference query, so the common no-push-channel tenant short-circuits without the extra preference DB lookup on the notification hot path (strategy is `defaultEnabled: true`, runs for every notification). (2) **Enqueue resilience:** a failed `enqueuePushDelivery` now marks that delivery row `failed` (`enqueue_failed`) instead of leaving it orphaned in `pending` forever. (3) **Migration:** added the missing reversible `down()` (`drop table push_notification_deliveries`) to match the repo convention. (4) **New jest E2E suite** `lib/__tests__/push-stub-adapter.test.ts` drives the **real** `push_stub` adapter through the **real** `processPushDeliveryJob` (the sibling `push-delivery` suite mocks the adapter) — proves stub registration, `channelAdapterRegistry.get()` resolution, sent/retry branches, and the `unregistered → devices.devices.deactivate` system-actor (`auth:null, systemActor:true`) soft-delete dispatch. (5) **`TC-PUSH-001` fix:** the "unknown delivery → 404" case used an id (`…0000000000aa`) whose RFC-4122 variant nibble is invalid, so strict `z.string().uuid()` returned 400, not 404; switched to a valid-but-nonexistent v4 UUID. All 5 API tests now pass against the dev server (after `yarn mercato auth sync-role-acls` granted the new feature). Validation: `yarn typecheck` green across all 21 packages; `push_notifications` + guard suites (`optimistic-lock-*`, `module-decoupling`) green (127 tests); `TC-PUSH-001` green (5/5). Note: in dev, the new ACL grant only takes effect after the RbacService cache (sqlite, 5-min TTL) expires or is cleared.
-- **2026-06-25** — **Phase 3 (`push_notifications` rails + delivery-log UI) implemented** on `feat/devices-push-e2e`. New core module `packages/core/src/modules/push_notifications/` (registered in `apps/mercato/src/modules.ts`): `PushNotificationDelivery` (`push_notification_deliveries`) append-only log — **optimistic-lock-exempt** (background-job/log row; not added to the curated editable-entities guard); cross-module soft links to `devices:user_device` + `notifications:notification` via `data/extensions.ts`. The `push` `NotificationDeliveryStrategy` (`lib/push-delivery-strategy.ts`, `defaultEnabled: true`) resolves the recipient's devices + the tenant push `CommunicationChannel` **softly via DI tokens** (`UserDevice`/`CommunicationChannel`, no import-time coupling), gates on `NotificationPreferenceService.isChannelEnabled(..., 'push')`, snapshots `provider` + last-8 `token_snapshot` (never the full token), inserts pending rows and enqueues one `send-push` job per device. The worker (`workers/send-push.worker.ts` + `lib/queue.ts` + `lib/push-delivery.ts`, mirroring the webhooks queue/local-worker pattern) resolves the hub adapter via `channelAdapterRegistry` + creds via `integrationCredentialsService` and calls `convertOutbound` → `sendMessage` (the `test-send` flow), retries transient failures with exponential backoff (3 attempts), and on the uniform `unregistered` sentinel soft-deletes the device through the `devices.devices.deactivate` command dispatched with a `{ auth: null, systemActor: true }` ctx (audit/events/undo stay consistent; no devices business-logic import). **Strategy registration** uses a new notifications **`delivery-strategies` generator plugin** (`notifications/generators.ts` + `lib/delivery-strategies-registry.ts`) that discovers each module's `notifications.delivery-strategies.ts` and contributes a `runBootstrapRegistrations()` call — mirrors `security.mfa-providers`; keeps `push_notifications` self-contained with no `bootstrap.ts` edit. Real FCM/APNs/Expo adapters are **not** in this phase (Phase 4 channel packages); an in-process `push_stub` adapter (`lib/push-stub-adapter.ts`, gated by `OM_ENABLE_PUSH_STUB_ADAPTER`, registered in `di.ts` like the communication_channels test-seed adapter) covers tests with token sentinels for sent / retryable-fail / unregistered. **UI:** read-only delivery-log list + detail backend pages (`push_notifications.view_deliveries`, settings → Module Configs), `StatusBadge` map `pending→info / sent→success / failed→error / skipped→neutral`; i18n en/de/es/pl. New ACL feature `push_notifications.view_deliveries` (admin/superadmin via `push_notifications.*`), 2 events. Validation: `yarn generate` clean, `yarn db:generate` emits only the push migration + snapshot, `yarn typecheck` green across all 21 packages, guard suites pass (`optimistic-lock-editable-entities`, `optimistic-lock-ui-coverage`, `module-decoupling` — 49), new `push-delivery` + `push-delivery-strategy` unit suites pass (11), `TC-PUSH-001` API suite colocated. Post-merge: run `yarn mercato auth sync-role-acls`. `yarn lint` remains blocked by the pre-existing ESLint-10 toolchain crash (unrelated).
-- **2026-06-25** — **Phase 2 (`notifications` extensions) implemented** on `feat/devices-push-e2e`. Key delta from the original draft: the "in-memory type registry" is **not** a new defaults file — it **reuses the existing per-module `notifications.ts` → generated `notifications.generated.ts` `NotificationTypeDefinition` aggregate** (the seam the draft's "reconcile registered `NotificationTypeDefinition` calls" already referred to). A core `lib/notification-type-registry.ts` is fed at bootstrap via `registerNotificationTypes(notificationTypes, { replace: true })` in `apps/mercato/src/bootstrap.ts` (mirrors `registerMessageTypes`), and `syncNotificationTypes(em)` mirrors the catalogue into the new `notification_types` table (`tenant_id IS NULL`, idempotent) — triggered lazily on `GET /api/notifications/types` (process-gated) and via the `notifications.type_registry.sync` subscriber (emitted from `setup.ts` `seedDefaults`). Field map: `id←type`, `label_key←labelKey ?? titleKey`, `description_key←descriptionKey ?? null`; `labelKey`/`descriptionKey` added **additively** to `NotificationTypeDefinition`. **No new frozen type ids minted.** `NotificationPreference` is lazy-seeded (absent row ⇒ enabled) and read/written only through DI-registered `NotificationPreferenceService`; `PUT /api/notifications/preferences` uses the service + `runGuardedNotificationWrite` mutation guard (the existing `settings`-route pattern), **not** the command bus — the "(set via command)" phase-list parenthetical was overridden by the detailed spec text. `NotificationPreference` carries `updated_at` but is intentionally **excluded** from the `optimistic-lock-editable-entities` curated list (idempotent self-setting, service write). New ACL feature `notifications.manage_preferences` (granted to `employee`; admin/superadmin via `notifications.*`). Validation: `yarn generate` clean, `yarn db:generate` emits only the notifications migration + snapshot, `yarn typecheck` green across all packages, `yarn workspace @open-mercato/{shared,core} build` green, guard suites + notifications unit suites pass (`optimistic-lock-editable-entities`, `optimistic-lock-ui-coverage`, `module-decoupling`, + new `notification-type-registry` test), i18n hardcoded check flags no new Phase-2 strings. Post-merge: run `yarn mercato auth sync-role-acls`.
-- **2026-06-25** — Phase 1 finalize/verify pass. Confirmed the `devices` module is feature-complete on `feat/devices-push-e2e`: both integration suites are colocated in `__integration__/TC-DEV-001.spec.ts` (self-serve `TC-DEV-001` + admin-tree `TC-DEV-002`), so the earlier "remaining: TC-DEV-002" phase note was stale and is now corrected (phase list + status line updated to "complete"). Validation: `yarn generate` clean (no generated diff), `yarn typecheck` green, and the three devices-governing guard suites pass (`optimistic-lock-editable-entities`, `optimistic-lock-ui-coverage`, `module-decoupling` — 49 tests). Phase 1 is PR-ready against `develop`.
-- **2026-06-25** — **Module 3 architecture revised to ride the `communication_channels` hub** (maintainer request on PR #2595: push must be an end-to-end feature built on the hub, not a standalone provider seam). Verified feasible with **no `ChannelAdapter` contract change**: FCM/APNs/Expo become hub `ChannelAdapter` packages (`packages/channel-{fcm,apns,expo}`, `channelType:'push'`, outbound-only, `pollIntervalSeconds=null`); provider creds live on a tenant-scoped `CommunicationChannel` (encrypted `IntegrationCredentials`) while device tokens stay in `UserDevice`; the `push` delivery strategy fans out per device and invokes `adapter.sendMessage` directly (the `test-send` route pattern). The `PushProvider` interface in the original draft is superseded by the hub adapter registry; a `push_stub` adapter covers tests. Phases re-scoped: Phase 4 now ships three channel-adapter packages; preferences UI folded into Phase 5. Feasibility confirmed against `communication_channels/api/post/channels/[id]/test-send/route.ts`, `lib/connect-channel.ts`, and `lib/adapter.ts`. Decision driven by branch `feat/devices-push-e2e`.
-- **2026-06-05** — Phase 1 optimistic-locking pass (review follow-up). Device **edits** are now optimistically locked: the admin detail GET returns `updated_at`, the admin edit `CrudForm` forwards it as `optimisticLockUpdatedAt` (sending the expected-version header), and `executeUpdate` enforces it via `enforceCommandOptimisticLock` (covers both the self `PUT /api/devices/:id` and admin `PUT /api/devices/admin/devices/:id`, since both funnel through it). Enforcement no-ops when the header is absent, so existing mobile self-update clients are unaffected. `UserDevice` was added to the curated `optimistic-lock-editable-entities` guard. Device **deactivate** is deliberately **exempt** (idempotent soft-delete of a registry row, not a concurrent field edit) — marked inline on the admin list page's raw `DELETE` and intentionally not enforced in `executeDeactivate`.
-- **2026-06-03** — Phase 1 security/UX hardening. (1) `push_token` secret handling extended beyond the original "not in list/detail" rule: it is now redacted from the audit-log command `snapshotBefore`/`snapshotAfter` (and therefore the derived `changesJson`) and stripped from the mutation-guard payload, closing leaks via `audit_logs.view_self` and enterprise record-lock conflict details; the real token is kept only in the non-exposed undo payload so commands stay undoable. (2) Admin register form renders the `push_token` field as a password input. (3) Confirmed and documented that device identity stays `(tenant, user, device_id)` — `device_id` is a per-app-install id (iOS IDFV; a generated UUID for web), so the iOS app and a browser on the same physical device register as distinct rows; `platform` is descriptive metadata, **not** part of the unique key (adding it would weaken the one-row-per-install guarantee).
-- **2026-06-02** — Phase 1 (`devices` module) implemented. Deltas from the original draft, now reflected above: (1) APIs split into self-serve (`/api/devices`, scoped to the acting user) vs admin (`/api/devices/admin/devices`, `devices.admin`) trees instead of a single path with optional cross-user listing; (2) added admin backend pages — list + **create (register-for-user)** + **edit** — beyond the draft's list-only page; (3) `makeCrudRoute` list routes pass `events: { module:'devices', entity:'user_device' }` so the CRUD-cache tag matches the command `resourceKind` (writes now bust the list cache — fixes stale lists under `ENABLE_CRUD_API_CACHE`); (4) shared `api/deviceOps.ts` + `api/deviceList.ts` helpers; (5) customer-role `defaultRoleFeatures` deferred (employee/admin only in Phase 1); (6) integration coverage `TC-DEV-001` + `TC-DEV-002`. Phases 2–6 (notifications extensions, push_notifications, providers, purge worker) remain pending.
-- **2026-04-28** — Initial draft. Three-part change: new `devices` module (generic device registry), new `push_notifications` module (push tokens + strategy + provider seam + worker), and additive extensions to existing `notifications` module (DB-backed type registry + channel-agnostic preferences). Categories, priority, non-opt-out, and daily/weekly frequency caps deferred to a later spec. Email/SMS channels designed-for but not built. Verified no existing upstream issue/PR via `gh search` on 2026-04-28. Design informed by a downstream production implementation; app-specific coupling is stripped for core.
+### 2026-07-09
+- **First real execution of the Phase 8 integration suite — four spec defects found and fixed.** The specs had never run (the authoring environment had no Docker), so drift accumulated unnoticed across PRs #30 and #38. None of the defects were in shipped code; all four were in the specs. (1) `TC-PUSH-002` asserted `201` on the custom-send no-op branch, which PR #38 deliberately changed to `200 OK` so a caller can distinguish "sent" from "matched nobody" — the spec now asserts `200` plus `warning: 'no_matching_devices_in_scope'`. (2) `TC-CHANNEL-PUSH-003` (APNs) and (3) `TC-CHANNEL-PUSH-004` (Expo) still asserted `422` from the **per-user** connect route, which PR #30 changed to `403 provider_is_tenant_scoped` when it made push providers tenant-scoped; the FCM sibling was updated then, these two were not. Both now assert `403` on the per-user route and were given a **tenant**-route case so the adapter's own `validateCredentials` (→ `422`) is still covered — Expo keeps its wrong-typed `accessToken`, because its all-optional credentials mean an empty `{}` would validate and create a stray channel. (4) `TC-PUSH-009` used `page.getByLabel(...)` and `getByRole('option')`, neither of which can ever resolve against `CrudForm`: its `<label>` is a sibling of the control with no `htmlFor` (`CrudForm.tsx:4234`), and `ComboboxInput` renders suggestions as `<Button>`s, never ARIA `option`s. Rewritten to locate the field through its label's wrapper. Separately, `TC-PUSH-005` and `TC-PUSH-009` were **mis-budgeted**: `test.slow()` only triples the config's `timeout: 20_000` to 60s, which their own 60s poll (resp. 30s poll plus two 30s visibility waits) would consume entirely, leaving nothing for setup — both now call `test.setTimeout(120_000)`.
+- **Spec rewritten for readability.** Restructured onto `.ai/skills/om-spec-writing/references/spec-template.md`. Rationale that previously lived in prose, strikethrough edit-scars, and changelog entries is consolidated into § Design Decisions and § Alternatives Considered. Removed the superseded `PushProvider` interface draft (never built — the hub's `channelAdapterRegistry` is the seam), the stale "§2c DEFERRED" heading (implemented in Phase 7.2), the duplicated Phase 7/8 narratives, and the resolved Open Questions. Risks converted to the required Risk Register format; a Final Compliance Report replaces the per-phase checklists. No behavior or code change.
+- **Phase 8 implemented — provider-adapter e2e coverage without live credentials.** Test-only, fully additive. Each channel package gains `lib/fake-provider.ts` with `ensure{Fcm,Apns,Expo}FakeProviderInstalled()`, called from its `di.ts` `register()` behind `OM_PUSH_FAKE_PROVIDERS`. The fake swaps **only the SDK client** — never `registerChannelAdapter`, which throws on a duplicate provider key — so the real adapter's message construction, credential parsing, client caching, and error→sentinel mapping all execute. Both open design questions resolved during implementation, the second **against** the spec's stated preference: the native message cannot ride `provider_response` (no adapter returns `metadata` on success; APNs deliberately hardcodes an empty `externalMessageId` that must never carry token material), so the fakes append to a JSONL sink at `<QUEUE_BASE_DIR>/push-fake-messages.jsonl`. New: `TC-CHANNEL-PUSH-005..007`, `TC-PUSH-004..009`, per-package `message-golden.test.ts` and `fake-provider.test.ts` (including an inertness case proving the flag-less `ensure…()` installs nothing).
+- **Phase 8 review fixes.** Seven self-review findings, two of which changed the design: a **false pass** from the un-truncated sink on the reused-environment path (fixed with `crypto.randomBytes` run-unique token tails plus a `since` filter), and an **APNs golden fidelity gap** — the fixture built against `{}` instead of a real `apn.Notification`, pinning a projection node-apn never serializes. Fixing it caught a wrong assumption: custom `data` rides as top-level keys beside `aps` on every branch, not just silent. Also: `isDeviceSoftDeleted` returned `true` for a missing row, making the headline assertion of `TC-PUSH-004`/`008` vacuous.
+
+### 2026-07-07
+- Reconciled `TC-CHANNEL-PUSH-*` numbering (fcm carries `001`+`002`; apns `003`; expo `004`).
+- Aligned the three channel packages to the monorepo's lockstep `0.6.5`, unblocking `check-version-alignment.sh`.
+
+### 2026-07-06
+- **Phase 7 implemented — all channels unified on the delivery-strategy seam.** In-app and email extracted into first-class strategies; the single `shouldDeliver` gate; the module-registered channel catalogue; `Notification.channels` made authoritative. One intentional corrective behavior change (per-channel opt-out and `nonOptOut`/`silent` now enforced everywhere). Two spec-vs-code divergences corrected: `Notification.channels` did not previously exist, and the §2c catalogue — documented as deferred — had never been built.
+- **Merge-readiness pass.** `create-app` template registers `devices` + `push_notifications`; the three channel packages declare their React/UI deps; `TC-PUSH-003` locks in the `resolveNotificationContext` org-propagation fix at the integration layer.
+
+### 2026-07-03
+- Push-provider channels made tenant-wide (`channelScope: 'tenant'`, `organization_id = NULL`, credentials pinned to `organizationId = tenantId`). Closed a privilege-escalation bypass on the per-user connect route and a cross-org credential-orphaning bug. See the companion spec.
+
+### 2026-07-01
+- Three e2e blockers found and fixed with real FCM keys: notifications were always created tenant-level so org-scoped devices never matched; the worker resolved channel credentials under the wrong organization; encrypted columns were not decrypted on the delivery read path. See the companion spec.
+
+### 2026-06-30
+- **`sendSilentPush` removed.** Silent push now rides the ordinary `notificationService.create()` flow — the in-app row is written and preferences still apply. `silent` controls delivery *style*, not enforcement; only `nonOptOut` bypasses the gate.
+
+### 2026-06-26
+- Phase 5 implemented (silent push, arbitrary `data`, flat `pushOptions`), plus `category`, `non_opt_out`, `silent`, and `hidden_from_settings` type metadata.
+- Phase 4 review corrections: FCM `messaging/invalid-argument` de-scoped from the permanent-token set; APNs stopped leaking a 12-char token slice through `externalMessageId`; Expo's receipt-phase `DeviceNotRegistered` documented (polling landed later).
+
+### 2026-06-25
+- **Module 3 re-architected** to deliver push through the `communication_channels` hub (FCM/APNs/Expo as hub `ChannelAdapter`s), per the maintainer's request on upstream PR #2595. The standalone `PushProvider` interface is dropped. Verified feasible with no `ChannelAdapter` contract change.
+- Admin UI split per phase, so every phase is a demoable vertical slice.
+
+### 2026-04-28
+- Initial specification. Verified via `gh search` that no existing upstream issue or PR covers push, devices, preferences, or a persistent type registry.
