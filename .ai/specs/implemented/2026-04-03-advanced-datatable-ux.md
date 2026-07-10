@@ -347,7 +347,14 @@ type ColumnChooserField = {
 
 **Solution**: A `rowDetail` prop renders a full-width `<tr>` with a single `colSpan` cell immediately beneath every row for which `isExpanded(row)` returns true, containing `render(row)`. The detail is an accordion (pushes following rows down), not an overlay. `colSpan` is computed from the row's visible cells plus the optional bulk-selection and row-actions spacer columns, so the panel always spans the full table width.
 
-DataTable stays presentational: the host owns expansion state (typically a `Set` of expanded row ids toggled from `onRowClick` or a chevron column cell). Backward compatible — no extra `<tr>` is rendered while a row is collapsed or when the prop is unset.
+DataTable stays presentational: the host owns expansion state (typically a `Set` of expanded row ids). Backward compatible — no extra `<tr>` is rendered while a row is collapsed or when the prop is unset.
+
+**Toggle affordance.** By default the host wires its own toggle (an `onRowClick` handler, a custom column, or a kebab action). As an opt-in convenience, `toggleColumn` adds a built-in leading toggle column (a `w-8` cell after the bulk-selection column, before the data columns), rendered outside the TanStack column model so the host's own `columns` still render untouched:
+
+- `toggleColumn: true` → a default chevron button (▸/▾) reflecting `isExpanded`, calling `onToggle(row)` on click.
+- `toggleColumn: (ctx) => ReactNode` → render **anything** in that cell (icon, label, badge, custom button). The callback gets `{ row, expanded, toggle }`; call `toggle()` to flip the row (delegates to `onToggle`).
+
+The cell stops click propagation, so a custom control there never also fires `onRowClick`.
 
 **New prop**:
 ```tsx
@@ -355,6 +362,12 @@ DataTable stays presentational: the host owns expansion state (typically a `Set`
   rowDetail={{
     isExpanded: (row) => expandedIds.has(row.id),
     render: (row) => <OrderRowDetail row={row} />,
+    onToggle: (row) => toggleExpanded(row.id),
+    toggleColumn: true, // built-in chevron
+    // …or render your own toggle cell:
+    // toggleColumn: ({ row, expanded, toggle }) => (
+    //   <button onClick={toggle}>{expanded ? 'Hide' : `Show (${row.lineCount})`}</button>
+    // ),
     // className?: optional override for the detail <td> (default: subtle muted panel)
   }}
 />
@@ -648,3 +661,4 @@ No other new dependencies. All other features built on existing TanStack React T
 | 2026-04-04 | Phase 5: useAutoDiscoveredFields hook, auto mode props, $or query engine support, customer pages migrated to auto mode |
 | 2026-04-04 | Phase 6: UX bug fixes — sticky column, bulk action visibility, column chooser dedup, filter UX, page size dropdown, DnD persistence, hydration fix |
 | 2026-07-10 | Added F11 — native inline row-expand (`rowDetail`): full-width `<tr colSpan>` accordion sub-row beneath expanded rows, host-owned expansion state, backward compatible (no `<tr>` when collapsed/unset) |
+| 2026-07-10 | F11 — optional built-in chevron toggle column (`rowDetail.toggleColumn` + `onToggle`): leading ▸/▾ cell that reflects `isExpanded` and delegates the toggle, composes with the host's own `columns` |
