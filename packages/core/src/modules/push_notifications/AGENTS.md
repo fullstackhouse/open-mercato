@@ -55,6 +55,13 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
 
 ## Always
 
+- Never export `OM_PUSH_FAKE_PROVIDERS` by hand and point `TC-PUSH-004+` / `TC-CHANNEL-PUSH-005..007` at a
+  live server that does not itself have it. Their `.meta.ts` gate skips them when the flag is absent from the
+  test process, which is the protection you want; exporting it defeats that gate. The fake swaps the provider
+  SDK client in `di.ts` `register()`, so whichever process claims the delivery job must have the flag — a dev
+  server without it runs its in-process worker against the **real** provider, and on real credentials that
+  means a real push to the recipient's real devices. Start the server with `OM_PUSH_FAKE_PROVIDERS=1`, or use
+  the ephemeral harness, which sets it for both the app and the drain child.
 - Resolve cross-module entities (`UserDevice`, `CommunicationChannel`) via DI tokens (`ctx.resolve(...)`),
   not import-time references, to stay decoupled.
 - Keep `push_token` a secret: persist only `provider` + last-8 `token_snapshot`; never expose a full token
