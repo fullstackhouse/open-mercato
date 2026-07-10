@@ -98,7 +98,7 @@ describe('checkPushReceipts', () => {
 
     expect(result).toEqual({ checked: 1, unregistered: 1 })
     expect(commandBus.execute).toHaveBeenCalledWith(
-      'devices.devices.deactivate',
+      'devices.user_devices.deactivate',
       expect.objectContaining({
         input: { id: 'dev-dead', tenantId: TENANT, userId: 'user-1', organizationId: 'org-1' },
       }),

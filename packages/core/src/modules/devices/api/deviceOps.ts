@@ -108,7 +108,7 @@ export async function executeRegister(
   const { result, logEntry } = await commandBus.execute<
     RegisterDeviceCommandInput,
     { id: string; deviceId: string; revived: boolean }
-  >('devices.devices.register', { input: commandInput, ctx: commandCtx(mctx) })
+  >('devices.user_devices.register', { input: commandInput, ctx: commandCtx(mctx) })
 
   await runAfter(mctx, guardResult, 'create', guardResourceId)
 
@@ -139,7 +139,7 @@ export async function executeUpdate(
   if (guardResult && !guardResult.ok) return NextResponse.json(guardResult.body, { status: guardResult.status })
 
   const commandBus = mctx.container.resolve('commandBus') as CommandBus
-  const { logEntry } = await commandBus.execute<UpdateDeviceCommandInput, { id: string }>('devices.devices.update', {
+  const { logEntry } = await commandBus.execute<UpdateDeviceCommandInput, { id: string }>('devices.user_devices.update', {
     input: {
       ...body,
       id: device.id,
@@ -166,7 +166,7 @@ export async function executeDeactivate(
 
   const commandBus = mctx.container.resolve('commandBus') as CommandBus
   const { logEntry } = await commandBus.execute<DeactivateDeviceCommandInput, { id: string }>(
-    'devices.devices.deactivate',
+    'devices.user_devices.deactivate',
     {
       input: {
         id: device.id,

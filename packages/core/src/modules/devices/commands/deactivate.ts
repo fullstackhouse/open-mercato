@@ -21,7 +21,7 @@ import {
 } from './shared'
 
 const deactivateDeviceCommand: CommandHandler<DeactivateDeviceCommandInput, { id: string }> = {
-  id: 'devices.devices.deactivate',
+  id: 'devices.user_devices.deactivate',
   async prepare(rawInput, ctx) {
     const parsed = deactivateDeviceCommandSchema.parse(rawInput)
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.

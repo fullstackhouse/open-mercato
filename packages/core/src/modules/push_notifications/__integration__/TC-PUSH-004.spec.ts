@@ -20,7 +20,7 @@ import {
  * The highest-risk path in the feature and, until now, the only one with no integration coverage:
  * three provider error vocabularies (`messaging/registration-token-not-registered`, APNs
  * `Unregistered`/`BadDeviceToken`, Expo `DeviceNotRegistered`) collapse into one `device_unregistered`
- * sentinel, which the worker turns into a `devices.devices.deactivate` command that soft-deletes a
+ * sentinel, which the worker turns into a `devices.user_devices.deactivate` command that soft-deletes a
  * user's device. `push_stub` short-circuits this by returning the sentinel directly; here the REAL FCM
  * adapter maps its own native error code, exactly as it would in production.
  *

@@ -59,7 +59,7 @@ FCM/APNs/Expo channel packages). Spec: `.ai/specs/2026-04-28-push-notifications-
   not import-time references, to stay decoupled.
 - Keep `push_token` a secret: persist only `provider` + last-8 `token_snapshot`; never expose a full token
   in any API/UI/log.
-- Soft-delete an `unregistered` device through the `devices.devices.deactivate` command (system ctx:
+- Soft-delete an `unregistered` device through the `devices.user_devices.deactivate` command (system ctx:
   `auth: null, systemActor: true`) — never mutate the `devices` table directly.
 - Keep the `unregistered` sentinel identical across provider adapters (`result.metadata.unregistered ===
   true` or `result.error === 'device_unregistered'`) so the worker's soft-delete fires uniformly.

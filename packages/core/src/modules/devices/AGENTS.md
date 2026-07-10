@@ -18,8 +18,8 @@ delivery logic** (sender, providers, delivery rows, workers live in the `push_no
   callers with no org restriction (or whose scope includes null) also see null-org rows; a caller pinned
   to a specific org does not.
 - Route all writes through the device commands (`commands/register.ts`, `commands/update.ts`,
-  `commands/deactivate.ts` → `devices.devices.register`, `devices.devices.update`,
-  `devices.devices.deactivate`; shared helpers in `commands/shared.ts`, registered via `commands/index.ts`)
+  `commands/deactivate.ts` → `devices.user_devices.register`, `devices.user_devices.update`,
+  `devices.user_devices.deactivate`; shared helpers in `commands/shared.ts`, registered via `commands/index.ts`)
   — they carry undo snapshots, query-index side effects, and domain events.
 - Treat `push_token` as a secret: **never** include it in list/response field sets. Only
   `push_provider` and `push_token_updated_at` are exposed.

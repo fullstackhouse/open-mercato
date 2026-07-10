@@ -144,7 +144,7 @@ describe('push_stub adapter end-to-end through processPushDeliveryJob', () => {
     expect(delivery.status).toBe('failed')
     expect(delivery.lastError).toBe('device_unregistered')
     expect(h.commandBus.execute).toHaveBeenCalledWith(
-      'devices.devices.deactivate',
+      'devices.user_devices.deactivate',
       expect.objectContaining({
         input: expect.objectContaining({ id: 'dev-1', tenantId: TENANT, userId: 'user-1' }),
         ctx: expect.objectContaining({ systemActor: true, auth: null }),

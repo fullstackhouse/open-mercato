@@ -134,7 +134,7 @@ export async function softDeleteUnregisteredDevice(
 ): Promise<void> {
   try {
     const commandBus = resolve('commandBus') as CommandBus
-    await commandBus.execute('devices.devices.deactivate', {
+    await commandBus.execute('devices.user_devices.deactivate', {
       input,
       ctx: {
         container: { resolve } as never,

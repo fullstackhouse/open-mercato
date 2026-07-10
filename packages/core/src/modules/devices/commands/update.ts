@@ -20,7 +20,7 @@ import {
 } from './shared'
 
 const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string }> = {
-  id: 'devices.devices.update',
+  id: 'devices.user_devices.update',
   async prepare(rawInput, ctx) {
     const parsed = updateDeviceCommandSchema.parse(rawInput)
     // Enforce tenant scope and constrain the snapshot lookup to the caller's tenant.

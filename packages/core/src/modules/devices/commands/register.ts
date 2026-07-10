@@ -23,7 +23,7 @@ import {
 } from './shared'
 
 const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: string; deviceId: string; revived: boolean }> = {
-  id: 'devices.devices.register',
+  id: 'devices.user_devices.register',
   async prepare(rawInput, ctx) {
     const parsed = registerDeviceCommandSchema.parse(rawInput)
     // Enforce tenant scope before any DB access so prepare() can't probe across tenants.

@@ -51,7 +51,7 @@ function deviceSnapshot(overrides: Record<string, unknown> = {}): Record<string,
 
 describe('devices command audit-log redaction', () => {
   it('redacts push_token from register snapshots while retaining it in the undo payload', async () => {
-    const command = loadCommand('devices.devices.register')
+    const command = loadCommand('devices.user_devices.register')
     const before = deviceSnapshot()
     const after = deviceSnapshot({ clientAppVersion: '1.1.0' })
 
@@ -69,7 +69,7 @@ describe('devices command audit-log redaction', () => {
   })
 
   it('keeps a null push_token as null (not "[redacted]") in register snapshots', async () => {
-    const command = loadCommand('devices.devices.register')
+    const command = loadCommand('devices.user_devices.register')
     const after = deviceSnapshot({ pushToken: null })
 
     const log = await command.buildLog({ result: { id: DEVICE_ID }, snapshots: { after } })
@@ -79,7 +79,7 @@ describe('devices command audit-log redaction', () => {
   })
 
   it('redacts push_token from update snapshots while retaining it in the undo payload', async () => {
-    const command = loadCommand('devices.devices.update')
+    const command = loadCommand('devices.user_devices.update')
     const before = deviceSnapshot()
     const after = deviceSnapshot({ pushToken: 'rotated-secret-token-9876543210fedcba' })
 
@@ -96,7 +96,7 @@ describe('devices command audit-log redaction', () => {
   })
 
   it('redacts push_token from the deactivate before-snapshot', async () => {
-    const command = loadCommand('devices.devices.deactivate')
+    const command = loadCommand('devices.user_devices.deactivate')
     const before = deviceSnapshot()
 
     const log = await command.buildLog({ result: { id: DEVICE_ID }, snapshots: { before } })

@@ -224,7 +224,7 @@ describe('processPushDeliveryJob', () => {
     expect(delivery.status).toBe('failed')
     expect(delivery.lastError).toBe('device_unregistered')
     expect(h.commandBus.execute).toHaveBeenCalledWith(
-      'devices.devices.deactivate',
+      'devices.user_devices.deactivate',
       expect.objectContaining({ input: expect.objectContaining({ id: 'dev-1', tenantId: TENANT }) }),
     )
     expect(enqueueMock).not.toHaveBeenCalled()
