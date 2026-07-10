@@ -25,7 +25,8 @@ import { FilteredEmptyResults } from './filters/FilteredEmptyResults'
 import { SearchEmptyResults } from './filters/SearchEmptyResults'
 import { useCustomFieldFilterDefs } from './utils/customFieldFilters'
 import { fetchCustomFieldDefinitionsPayload, type CustomFieldsetDto } from './utils/customFieldDefs'
-import { RowActions, type RowActionItem } from './RowActions'
+import { RowActions, RowActionsReadOnlyContext, type RowActionItem } from './RowActions'
+import { useUiReadOnlyPolicy } from './ui-read-only/context'
 import { subscribeOrganizationScopeChanged, type OrganizationScopeChangedDetail } from '@open-mercato/shared/lib/frontend/organizationEvents'
 import { InjectionSpot } from './injection/InjectionSpot'
 import { useAppEvent } from './injection/useAppEvent'
@@ -210,6 +211,12 @@ export type BulkAction<T = Record<string, unknown>> = {
   label: string
   icon?: React.ComponentType<{ className?: string }>
   destructive?: boolean
+  /**
+   * Marks the action as mutating. Combined with `destructive`, this lets a
+   * declaratively read-only entity suppress it (a display policy independent of
+   * RBAC). Non-mutating bulk actions (e.g. export) survive.
+   */
+  mutates?: boolean
   onExecute: (selectedRows: T[]) => Promise<void | boolean | BulkActionExecuteResult> | void | boolean | BulkActionExecuteResult
 }
 
@@ -2211,6 +2218,19 @@ export function DataTable<T>({
     }
     return []
   }, [entityId, entityIds])
+
+  // Declarative UI read-only (independent of RBAC): when the table's entity is
+  // whole-entity read-only, suppress mutating row actions (via context) and
+  // mutating/destructive bulk actions. Non-mutating actions (view, export) stay.
+  const uiReadOnlyPolicy = useUiReadOnlyPolicy()
+  const entityUiReadOnly = React.useMemo(
+    () => resolvedEntityIds.some((eid) => uiReadOnlyPolicy.isEntityReadOnly(eid)),
+    [resolvedEntityIds, uiReadOnlyPolicy],
+  )
+  const isMutatingBulkAction = React.useCallback((action: unknown) => {
+    const a = action as { destructive?: boolean; mutates?: boolean } | null
+    return Boolean(a?.destructive || a?.mutates)
+  }, [])
   const entityKey = React.useMemo(() => (resolvedEntityIds.length ? resolvedEntityIds.join('|') : null), [resolvedEntityIds])
   const customFieldFilterExtrasSignature = React.useMemo(
     () => JSON.stringify(customFieldFilterKeyExtras ?? []),
@@ -2576,7 +2596,9 @@ export function DataTable<T>({
             {t('ui.dataTable.bulkAction.selectedCount', '{count} selected', { count: selectedRows.length })}
           </span>
         ) : null}
-        {injectedBulkActions.map((action) => {
+        {injectedBulkActions
+          .filter((action) => !entityUiReadOnly || !isMutatingBulkAction(action))
+          .map((action) => {
           const label = t(action.label, action.label)
           const iconNode = resolveInjectedIcon(action.icon, 'h-4 w-4 shrink-0')
           return (
@@ -2595,7 +2617,9 @@ export function DataTable<T>({
             </Button>
           )
         })}
-        {selectedRows.length > 0 ? (bulkActionsProp ?? []).map((action) => {
+        {selectedRows.length > 0 ? (bulkActionsProp ?? [])
+          .filter((action) => !entityUiReadOnly || !isMutatingBulkAction(action))
+          .map((action) => {
           const ActionIcon = action.icon
           return (
             <Button
@@ -2665,6 +2689,8 @@ export function DataTable<T>({
     advancedFilterRuleCount,
     isAdvancedFilterOpen,
     resolvedAdvancedFilterFields,
+    entityUiReadOnly,
+    isMutatingBulkAction,
   ])
 
   const hasTitle = title != null
@@ -2733,6 +2759,7 @@ export function DataTable<T>({
   ) : <div className="min-h-[2.25rem]" />
 
   return (
+    <RowActionsReadOnlyContext.Provider value={entityUiReadOnly}>
     <TooltipProvider delayDuration={300}>
     <div ref={containerRef} className={containerClassName} data-component-handle={resolvedReplacementHandle}>
       {shouldRenderHeader && (
@@ -3134,5 +3161,6 @@ export function DataTable<T>({
       ) : null}
     </div>
     </TooltipProvider>
+    </RowActionsReadOnlyContext.Provider>
   )
 }

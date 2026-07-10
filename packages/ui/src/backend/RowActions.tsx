@@ -11,10 +11,28 @@ export type RowActionItem = {
   onSelect?: () => void
   href?: string
   destructive?: boolean
+  /**
+   * Marks the action as mutating (edit/update). Combined with `destructive`
+   * (delete), this lets a read-only context suppress it. Non-mutating actions
+   * (view/open) survive. See {@link RowActionsReadOnlyContext}.
+   */
+  mutates?: boolean
 }
+
+/**
+ * When true, `RowActions` hides mutating items (`destructive` or `mutates`) so a
+ * declaratively read-only entity exposes no edit/delete row affordances — set by
+ * `DataTable` from the UI read-only policy (independent of RBAC).
+ */
+export const RowActionsReadOnlyContext = React.createContext(false)
 
 export function RowActions({ items = [] }: { items?: RowActionItem[] }) {
   const t = useT()
+  const suppressMutations = React.useContext(RowActionsReadOnlyContext)
+  const visibleItems = React.useMemo(
+    () => (suppressMutations ? items.filter((it) => !it.destructive && !it.mutates) : items),
+    [items, suppressMutations],
+  )
   const [open, setOpen] = React.useState(false)
   const btnRef = React.useRef<HTMLButtonElement>(null)
   const menuRef = React.useRef<HTMLDivElement>(null)
@@ -71,7 +89,7 @@ export function RowActions({ items = [] }: { items?: RowActionItem[] }) {
     }
   }, [])
 
-  if (items.length === 0) return null
+  if (visibleItems.length === 0) return null
 
   const handlePointerEnter = (event: React.PointerEvent) => {
     if (event.pointerType === 'touch') return
@@ -118,7 +136,7 @@ export function RowActions({ items = [] }: { items?: RowActionItem[] }) {
           onPointerEnter={handlePointerEnter}
           onPointerLeave={handlePointerLeave}
         >
-          {items.map((it, idx) => (
+          {visibleItems.map((it, idx) => (
             it.href ? (
               <a
                 key={idx}
