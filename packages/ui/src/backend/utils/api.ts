@@ -204,7 +204,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
           details: payload,
         })
       } catch {
-        // never let a logging failure mask the original error
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
       const hasAclHints = Boolean((roles && roles.length) || (features && features.length))
       if (hasAclHints) {

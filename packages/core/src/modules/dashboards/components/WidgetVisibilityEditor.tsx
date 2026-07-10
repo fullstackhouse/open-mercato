@@ -307,7 +307,7 @@ export const WidgetVisibilityEditor = React.forwardRef<WidgetVisibilityEditorHan
         setOriginal(selected)
         setOriginalMode(mode)
       }
-      try { flash(t('dashboards.widgets.flash.saved', 'Dashboard widgets updated'), 'success') } catch { /* best-effort toast; ignore if the flash provider is unavailable */ }
+      try { flash(t('dashboards.widgets.flash.saved', 'Dashboard widgets updated'), 'success') } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
     } catch (err) {
       console.error('Failed to save widget visibility', err)
       setError(t('dashboards.widgets.error.save', 'Unable to save dashboard widget preferences.'))

@@ -104,7 +104,7 @@ function scheduleRouterRefresh(router: ReturnType<typeof useRouter>) {
   }
   window.requestAnimationFrame(() => {
     refreshScheduled = false
-    try { router.refresh() } catch { /* best-effort route refresh; ignore if the router is unavailable */ }
+    try { router.refresh() } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
   })
 }
 

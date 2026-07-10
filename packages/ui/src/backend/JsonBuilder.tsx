@@ -158,7 +158,7 @@ export function JsonBuilder({
                                 const parsed = JSON.parse(rawString)
                                 setRawString(JSON.stringify(parsed, null, 2))
                             } catch {
-                              // ignore invalid JSON and keep the raw input
+                              // intentionally-empty-catch: best-effort, safe to ignore
                             }
                         }}
                         placeholder='{"key": "value"}'

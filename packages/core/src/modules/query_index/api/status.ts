@@ -143,7 +143,7 @@ export async function GET(req: Request) {
     const enabled = new Set<string>((cfRows || []).map((r) => String(r.entity_id)))
     entityIds = entityIds.filter((id) => enabled.has(id))
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   const HEARTBEAT_STALE_MS = 60_000
@@ -382,7 +382,7 @@ export async function GET(req: Request) {
         )
       }
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 

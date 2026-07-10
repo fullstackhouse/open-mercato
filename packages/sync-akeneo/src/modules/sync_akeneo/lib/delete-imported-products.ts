@@ -166,7 +166,7 @@ export async function deleteImportedProductsWithProgress(params: {
       })
       deletedProductCount += 1
     } catch {
-      // best-effort cleanup; continue with the remaining records on failure
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
 
     await progressService.updateProgress(

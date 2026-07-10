@@ -76,7 +76,7 @@ export function CollapsibleNavSection({
         setExpanded(true)
       }
     } catch {
-      // best-effort persistence; ignore storage errors (quota / private mode)
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }, [storageKey, hasActiveChild])
 
@@ -93,7 +93,7 @@ export function CollapsibleNavSection({
     try {
       localStorage.setItem(storageKey, expanded ? '1' : '0')
     } catch {
-      // best-effort persistence; ignore storage errors (quota / private mode)
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }, [expanded, storageKey, mounted])
 

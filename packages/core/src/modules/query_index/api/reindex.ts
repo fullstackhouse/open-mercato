@@ -40,7 +40,7 @@ export async function POST(req: Request) {
   try {
     em = container.resolve('em')
   } catch {
-    // entity manager is optional in this context; proceed without it
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   const bus = container.resolve('eventBus') as any
   const partitions = partitionIndex !== undefined

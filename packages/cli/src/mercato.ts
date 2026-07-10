@@ -250,7 +250,7 @@ async function ensureDatabaseExists(dbUrl: string): Promise<boolean> {
   } catch {
     return true
   } finally {
-    try { await adminClient.end() } catch { /* best-effort connection teardown; ignore close errors */ }
+    try { await adminClient.end() } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
   }
 }
 
@@ -303,7 +303,7 @@ async function ensureEnvLoaded(options: { createIfMissing?: boolean; quiet?: boo
   try {
     await import('dotenv/config')
   } catch {
-    // optional module/metadata load; continue with whatever is available
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 }
 
@@ -799,7 +799,7 @@ async function buildAllModules(): Promise<Module[]> {
     const app = await dynImport.then((f: any) => f('@/cli')).catch(() => null)
     if (app && Array.isArray(app?.default)) appCli = app.default
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   const all = modules.slice()
@@ -924,7 +924,7 @@ export async function run(argv = process.argv) {
             }
           }
         } finally {
-          try { await client.end() } catch { /* best-effort connection teardown; ignore close errors */ }
+          try { await client.end() } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
         }
         // Also flush Redis when configured. Skip silently if no URL is set —
         // a stray ioredis client with auto-reconnect would otherwise spam
@@ -948,7 +948,7 @@ export async function run(argv = process.argv) {
             const message = err instanceof Error ? err.message : String(err)
             console.log(`   Redis flush skipped (${message}).`)
           } finally {
-            try { redis.disconnect() } catch { /* best-effort connection teardown; ignore close errors */ }
+            try { redis.disconnect() } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
           }
         } else {
           console.log('   Redis flush skipped (REDIS_URL not configured).')
@@ -995,7 +995,7 @@ export async function run(argv = process.argv) {
           try {
             await client.end()
           } catch {
-            // best-effort connection teardown; ignore close errors
+            // intentionally-empty-catch: best-effort, safe to ignore
           }
         }
       }

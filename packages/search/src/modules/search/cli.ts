@@ -212,7 +212,7 @@ async function searchCommand(rest: string[]): Promise<void> {
       const em = container.resolve('em') as any
       await em?.getConnection?.()?.close?.()
     } catch {
-      // best-effort connection teardown; ignore close errors
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 }
@@ -268,7 +268,7 @@ async function statusCommand(): Promise<void> {
       const em = container.resolve('em') as any
       await em?.getConnection?.()?.close?.()
     } catch {
-      // best-effort connection teardown; ignore close errors
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 }
@@ -348,7 +348,7 @@ async function indexCommand(rest: string[]): Promise<void> {
       const em = container.resolve('em') as any
       await em?.getConnection?.()?.close?.()
     } catch {
-      // best-effort connection teardown; ignore close errors
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 }

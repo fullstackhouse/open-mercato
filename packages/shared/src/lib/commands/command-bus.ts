@@ -620,7 +620,7 @@ export class CommandBus {
         try {
           console.debug('[crud][cache] execute-invalidation failed', { commandId, err })
         } catch {
-          // never let a logging failure mask the original error
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
     }
@@ -654,7 +654,7 @@ export class CommandBus {
         try {
           console.debug('[crud][cache] undo-invalidation failed', { commandId: log.commandId, err })
         } catch {
-          // never let a logging failure mask the original error
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
     }

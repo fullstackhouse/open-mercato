@@ -320,7 +320,7 @@ export async function POST(req: Request) {
         partitionFromField = sanitizePartitionCode(cfg.partitionCode)
       }
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
   if (hasDangerousExecutableExtension(file.name)) {

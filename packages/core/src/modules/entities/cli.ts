@@ -58,7 +58,7 @@ const seedDefs: ModuleCli = {
     const { resolve } = await createRequestContainer()
     const em = resolve('em') as any
     let cache: CacheStrategy | null = null
-    try { cache = resolve('cache') as CacheStrategy } catch { /* cache is an optional dependency; proceed without it if unregistered */ }
+    try { cache = resolve('cache') as CacheStrategy } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
 
     const tenantIds = tenantIdArg
       ? [tenantIdArg]
@@ -99,7 +99,7 @@ const reinstallDefs: ModuleCli = {
     const { resolve } = await createRequestContainer()
     const em = resolve('em') as any
     let cache: CacheStrategy | null = null
-    try { cache = resolve('cache') as CacheStrategy } catch { /* cache is an optional dependency; proceed without it if unregistered */ }
+    try { cache = resolve('cache') as CacheStrategy } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
 
     const tenantIds = tenantIdArg
       ? [tenantIdArg]
@@ -143,7 +143,7 @@ const reinstallDefs: ModuleCli = {
         try {
           await cache.deleteByTags(entityIds.map((id) => `custom-entity:${id}`))
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
       console.log(`Cleared definitions: fields=${removedFields}, entities=${removedEntities}`)
@@ -906,7 +906,7 @@ const decryptDatabase: ModuleCli = {
             batchCommitted = true
           } catch (fatalErr: any) {
             if (!batchCommitted) {
-              try { await conn.execute('ROLLBACK') } catch { /* ignore rollback failure so the original error is not masked */ }
+              try { await conn.execute('ROLLBACK') } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
             }
             console.error(`Fatal error during batch processing for ${entityId}: ${(fatalErr as Error)?.message || String(fatalErr)}`)
             throw fatalErr

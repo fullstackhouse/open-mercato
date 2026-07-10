@@ -47,7 +47,7 @@ const readCache = async (cache: CacheStrategy | null, key: string): Promise<Cach
       return cached as CachePayload
     }
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return null
 }
@@ -57,7 +57,7 @@ const writeCache = async (cache: CacheStrategy | null, key: string, payload: Cac
   try {
     await cache.set(key, payload, { ttl: CACHE_TTL_MS, tags: [moduleTag(moduleId)] })
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 }
 
@@ -66,7 +66,7 @@ const deleteCacheKey = async (cache: CacheStrategy | null, key: string) => {
   try {
     await cache.delete(key)
   } catch {
-    // best-effort cache write/invalidation; must not fail the request
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 }
 
@@ -75,7 +75,7 @@ const deleteCacheByModule = async (cache: CacheStrategy | null, moduleId: string
   try {
     await cache.deleteByTags([moduleTag(moduleId)])
   } catch {
-    // best-effort cache write/invalidation; must not fail the request
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 }
 
@@ -190,7 +190,7 @@ export function createModuleConfigService(container: AppContainer): ModuleConfig
           touched.push(entity)
         }
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
     if (!dirty) return

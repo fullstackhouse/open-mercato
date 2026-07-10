@@ -378,7 +378,7 @@ export async function PUT(req: Request) {
       try {
         await cache.deleteByTags([`nav:sidebar:role:${role.id}`])
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
     const rolesPayload = await loadRolesPayload(em, { tenantId: auth.tenantId ?? null, locale })
@@ -491,7 +491,7 @@ export async function PUT(req: Request) {
     try {
       await cache.deleteByTags(filteredClearRoleIds.map((roleId) => `nav:sidebar:role:${roleId}`))
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 
@@ -504,7 +504,7 @@ export async function PUT(req: Request) {
     try {
       await cache.deleteByTags(tags)
     } catch {
-      // best-effort cache write/invalidation; must not fail the request
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 
@@ -580,7 +580,7 @@ export async function DELETE(req: Request) {
     try {
       await cache.deleteByTags([`nav:sidebar:role:${role.id}`])
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 

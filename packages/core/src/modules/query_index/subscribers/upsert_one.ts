@@ -94,7 +94,7 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
             delayMs: coverageDelayMs,
           })
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
     }

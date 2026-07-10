@@ -178,7 +178,7 @@ export function AclEditor({
       setOrganizations(aclJson.organizations == null ? null : Array.isArray(aclJson.organizations) ? aclJson.organizations : [])
       onVersionChange?.(typeof aclJson.updatedAt === 'string' ? aclJson.updatedAt : null)
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }, [kind, targetId, actorSanitizeFeatures, onVersionChange])
 
@@ -197,7 +197,7 @@ export function AclEditor({
           setModules(fJson.modules || [])
         }
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
       await fetchAclState(tenantIdRef.current, cancelled)
       hasMountedRef.current = true
@@ -230,7 +230,7 @@ export function AclEditor({
           )
           if (!cancelled) setOrgOptions(normalizeOrganizationOptions(oJson.items))
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
       if (kind === 'user' && userRoles && userRoles.length > 0) {
@@ -249,7 +249,7 @@ export function AclEditor({
             setRoleDetails(userRoleDetails)
           }
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
     }

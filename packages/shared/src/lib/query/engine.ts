@@ -103,7 +103,7 @@ export function resolveRegisteredEntityTableName(
         return String(meta.tableName)
       }
     } catch {
-      // best-effort metadata lookup; fall through to the next resolution strategy
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 
@@ -122,7 +122,7 @@ export function resolveRegisteredEntityTableName(
       }
     }
   } catch {
-    // best-effort metadata lookup; fall through to the next resolution strategy
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   return null

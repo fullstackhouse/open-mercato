@@ -71,7 +71,7 @@ function emit(formId: string) {
     try {
       listener()
     } catch {
-      // best-effort listener notification; one failing listener must not stop the rest
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   })
 }

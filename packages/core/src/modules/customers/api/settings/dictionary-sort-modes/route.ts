@@ -88,7 +88,7 @@ async function resolveSettingsContext(req: Request): Promise<SettingsRouteContex
   try {
     cache = container.resolve('cache') as CacheStrategy
   } catch {
-    // cache is an optional dependency; proceed without it if unregistered
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   return {

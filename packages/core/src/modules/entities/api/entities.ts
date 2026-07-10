@@ -175,7 +175,7 @@ export async function POST(req: Request) {
       await cache.deleteByTags([`nav:entities:${auth.tenantId || 'null'}`])
     }
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return NextResponse.json({ ok: true, item: { id: ent.id, entityId: ent.entityId, label: ent.label, description: ent.description ?? undefined } })
 }
@@ -220,7 +220,7 @@ export async function DELETE(req: Request) {
       await cache.deleteByTags([`nav:entities:${auth.tenantId || 'null'}`])
     }
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return NextResponse.json({ ok: true })
 }

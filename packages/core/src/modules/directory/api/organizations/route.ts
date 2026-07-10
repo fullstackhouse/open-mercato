@@ -162,7 +162,7 @@ export async function GET(req: Request) {
         const scope = await resolveOrganizationScopeForRequest({ container, auth, request: req })
         allowedIds = Array.isArray(scope.allowedIds) ? scope.allowedIds : null
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
       const allowedSet = allowedIds ? new Set(allowedIds) : new Set<string>()
       scopedIds = ids.filter((id) => allowedSet.has(id))
@@ -218,7 +218,7 @@ export async function GET(req: Request) {
         candidateOrgIds.add(scope.allowedIds[0]!)
       }
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
 
     for (const orgId of candidateOrgIds) {

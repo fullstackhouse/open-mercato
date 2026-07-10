@@ -35,7 +35,7 @@ export async function GET(req: Request) {
       if (cached && Array.isArray(cached.items)) return NextResponse.json(cached)
     }
   } catch {
-    // best-effort cache read; fall back to the source of truth on any error
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   const entities = await em.find(CustomEntity as any, where as any, { orderBy: { label: 'asc' } as any })
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
   try {
     if (cache) await cache.set(cacheKey, payload, { tags: [`nav:entities:${auth.tenantId || 'null'}`] })
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return NextResponse.json(payload)
 }

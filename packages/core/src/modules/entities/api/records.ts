@@ -31,7 +31,7 @@ function isDeclaredCustomEntity(entityId: string): boolean {
         declaredCustomEntityIds = ids
       }
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
   return declaredCustomEntityIds?.has(entityId) ?? false
@@ -59,7 +59,7 @@ async function classifyRecordsEntity(em: any, entityId: string): Promise<Records
     const found = await em.findOne(CustomEntity as any, { entityId })
     if (found) return 'custom'
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return 'unknown'
 }
@@ -336,7 +336,7 @@ export async function GET(req: Request) {
     return NextResponse.json(payload)
   } catch (e) {
     if (isCrudHttpError(e)) return NextResponse.json(e.body, { status: e.status })
-    try { console.error('[entities.records.GET] Error', e) } catch { /* never let a logging failure mask the original error */ }
+    try { console.error('[entities.records.GET] Error', e) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -415,7 +415,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, item: { entityId, recordId: id } })
   } catch (e) {
     if (isCrudHttpError(e)) return NextResponse.json(e.body, { status: e.status })
-    try { console.error('[entities.records.POST] Error', e) } catch { /* never let a logging failure mask the original error */ }
+    try { console.error('[entities.records.POST] Error', e) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -27,7 +27,7 @@ export function debugCrudCache(event: string, context: Record<string, unknown>) 
   try {
     console.debug('[crud][cache]', event, context)
   } catch {
-    // never let a logging failure mask the original error
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 }
 
@@ -38,7 +38,7 @@ export function resolveCrudCache(container: AwilixContainer): CacheStrategy | nu
       return cache
     }
   } catch {
-    // cache is an optional dependency; proceed without it if unregistered
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return null
 }

@@ -52,7 +52,7 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
       baseCheckSucceeded = true
       if (baseDeleted) baseDelta = -1
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
     if (!baseCheckSucceeded) baseDelta = -1
 

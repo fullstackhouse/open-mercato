@@ -491,7 +491,7 @@ export default function EditDefinitionsPage({ params }: { params?: { entityId?: 
       if (!callEntity.ok) {
         await raiseCrudError(callEntity.response, 'Failed to save entity')
       }
-      try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* best-effort UI refresh signal; ignore if it cannot be dispatched */ }
+      try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
     }
     const defsPayload = {
       entityId,
@@ -512,7 +512,7 @@ export default function EditDefinitionsPage({ params }: { params?: { entityId?: 
     if (!callDefs.ok) {
       await raiseCrudError(callDefs.response, 'Failed to save definitions')
     }
-    try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* best-effort UI refresh signal; ignore if it cannot be dispatched */ }
+    try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
     await invalidateCustomFieldDefs(queryClient, entityId)
     flash('Definitions saved', 'success')
   }, [buildFieldsetPayload, defs, entityId, entitySource, queryClient, singleFieldsetPerRecord, validateAll])
@@ -582,7 +582,7 @@ export default function EditDefinitionsPage({ params }: { params?: { entityId?: 
             await raiseCrudError(callDelete.response, 'Failed to delete entity')
           }
           flash('Entity deleted', 'success')
-          try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* best-effort UI refresh signal; ignore if it cannot be dispatched */ }
+          try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
         } : undefined}
       />
       </PageBody>

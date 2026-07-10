@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   try {
     cache = resolve('cache') as CacheStrategy
   } catch {
-    // cache is an optional dependency; proceed without it if unregistered
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   const where: any = { entityId, key, organizationId: auth.orgId ?? null, tenantId: auth.tenantId ?? null }

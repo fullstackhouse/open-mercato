@@ -131,7 +131,7 @@ export class WidgetDataService {
           return cached as WidgetDataResponse
         }
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
 
@@ -183,7 +183,7 @@ export class WidgetDataService {
           { ttl: WIDGET_DATA_SEGMENT_TTL, tags: ['widget-data'] },
         )
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
 

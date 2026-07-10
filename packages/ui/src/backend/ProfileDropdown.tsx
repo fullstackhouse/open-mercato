@@ -128,7 +128,7 @@ export function ProfileDropdown({
       })
       window.location.reload()
     } catch {
-      // best-effort request; ignore transient failures
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 

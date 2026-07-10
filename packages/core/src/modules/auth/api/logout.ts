@@ -38,7 +38,7 @@ export async function POST(req: Request) {
         await auth.deleteSessionByToken(sessToken)
       }
     } catch {
-      // logout is best-effort; continue clearing the client session on error
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
   const res = NextResponse.redirect(buildRequestOriginUrl(req, '/login'))

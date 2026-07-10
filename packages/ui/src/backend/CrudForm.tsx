@@ -1360,7 +1360,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
           console.error('[CrudForm] Error in onAfterDelete:', err)
         }
       }
-      try { flash(deleteSuccessMessage, 'success') } catch { /* never let a logging failure mask the original error */ }
+      try { flash(deleteSuccessMessage, 'success') } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
       // Redirect if requested by caller
       if (typeof deleteRedirect === 'string' && deleteRedirect) {
         await navigateWithGuard(deleteRedirect)
@@ -1393,10 +1393,10 @@ export function CrudForm<TValues extends Record<string, unknown>>({
       const optimisticLockConflict = extractOptimisticLockConflict(err)
       if (optimisticLockConflict) {
         // Surface on the unified, persistent conflict bar instead of a toast.
-        try { surfaceRecordConflict(err, t) } catch { /* best-effort UI notification; ignore if the provider is unavailable */ }
+        try { surfaceRecordConflict(err, t) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
       } else {
         const message = err instanceof Error && err.message ? err.message : deleteErrorMessage
-        try { flash(message, 'error') } catch { /* best-effort UI notification; ignore if the provider is unavailable */ }
+        try { flash(message, 'error') } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
       }
     } finally {
       deletingRef.current = false
@@ -2171,7 +2171,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
           try {
             target.select()
           } catch {
-            // best-effort text selection; ignore if unsupported by the element
+            // intentionally-empty-catch: best-effort, safe to ignore
           }
         }
         lastFocusedFieldRef.current = firstFieldId
@@ -2230,7 +2230,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
         try {
           target.select()
         } catch {
-          // best-effort text selection; ignore if unsupported by the element
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
       lastErrorFieldRef.current = fieldId
@@ -2915,7 +2915,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
         // Primary surface for the conflict is the persistent, error-styled
         // RecordConflictBanner (unified across all forms). Keep the inline
         // form error too, but suppress the redundant transient toast.
-        try { surfaceRecordConflict(err, t) } catch { /* best-effort UI notification; ignore if the provider is unavailable */ }
+        try { surfaceRecordConflict(err, t) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
       } else if (!hasFieldErrors) {
         flash(displayMessage, 'error')
       }

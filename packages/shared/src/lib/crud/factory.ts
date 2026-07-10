@@ -704,7 +704,7 @@ function logForbidden(details: Record<string, unknown>) {
     // eslint-disable-next-line no-console
     console.warn('[crud] Forbidden request', details)
   } catch {
-    // never let a logging failure mask the original error
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 }
 
@@ -824,7 +824,7 @@ export async function logCrudAccess(options: LogCrudAccessOptions): Promise<LogC
               try {
                 console.error('[crud] failed to record access log', { err, payload })
               } catch {
-                // never let a logging failure mask the original error
+                // intentionally-empty-catch: best-effort, safe to ignore
               }
               return undefined
             }),
@@ -835,7 +835,7 @@ export async function logCrudAccess(options: LogCrudAccessOptions): Promise<LogC
       try {
         console.error('[crud] failed to record access logs (batch)', { err, count: payloads.length })
       } catch {
-        // never let a logging failure mask the original error
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
   })()
@@ -859,7 +859,7 @@ function safeClone<T>(value: T): T {
       return structuredCloneFn(value)
     }
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   try {
     return JSON.parse(JSON.stringify(value)) as T
@@ -1050,7 +1050,7 @@ export function makeCrudRoute<TCreate = any, TUpdate = any, TList = any>(opts: C
         try {
           cfDefCache = ctx.container.resolve('cache') as CacheStrategy
         } catch {
-          // cache is an optional dependency; proceed without it if unregistered
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
         definitionIndex = await loadCustomFieldDefinitionIndex({
           em,

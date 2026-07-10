@@ -150,7 +150,7 @@ export async function GET(req: Request, ctx: { params?: { dictionaryId?: string 
           }),
         )
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
 

@@ -120,7 +120,7 @@ export async function buildIndexDoc(em: EntityManager, params: BuildDocParams): 
       }
     }
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   try {
@@ -133,7 +133,7 @@ export async function buildIndexDoc(em: EntityManager, params: BuildDocParams): 
       encryption,
     )
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   return doc
@@ -188,7 +188,7 @@ export async function upsertIndexRow(
           doc: null,
         })
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
     if (existed) {
@@ -239,7 +239,7 @@ export async function upsertIndexRow(
           .values({ ...payload, created_at: sql`now()` } as any)
           .execute()
       } catch {
-        // intentionally ignored: best-effort operation
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
   }
@@ -260,7 +260,7 @@ export async function upsertIndexRow(
         searchTokenDoc: args.searchTokenDoc ?? null,
       })
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
   return { doc, existed, wasDeleted, created, revived }
@@ -334,7 +334,7 @@ export async function markDeleted(
         tenantId: args.tenantId ?? null,
       })
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
     await scopeEntityIndexes(
       db.deleteFrom('entity_indexes' as any) as any,

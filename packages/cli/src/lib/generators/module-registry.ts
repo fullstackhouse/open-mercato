@@ -205,7 +205,7 @@ function buildCacheBustedSourceImportUrl(sourceFile: string): string {
     const stat = fs.statSync(sourceFile)
     url.searchParams.set('v', `${stat.mtimeMs}-${stat.size}`)
   } catch {
-    // best-effort filesystem cleanup; ignore if the file is missing
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return url.href
 }
@@ -2596,7 +2596,7 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
         }
       }
     } catch {
-      // optional module/metadata load; continue with whatever is available
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 
@@ -2670,7 +2670,7 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
           mod?.metadata && Array.isArray(mod.metadata.requires) ? mod.metadata.requires : undefined
         if (reqs && reqs.length) requiresByModule.set(modId, reqs)
       } catch {
-        // optional module/metadata load; continue with whatever is available
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
 
@@ -2956,7 +2956,7 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
             }
           }
         } catch {
-          // optional module/metadata load; continue with whatever is available
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
 
@@ -2983,7 +2983,7 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
             }
           }
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
 
@@ -3014,7 +3014,7 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
             }
           }
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
     }
@@ -3246,7 +3246,7 @@ export async function generateModuleRegistryApp(options: ModuleRegistryOptions):
           mod?.metadata && Array.isArray(mod.metadata.requires) ? mod.metadata.requires : undefined
         if (reqs && reqs.length) requiresByModule.set(modId, reqs)
       } catch {
-        // optional module/metadata load; continue with whatever is available
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
 
@@ -3583,7 +3583,7 @@ export async function generateModuleRegistryCli(options: ModuleRegistryOptions):
           mod?.metadata && Array.isArray(mod.metadata.requires) ? mod.metadata.requires : undefined
         if (reqs && reqs.length) requiresByModule.set(modId, reqs)
       } catch {
-        // optional module/metadata load; continue with whatever is available
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
 

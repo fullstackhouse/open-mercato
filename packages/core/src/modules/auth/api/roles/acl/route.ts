@@ -253,7 +253,7 @@ export async function PUT(req: Request) {
       const cache = container.resolve('cache') as TaggableCache | undefined
       if (cache?.deleteByTags) await cache.deleteByTags([`rbac:tenant:${targetTenantId}`])
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
   

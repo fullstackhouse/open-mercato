@@ -169,7 +169,7 @@ async function resolveEntityDefaultEditor(em: any, entityId: string, tenantId: s
     } as any)
     if (ent && typeof (ent as any).defaultEditor === 'string') return (ent as any).defaultEditor
   } catch {
-    // intentionally ignored: best-effort operation
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   return undefined
 }
@@ -220,7 +220,7 @@ export async function GET(req: Request) {
   try {
     cache = resolve('cache') as CacheStrategy
   } catch {
-    // cache is an optional dependency; proceed without it if unregistered
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   let canManageDefinitions = false
@@ -478,7 +478,7 @@ export async function POST(req: Request) {
   try {
     cache = resolve('cache') as CacheStrategy
   } catch {
-    // cache is an optional dependency; proceed without it if unregistered
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
 
   const where: any = { entityId: input.entityId, key: input.key, organizationId: auth.orgId ?? null, tenantId: auth.tenantId ?? null }
@@ -555,7 +555,7 @@ export async function DELETE(req: Request) {
   try {
     cache = resolve('cache') as CacheStrategy
   } catch {
-    // cache is an optional dependency; proceed without it if unregistered
+    // intentionally-empty-catch: best-effort, safe to ignore
   }
   const where: any = { entityId, key, organizationId: auth.orgId ?? null, tenantId: auth.tenantId ?? null }
   const def = await em.findOne(CustomFieldDef, where)

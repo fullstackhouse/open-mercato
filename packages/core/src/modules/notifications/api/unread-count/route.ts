@@ -35,7 +35,7 @@ export async function GET(req: Request) {
         return Response.json({ unreadCount: cached })
       }
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 
@@ -54,7 +54,7 @@ export async function GET(req: Request) {
         }),
       )
     } catch {
-      // intentionally ignored: best-effort operation
+      // intentionally-empty-catch: best-effort, safe to ignore
     }
   }
 

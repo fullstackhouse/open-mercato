@@ -508,7 +508,7 @@ export async function dbGreenfield(resolver: PackageResolver, options: Greenfiel
       try {
         await client.end()
       } catch {
-        // best-effort connection teardown; ignore close errors
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
   } catch (e) {
@@ -546,7 +546,7 @@ export async function dbGreenfield(resolver: PackageResolver, options: Greenfiel
       try {
         await client.end()
       } catch {
-        // best-effort connection teardown; ignore close errors
+        // intentionally-empty-catch: best-effort, safe to ignore
       }
     }
   } catch (e) {

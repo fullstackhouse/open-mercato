@@ -237,7 +237,7 @@ export default function EditRolePage({ params }: { params?: { id?: string } }) {
               await saveRoleAcl()
             }
             await widgetEditorRef.current?.save()
-            try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* best-effort UI refresh signal; ignore if it cannot be dispatched */ }
+            try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* intentionally-empty-catch: best-effort, safe to ignore */ }
           }}
           onDelete={async () => {
             const roleOptimisticLockHeader = buildOptimisticLockHeader(initial?.updatedAt)

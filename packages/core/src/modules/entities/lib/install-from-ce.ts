@@ -234,7 +234,7 @@ export async function installCustomEntitiesFromModules(
             continue
           }
         } catch {
-          // intentionally ignored: best-effort operation
+          // intentionally-empty-catch: best-effort, safe to ignore
         }
       }
 
@@ -280,7 +280,7 @@ export async function installCustomEntitiesFromModules(
           try {
             await cache.set(cacheKey, checksum, { tags: [`custom-entity:${entityId}`, `custom-entity-scope:${scopeKey}`] })
           } catch {
-            // intentionally ignored: best-effort operation
+            // intentionally-empty-catch: best-effort, safe to ignore
           }
         }
         if (logger) {
@@ -297,7 +297,7 @@ export async function installCustomEntitiesFromModules(
           try {
             await cache.set(cacheKey, checksum, { tags: [`custom-entity:${entityId}`, `custom-entity-scope:${scopeKey}`] })
           } catch {
-            // intentionally ignored: best-effort operation
+            // intentionally-empty-catch: best-effort, safe to ignore
           }
         }
       }
