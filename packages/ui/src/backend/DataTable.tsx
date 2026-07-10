@@ -2227,10 +2227,6 @@ export function DataTable<T>({
     () => resolvedEntityIds.some((eid) => uiReadOnlyPolicy.isEntityReadOnly(eid)),
     [resolvedEntityIds, uiReadOnlyPolicy],
   )
-  const isMutatingBulkAction = React.useCallback((action: unknown) => {
-    const a = action as { destructive?: boolean; mutates?: boolean } | null
-    return Boolean(a?.destructive || a?.mutates)
-  }, [])
   const entityKey = React.useMemo(() => (resolvedEntityIds.length ? resolvedEntityIds.join('|') : null), [resolvedEntityIds])
   const customFieldFilterExtrasSignature = React.useMemo(
     () => JSON.stringify(customFieldFilterKeyExtras ?? []),
@@ -2597,7 +2593,7 @@ export function DataTable<T>({
           </span>
         ) : null}
         {injectedBulkActions
-          .filter((action) => !entityUiReadOnly || !isMutatingBulkAction(action))
+          .filter((action) => !entityUiReadOnly)
           .map((action) => {
           const label = t(action.label, action.label)
           const iconNode = resolveInjectedIcon(action.icon, 'h-4 w-4 shrink-0')
@@ -2618,7 +2614,7 @@ export function DataTable<T>({
           )
         })}
         {selectedRows.length > 0 ? (bulkActionsProp ?? [])
-          .filter((action) => !entityUiReadOnly || !isMutatingBulkAction(action))
+          .filter((action) => !entityUiReadOnly)
           .map((action) => {
           const ActionIcon = action.icon
           return (
@@ -2690,11 +2686,12 @@ export function DataTable<T>({
     isAdvancedFilterOpen,
     resolvedAdvancedFilterFields,
     entityUiReadOnly,
-    isMutatingBulkAction,
   ])
 
   const hasTitle = title != null
-  const hasActions = actions !== undefined && actions !== null && actions !== false
+  // Suppress the header actions slot (create / "New" / manage buttons) for a
+  // whole-entity read-only table — a view-only surface has no add affordance.
+  const hasActions = !entityUiReadOnly && actions !== undefined && actions !== null && actions !== false
   const shouldReserveActionsSpace = actions === null || actions === false
   const exportConfig = exporter === false ? null : exporter || null
   const resolvedExportSections = React.useMemo(() => resolveExportSections(exportConfig), [exportConfig])

@@ -58,9 +58,20 @@ export function resolveSafeInlineUrlHref(value: string): string | null {
   }
 }
 
+/**
+ * When true, every inline detail editor under this provider renders display-only:
+ * no edit trigger (pencil), no editor mounted. Set by a detail page from the
+ * declarative UI read-only policy for a read-only entity — a display policy
+ * independent of RBAC, so it applies even to a superadmin. Individual editors
+ * may also opt in via their own `readOnly` prop.
+ */
+export const DetailReadOnlyContext = React.createContext(false)
+
 export type InlineTextEditorProps = {
   label: string
   value: string | null | undefined
+  /** Render display-only (no edit trigger, no editor). Also honored via DetailReadOnlyContext. */
+  readOnly?: boolean
   placeholder?: string
   emptyLabel: string
   onSave: (value: string | null) => Promise<void>
@@ -106,8 +117,11 @@ export function InlineTextEditor({
   saveLabel,
   onDraftChange,
   renderBelowInput,
+  readOnly = false,
 }: InlineTextEditorProps) {
   const t = useT()
+  const detailReadOnly = React.useContext(DetailReadOnlyContext)
+  const effectiveReadOnly = readOnly || detailReadOnly
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState(value ?? '')
   const [error, setError] = React.useState<string | null>(null)
@@ -170,8 +184,9 @@ export function InlineTextEditor({
   )
 
   const handleActivate = React.useCallback(() => {
-    if (!editing) setEditingSafe(true)
-  }, [editing, setEditingSafe])
+    if (effectiveReadOnly || editing) return
+    setEditingSafe(true)
+  }, [effectiveReadOnly, editing, setEditingSafe])
 
   const handleInteractiveClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -191,18 +206,18 @@ export function InlineTextEditor({
       }
       handleActivate()
     },
-    [activateOnClick, editing, handleActivate],
+    [activateOnClick, editing, effectiveReadOnly, handleActivate],
   )
 
   const handleContainerKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!activateOnClick || editing) return
+      if (!activateOnClick || editing || effectiveReadOnly) return
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault()
         handleActivate()
       }
     },
-    [activateOnClick, editing, handleActivate],
+    [activateOnClick, editing, effectiveReadOnly, handleActivate],
   )
 
   const handleSave = React.useCallback(async () => {
@@ -227,7 +242,7 @@ export function InlineTextEditor({
   }, [draft, fallbackError, onSave, setEditingSafe, validator])
 
   const interactiveProps: React.HTMLAttributes<HTMLDivElement> =
-    activateOnClick && !editing
+    activateOnClick && !editing && !effectiveReadOnly
       ? {
           role: 'button' as const,
           tabIndex: 0,
@@ -411,6 +426,7 @@ export function InlineTextEditor({
           )}
         </div>
         {renderActions ? <div className="flex items-center gap-2">{renderActions}</div> : null}
+        {effectiveReadOnly ? null : (
         <Button
           type="button"
           variant="ghost"
@@ -424,6 +440,7 @@ export function InlineTextEditor({
         >
           {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
         </Button>
+        )}
       </div>
     </div>
   )
@@ -441,6 +458,8 @@ export type InlineMultilineEditorProps = {
   containerClassName?: string
   triggerClassName?: string
   renderDisplay?: (params: { value: string | null | undefined; emptyLabel: string }) => React.ReactNode
+  /** Render display-only (no edit trigger, no editor). Also honored via DetailReadOnlyContext. */
+  readOnly?: boolean
 }
 
 const isTestEnv =
@@ -471,8 +490,11 @@ export function InlineMultilineEditor({
   containerClassName,
   triggerClassName,
   renderDisplay,
+  readOnly = false,
 }: InlineMultilineEditorProps) {
   const t = useT()
+  const detailReadOnly = React.useContext(DetailReadOnlyContext)
+  const effectiveReadOnly = readOnly || detailReadOnly
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState(value ?? '')
   const [error, setError] = React.useState<string | null>(null)
@@ -528,12 +550,13 @@ export function InlineMultilineEditor({
   }, [editing, value])
 
   const handleActivate = React.useCallback(() => {
-    if (!editing) setEditing(true)
-  }, [editing])
+    if (effectiveReadOnly || editing) return
+    setEditing(true)
+  }, [effectiveReadOnly, editing])
 
   const handleInteractiveClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      if (!activateOnClick || editing) return
+      if (!activateOnClick || editing || effectiveReadOnly) return
       const target = event.target as HTMLElement
       const interactiveElement = target.closest('button, input, select, textarea, a, [role="link"]')
       if (interactiveElement) {
@@ -549,18 +572,18 @@ export function InlineMultilineEditor({
       }
       handleActivate()
     },
-    [activateOnClick, editing, handleActivate],
+    [activateOnClick, editing, effectiveReadOnly, handleActivate],
   )
 
   const handleContainerKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!activateOnClick || editing) return
+      if (!activateOnClick || editing || effectiveReadOnly) return
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault()
         handleActivate()
       }
     },
-    [activateOnClick, editing, handleActivate],
+    [activateOnClick, editing, effectiveReadOnly, handleActivate],
   )
 
   const adjustError = React.useCallback(
@@ -708,6 +731,7 @@ export function InlineMultilineEditor({
             </div>
           )}
         </div>
+        {effectiveReadOnly ? null : (
         <Button
           type="button"
           variant="ghost"
@@ -720,6 +744,7 @@ export function InlineMultilineEditor({
         >
           {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
         </Button>
+        )}
       </div>
     </div>
   )
@@ -740,6 +765,8 @@ export type InlineSelectEditorProps = {
   hideLabel?: boolean
   renderEditor?: (params: { value: string; onChange: (next: string) => void }) => React.ReactNode
   renderDisplay?: (params: { value: string | null | undefined; emptyLabel: string }) => React.ReactNode
+  /** Render display-only (no edit trigger, no editor). Also honored via DetailReadOnlyContext. */
+  readOnly?: boolean
 }
 
 export function InlineSelectEditor({
@@ -755,8 +782,11 @@ export function InlineSelectEditor({
   hideLabel = false,
   renderEditor,
   renderDisplay,
+  readOnly = false,
 }: InlineSelectEditorProps) {
   const t = useT()
+  const detailReadOnly = React.useContext(DetailReadOnlyContext)
+  const effectiveReadOnly = readOnly || detailReadOnly
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState<string>(value ?? '')
   const [saving, setSaving] = React.useState(false)
@@ -800,7 +830,7 @@ export function InlineSelectEditor({
   const selected = options.find((option) => option.value === value)
 
   const interactiveProps: React.HTMLAttributes<HTMLDivElement> =
-    activateOnClick && !editing
+    activateOnClick && !editing && !effectiveReadOnly
       ? {
           role: 'button' as const,
           tabIndex: 0,
@@ -867,6 +897,7 @@ export function InlineSelectEditor({
             </div>
           )}
         </div>
+        {effectiveReadOnly ? null : (
         <Button
           type="button"
           variant="ghost"
@@ -879,6 +910,7 @@ export function InlineSelectEditor({
         >
           {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
         </Button>
+        )}
       </div>
     </div>
   )

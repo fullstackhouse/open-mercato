@@ -26,11 +26,24 @@ export type RowActionItem = {
  */
 export const RowActionsReadOnlyContext = React.createContext(false)
 
+// Heuristics to catch mutating row actions that predate the explicit `mutates`
+// flag (edit / delete / duplicate / create links). Non-mutating actions
+// (view / open / preview / details) are left untouched.
+const MUTATION_ID_RE = /(^|[-_.:])(edit|update|delete|remove|destroy|duplicate|clone|archive|deactivate|create|new|add)($|[-_.:])/i
+const MUTATION_HREF_RE = /\/(edit|create|new|delete|duplicate)(\/|$|\?|#)/i
+
+function isMutatingRowItem(it: RowActionItem): boolean {
+  if (it.destructive || it.mutates) return true
+  if (it.id && MUTATION_ID_RE.test(it.id)) return true
+  if (it.href && MUTATION_HREF_RE.test(it.href)) return true
+  return false
+}
+
 export function RowActions({ items = [] }: { items?: RowActionItem[] }) {
   const t = useT()
   const suppressMutations = React.useContext(RowActionsReadOnlyContext)
   const visibleItems = React.useMemo(
-    () => (suppressMutations ? items.filter((it) => !it.destructive && !it.mutates) : items),
+    () => (suppressMutations ? items.filter((it) => !isMutatingRowItem(it)) : items),
     [items, suppressMutations],
   )
   const [open, setOpen] = React.useState(false)
