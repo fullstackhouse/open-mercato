@@ -10,6 +10,8 @@ import { profilePathPrefixes } from '@open-mercato/core/modules/auth/lib/profile
 import { APP_VERSION } from '@open-mercato/shared/lib/version'
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
+import { UiReadOnlyPolicyProvider } from '@open-mercato/ui/backend/ui-read-only/context'
+import { resolveUiReadOnlyMap } from '@open-mercato/shared/lib/ui-read-only/resolve'
 import { DemoFeedbackWidget } from '@/components/DemoFeedbackWidget'
 import { BackendHeaderChrome } from '@/components/BackendHeaderChrome'
 
@@ -129,9 +131,11 @@ export default async function BackendLayout({
         profileSectionTitle={translate('profile.page.title', 'Profile')}
         profilePathPrefixes={profilePathPrefixes}
       >
-        <PageInjectionBoundary path={path} context={injectionContext}>
-          {children}
-        </PageInjectionBoundary>
+        <UiReadOnlyPolicyProvider map={resolveUiReadOnlyMap()}>
+          <PageInjectionBoundary path={path} context={injectionContext}>
+            {children}
+          </PageInjectionBoundary>
+        </UiReadOnlyPolicyProvider>
         {demoModeEnabled ? <DemoFeedbackWidget demoModeEnabled={demoModeEnabled} /> : null}
       </AppShell>
     </I18nProvider>

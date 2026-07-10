@@ -116,6 +116,21 @@ export interface EncryptionOverridesShape {
 }
 
 /**
+ * Declarative UI read-only fields per canonical entity id (`module:entity`).
+ *
+ * A display policy, not a permission — enforced even for a superadmin. Each
+ * value is a list of read-only field ids or `['*']` for the whole entity;
+ * `null` disables a lower-tier declaration. See
+ * `../lib/ui-read-only/policy` for the resolver consumed by the client.
+ *
+ *   uiReadOnly: {
+ *     'sales:sales_order': ['*'],                                  // whole entity
+ *     'customers:customer_entity': ['first_name', 'primary_email'], // per-field
+ *   }
+ */
+export type UiReadOnlyOverridesMap = Record<string, UiReadOnlyOverride>
+
+/**
  * Umbrella shape for `entry.overrides`. Every key is optional; a
  * downstream app sets only the domains it cares about.
  */
@@ -135,6 +150,7 @@ export interface ModuleOverrides {
   acl?: AclOverridesShape
   di?: DiOverridesMap | LooseOverrideMap
   encryption?: EncryptionOverridesShape
+  uiReadOnly?: UiReadOnlyOverridesMap | LooseOverrideMap
 }
 
 /**
@@ -174,6 +190,7 @@ export type ModuleOverrideDomain =
   | 'acl'
   | 'di'
   | 'encryption'
+  | 'uiReadOnly'
 
 export interface ModuleOverrideEntry<TShape> {
   moduleId: string
@@ -226,6 +243,7 @@ const DOMAIN_KEYS: ModuleOverrideDomain[] = [
   'acl',
   'di',
   'encryption',
+  'uiReadOnly',
 ]
 
 const TRACKING_ISSUE_HINT =
@@ -340,6 +358,7 @@ import type { ApiInterceptor } from '../lib/crud/api-interceptor'
 import type { ResponseEnricher } from '../lib/crud/response-enricher'
 import type { CommandInterceptor } from '../lib/commands/command-interceptor'
 import type { PageMiddlewareRegistryEntry, PageRouteMiddleware } from './middleware/page'
+import type { UiReadOnlyFields, UiReadOnlyOverride } from '../lib/ui-read-only/policy'
 
 /** Override for a single API route entry: replace handler/metadata, or `null` to disable. */
 export interface ApiRouteOverrideDefinition {
@@ -436,6 +455,7 @@ const responseEnricherOverrideStore: OverrideStore<ResponseEnricher> = { modules
 const pageGuardOverrideStore: OverrideStore<PageRouteMiddleware> = { modules: {}, programmatic: {} }
 const aclFeatureOverrideStore: OverrideStore<Exclude<AclFeatureOverride, null>> = { modules: {}, programmatic: {} }
 const encryptionMapOverrideStore: OverrideStore<ModuleEncryptionMap> = { modules: {}, programmatic: {} }
+const uiReadOnlyOverrideStore: OverrideStore<UiReadOnlyFields> = { modules: {}, programmatic: {} }
 const diOverrideStore: OverrideStore<Exclude<DiBindingOverride, null>> = { modules: {}, programmatic: {} }
 const setupOverridesByModule: Record<string, SetupOverridesShape> = {}
 
@@ -723,6 +743,7 @@ export function resetModuleContractOverridesForTests(): void {
   clearStore(pageGuardOverrideStore)
   clearStore(aclFeatureOverrideStore)
   clearStore(encryptionMapOverrideStore)
+  clearStore(uiReadOnlyOverrideStore)
   clearStore(diOverrideStore)
   for (const key of Object.keys(setupOverridesByModule)) delete setupOverridesByModule[key]
 }
@@ -867,6 +888,26 @@ export function applyEncryptionMapOverrides(overrides: EncryptionMapOverridesMap
 
 export function composeEncryptionMapOverrides(): EncryptionMapOverridesMap {
   return composeStore(encryptionMapOverrideStore) as EncryptionMapOverridesMap
+}
+
+/**
+ * Programmatic API: apply UI read-only overrides. Each key is a canonical
+ * entity id (`module:entity`); the value is the read-only field list
+ * (`['*']` = whole entity) or `null` to disable a lower-tier declaration.
+ * Supersedes matching `modules.ts` inline overrides for the same entity.
+ */
+export function applyUiReadOnlyOverrides(overrides: UiReadOnlyOverridesMap): void {
+  applyStoreOverrides(uiReadOnlyOverrideStore, 'programmatic', overrides as OverrideMap<UiReadOnlyFields>, { label: 'uiReadOnly' })
+}
+
+/**
+ * Resolve the final UI read-only override map. Resolution order (lowest →
+ * highest precedence): `modules.ts` inline, then programmatic. `null`
+ * values are preserved so the consumer can apply disable semantics against
+ * a module-declared base (see `applyUiReadOnlyOverrideMap`).
+ */
+export function composeUiReadOnlyOverrides(): UiReadOnlyOverridesMap {
+  return composeStore(uiReadOnlyOverrideStore) as UiReadOnlyOverridesMap
 }
 
 export function applyDiOverrides(overrides: DiOverridesMap): void {
@@ -1516,6 +1557,12 @@ function encryptionOverridesApplier(entries: ReadonlyArray<ModuleOverrideEntry<E
   }
 }
 
+function uiReadOnlyOverridesApplier(entries: ReadonlyArray<ModuleOverrideEntry<UiReadOnlyOverridesMap>>): void {
+  for (const entry of entries) {
+    applyStoreOverrides(uiReadOnlyOverrideStore, 'modules', entry.overrides as OverrideMap<UiReadOnlyFields>, { label: 'uiReadOnly' })
+  }
+}
+
 function registerBuiltInModuleOverrideAppliers(): void {
   registerModuleOverrideApplier<RoutesOverridesShape>('routes', routesOverridesApplier)
   registerModuleOverrideApplier<EventsOverridesShape>('events', eventsOverridesApplier)
@@ -1531,6 +1578,7 @@ function registerBuiltInModuleOverrideAppliers(): void {
   registerModuleOverrideApplier<AclOverridesShape>('acl', aclOverridesApplier)
   registerModuleOverrideApplier<DiOverridesMap>('di', diOverridesApplier)
   registerModuleOverrideApplier<EncryptionOverridesShape>('encryption', encryptionOverridesApplier)
+  registerModuleOverrideApplier<UiReadOnlyOverridesMap>('uiReadOnly', uiReadOnlyOverridesApplier)
 }
 
 registerBuiltInModuleOverrideAppliers()

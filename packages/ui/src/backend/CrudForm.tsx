@@ -31,6 +31,7 @@ import {
 import { flash } from './FlashMessages'
 import { FormHeader } from './forms/FormHeader'
 import { FormFooter } from './forms/FormFooter'
+import { useUiReadOnlyPolicy } from './ui-read-only/context'
 import { Button } from '../primitives/button'
 import { IconButton } from '../primitives/icon-button'
 import {
@@ -797,6 +798,20 @@ export function CrudForm<TValues extends Record<string, unknown>>({
   )
   const primaryEntityId = resolvedEntityIds.length ? resolvedEntityIds[0] : null
 
+  // Declarative UI read-only policy (independent of RBAC; applies to superadmin).
+  // `entityUiWholeReadOnly` gates the whole form (footer, delete, submit);
+  // `isFieldUiReadOnly` drives per-field display-only rendering. Both cover the
+  // whole-entity `'*'` case since isFieldReadOnly returns true for it.
+  const uiReadOnlyPolicy = useUiReadOnlyPolicy()
+  const entityUiWholeReadOnly = React.useMemo(
+    () => resolvedEntityIds.some((eid) => uiReadOnlyPolicy.isEntityReadOnly(eid)),
+    [uiReadOnlyPolicy, resolvedEntityIds],
+  )
+  const isFieldUiReadOnly = React.useCallback(
+    (fieldId: string) => resolvedEntityIds.some((eid) => uiReadOnlyPolicy.isFieldReadOnly(eid, fieldId)),
+    [uiReadOnlyPolicy, resolvedEntityIds],
+  )
+
   // Injection spot events for widget lifecycle management
   const resolvedInjectionSpotId = React.useMemo(() => {
     if (injectionSpotId) return injectionSpotId
@@ -1425,7 +1440,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
     if (rawId === undefined || rawId === null) return true
     return typeof rawId === 'string' ? rawId.trim().length === 0 : false
   }, [values])
-  const showDelete = Boolean(onDelete) && (typeof deleteVisible === 'boolean' ? deleteVisible : !isNewRecord)
+  const showDelete = Boolean(onDelete) && !entityUiWholeReadOnly && (typeof deleteVisible === 'boolean' ? deleteVisible : !isNewRecord)
   const versionHistoryEnabled = Boolean(versionHistory?.resourceId && String(versionHistory.resourceId).trim().length > 0)
   const versionHistoryAction = (
     <VersionHistoryAction
@@ -2130,11 +2145,11 @@ export function CrudForm<TValues extends Record<string, unknown>>({
   }, [allFields, resolveGroupFields, resolvedGroupsForLayout, useGroupedLayout])
 
   const requestSubmit = React.useCallback(() => {
-    if (formReadOnly) return
+    if (formReadOnly || entityUiWholeReadOnly) return
     if (typeof document === 'undefined') return
     const form = document.getElementById(formId) as HTMLFormElement | null
     form?.requestSubmit()
-  }, [formId, formReadOnly])
+  }, [formId, formReadOnly, entityUiWholeReadOnly])
 
   const lastFocusedFieldRef = React.useRef<string | null>(null)
   const lastErrorFieldRef = React.useRef<string | null>(null)
@@ -2587,7 +2602,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (formReadOnly) return
+    if (formReadOnly || entityUiWholeReadOnly) return
     if (submittingRef.current) return
     submittingRef.current = true
     try {
@@ -3061,12 +3076,13 @@ export function CrudForm<TValues extends Record<string, unknown>>({
               onBlurRequest={onBlurRequest}
               values={values}
               loadFieldOptions={loadFieldOptions}
-                autoFocus={!disableInitialFocus && !formReadOnly && Boolean(firstFieldId && f.id === firstFieldId)}
+                autoFocus={!disableInitialFocus && !formReadOnly && !isFieldUiReadOnly(f.id) && Boolean(firstFieldId && f.id === firstFieldId)}
               onSubmitRequest={requestSubmit}
               wrapperClassName={wrapperClassName}
               entityIdForField={primaryEntityId ?? undefined}
               recordId={recordId}
               markRequired={widgetRequiredFieldIds.has(f.id)}
+              forceReadOnly={isFieldUiReadOnly(f.id)}
             />
           )
         })}
@@ -3496,7 +3512,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
               deleteLabel,
               cancelHref,
               cancelLabel,
-              submit: formReadOnly ? undefined : { formId, pending: pending, label: resolvedSubmitLabel, pendingLabel: savingLabel, icon: submitIcon },
+              submit: formReadOnly || entityUiWholeReadOnly ? undefined : { formId, pending: pending, label: resolvedSubmitLabel, pendingLabel: savingLabel, icon: submitIcon },
             }}
           />
         ) : headerExtraActions ? (
@@ -3517,7 +3533,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
                 context={injectionContext}
                 data={values}
                 onDataChange={(newData) => setValues(newData as CrudFormValues<TValues>)}
-                disabled={pending || formReadOnly}
+                disabled={pending || formReadOnly || entityUiWholeReadOnly}
                 widgetsOverride={stackedInjectionWidgets}
               />
             ) : null}
@@ -3538,7 +3554,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
               {hasSecondaryColumn ? <div className="space-y-3" data-crud-injection-region>{col2Content}</div> : null}
             </div>
             {formError && !Object.keys(errors).length ? <div className="text-sm text-status-error-text">{formError}</div> : null}
-            {hideFooterActions || formReadOnly ? null : (
+            {hideFooterActions || formReadOnly || entityUiWholeReadOnly ? null : (
               <FormFooter
                 embedded={embedded}
                 className={dialogFooterClass}
@@ -3578,7 +3594,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
             deleteLabel,
             cancelHref,
             cancelLabel,
-            submit: formReadOnly ? undefined : { formId, pending: pending, label: resolvedSubmitLabel, pendingLabel: savingLabel, icon: submitIcon },
+            submit: formReadOnly || entityUiWholeReadOnly ? undefined : { formId, pending: pending, label: resolvedSubmitLabel, pendingLabel: savingLabel, icon: submitIcon },
           }}
         />
       ) : headerExtraActions ? (
@@ -3604,7 +3620,7 @@ export function CrudForm<TValues extends Record<string, unknown>>({
                 context={injectionContext}
                 data={values}
                 onDataChange={(newData) => setValues(newData as CrudFormValues<TValues>)}
-                disabled={pending || formReadOnly}
+                disabled={pending || formReadOnly || entityUiWholeReadOnly}
                 widgetsOverride={stackedInjectionWidgets}
               />
             ) : null}
@@ -3624,18 +3640,19 @@ export function CrudForm<TValues extends Record<string, unknown>>({
                     onBlurRequest={onBlurRequest}
                     values={values}
                     loadFieldOptions={loadFieldOptions}
-                    autoFocus={!disableInitialFocus && !formReadOnly && Boolean(firstFieldId && f.id === firstFieldId)}
+                    autoFocus={!disableInitialFocus && !formReadOnly && !isFieldUiReadOnly(f.id) && Boolean(firstFieldId && f.id === firstFieldId)}
                     onSubmitRequest={requestSubmit}
                     wrapperClassName={wrapperClassName}
                     entityIdForField={primaryEntityId ?? undefined}
                     recordId={recordId}
                     markRequired={widgetRequiredFieldIds.has(f.id)}
+                    forceReadOnly={isFieldUiReadOnly(f.id)}
                   />
                 )
               })}
             </div>
             {formError && !Object.keys(errors).length ? <div className="text-sm text-status-error-text">{formError}</div> : null}
-            {hideFooterActions || formReadOnly ? null : (
+            {hideFooterActions || formReadOnly || entityUiWholeReadOnly ? null : (
               <FormFooter
                 embedded={embedded}
                 className={dialogFooterClass}
@@ -4067,6 +4084,12 @@ type FieldControlProps = {
   entityIdForField?: string
   recordId?: string
   markRequired?: boolean
+  /**
+   * Declarative UI read-only (policy-driven, independent of RBAC). Renders
+   * the field value display-only — the input is not mounted at all — so a
+   * read-only target cannot be activated even by a superadmin.
+   */
+  forceReadOnly?: boolean
 }
 
 function supportsWrapperBlurValidation(field: CrudField): boolean {
@@ -4181,6 +4204,7 @@ const FieldControl = React.memo(function FieldControlImpl({
   entityIdForField,
   recordId,
   markRequired,
+  forceReadOnly,
 }: FieldControlProps) {
   const t = useT()
   const fieldSetValue = React.useCallback(
@@ -4217,6 +4241,55 @@ const FieldControl = React.memo(function FieldControlImpl({
   const singleSelectLabel = singleSelectValue
     ? options.find((option) => option.value === singleSelectValue)?.label
     : undefined
+
+  // Declarative UI read-only: render the value display-only and DO NOT mount
+  // any input. This is a display policy (independent of RBAC), so there is no
+  // editor to activate — enforced even for a superadmin.
+  if (forceReadOnly) {
+    const labelFor = (v: unknown) =>
+      options.find((o) => o.value === String(v))?.label ?? String(v)
+    const emptyDisplay = <span className="text-muted-foreground">—</span>
+    let display: React.ReactNode
+    if (field.type === 'checkbox') {
+      return (
+        <div className={rootClassName} data-crud-field-id={field.id} data-crud-readonly-field="true">
+          <div className="flex items-center gap-2 text-sm" aria-readonly="true">
+            {value ? <Check className="size-4 text-foreground" aria-hidden="true" /> : emptyDisplay}
+            <span>{field.label}</span>
+          </div>
+          {builtin?.description ? (
+            <p className="text-xs text-muted-foreground">{builtin.description}</p>
+          ) : null}
+        </div>
+      )
+    } else if (Array.isArray(value)) {
+      display = value.length ? value.map(labelFor).join(', ') : emptyDisplay
+    } else if (value == null || value === '') {
+      display = emptyDisplay
+    } else if (field.type === 'select' || field.type === 'relation' || field.type === 'combobox') {
+      display = singleSelectLabel ?? labelFor(value)
+    } else if (field.type === 'password') {
+      display = '••••••••'
+    } else {
+      display = String(value)
+    }
+    return (
+      <div className={rootClassName} data-crud-field-id={field.id} data-crud-readonly-field="true">
+        {field.label.trim().length > 0 ? (
+          <label className="block text-sm font-medium">{field.label}</label>
+        ) : null}
+        <div
+          className="min-h-9 whitespace-pre-wrap break-words rounded-md border border-input bg-muted/40 px-3 py-2 text-sm text-foreground"
+          aria-readonly="true"
+        >
+          {display}
+        </div>
+        {builtin?.description ? (
+          <p className="text-xs text-muted-foreground">{builtin.description}</p>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <div

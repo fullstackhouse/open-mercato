@@ -248,6 +248,11 @@ export type Module = {
   setup?: import('./setup').ModuleSetupConfig
   // Optional: default encryption maps owned by the module (from encryption.ts)
   defaultEncryptionMaps?: import('./encryption').ModuleEncryptionMap[]
+  // Optional: module-declared UI read-only fields per canonical entity id
+  // (`module:entity` → field ids, or `['*']` for the whole entity). A display
+  // policy independent of RBAC; app-level `modules.ts` overrides layer on top.
+  // See ../lib/ui-read-only/policy.
+  uiReadOnly?: import('../lib/ui-read-only/policy').UiReadOnlyMap
   // Optional: integration marketplace declarations discovered from integration.ts
   integrations?: IntegrationDefinition[]
   bundles?: IntegrationBundle[]
