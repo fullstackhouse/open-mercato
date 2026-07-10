@@ -164,11 +164,26 @@ For an admin one-off *visible* push, use `pushNotificationService.sendCustomPush
 Push tokens are useless without credentials. Credentials live **per tenant** in the admin UI
 (no env vars): **Settings → Module Configs → Communication Channels → Connect**.
 
-| Provider | What you paste | Where to get it |
-|----------|----------------|-----------------|
-| **Firebase (FCM)** — Android | Service-account JSON | Firebase Console → Project settings → Service accounts → Generate key |
-| **Apple (APNs)** — iOS | `.p8` key + Key ID + Team ID + Bundle ID + production flag | Apple Developer → Keys → APNs key |
-| **Expo** | (optional) access token | expo.dev → Account → Tokens |
+| Provider | Platforms | What you paste | Where to get it |
+|----------|-----------|----------------|-----------------|
+| **Firebase (FCM)** | Android + iOS | Service-account JSON | Firebase Console → Project settings → Service accounts → Generate key |
+| **Apple (APNs)** | iOS | `.p8` key + Key ID + Team ID + Bundle ID + production flag | Apple Developer → Keys → APNs key |
+| **Expo** | Android + iOS | (optional) access token | expo.dev → Account → Tokens |
+
+A device is routed to a provider by the `pushProvider` it registers with, never by its `platform`.
+So **FCM serves iOS as well as Android** — the adapter emits the `apns` payload block (priority
+headers, `aps.sound`/`aps.badge`, and `content-available: 1` for silent pushes) alongside the
+`android` block on every send.
+
+Choosing between FCM and APNs for iOS:
+
+- **FCM for both platforms** — one credential, one channel, one code path. Firebase relays to iOS
+  through APNs on your behalf, so you must upload an **APNs auth key** to your Firebase project
+  (Project settings → Cloud Messaging → APNs Authentication Key). Without it, iOS sends fail.
+- **APNs directly** — no Firebase dependency and one less hop, at the cost of connecting a second
+  provider. Prefer this if you ship iOS only.
+
+Connecting both is fine: each device is delivered through whichever provider it registered with.
 
 ### Existing tenants: sync the new ACL grants
 

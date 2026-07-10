@@ -28,7 +28,9 @@ const PROVIDER = 'fcm'
 
 test.describe('TC-CHANNEL-PUSH-005: real FCM adapter reaches sent with a correct native message', () => {
   test('delivers a visible notification and maps pushOptions onto the FCM message', async ({ request }) => {
-    test.slow()
+    // `test.slow()` only triples the config's 20s budget (→ 60s), which the two queue drains plus the
+    // 30s poll below consume on a loaded runner — leaving nothing for setup. Budget the test explicitly.
+    test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, organizationId, userId } = getTokenScope(adminToken)
     // Run-unique: the sink is append-only and is not truncated on the reused-environment path.

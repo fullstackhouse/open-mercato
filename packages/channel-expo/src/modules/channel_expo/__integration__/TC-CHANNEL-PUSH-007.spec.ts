@@ -24,7 +24,9 @@ const PROVIDER = 'expo'
 
 test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correct native message', () => {
   test('maps sound and priority onto the Expo message', async ({ request }) => {
-    test.slow()
+    // `test.slow()` only triples the config's 20s budget (→ 60s), which the two queue drains plus the
+    // 30s poll below consume on a loaded runner — leaving nothing for setup. Budget the test explicitly.
+    test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
     const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)

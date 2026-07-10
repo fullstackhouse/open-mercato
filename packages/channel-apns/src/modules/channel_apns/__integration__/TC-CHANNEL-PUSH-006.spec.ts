@@ -34,7 +34,9 @@ type NativeApns = {
 
 test.describe('TC-CHANNEL-PUSH-006: real APNs adapter reaches sent with a correct native notification', () => {
   test('maps pushOptions onto the aps payload for a visible notification', async ({ request }) => {
-    test.slow()
+    // `test.slow()` only triples the config's 20s budget (→ 60s), which the two queue drains plus the
+    // 30s poll below consume on a loaded runner — leaving nothing for setup. Budget the test explicitly.
+    test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
     const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
@@ -85,7 +87,9 @@ test.describe('TC-CHANNEL-PUSH-006: real APNs adapter reaches sent with a correc
   })
 
   test('a silent type produces a background content-available push with no user-facing copy', async ({ request }) => {
-    test.slow()
+    // `test.slow()` only triples the config's 20s budget (→ 60s), which the two queue drains plus the
+    // 30s poll below consume on a loaded runner — leaving nothing for setup. Budget the test explicitly.
+    test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
     const { pushToken, tokenTail } = makeFakePushToken(PROVIDER)
