@@ -10,6 +10,7 @@ import { registerResponseEnrichers } from '../crud/enricher-registry'
 import { registerApiInterceptors } from '../crud/interceptor-registry'
 import { registerComponentOverrides } from '../../modules/widgets/component-registry'
 import { registerMutationGuards } from '../crud/mutation-guard-store'
+import { createUiReadOnlyWriteGuard } from '../ui-read-only/write-guard'
 import { registerCommandInterceptors } from '../commands/command-interceptor-store'
 import { registerNotificationHandlers } from '../notifications/handler-registry'
 import { clearRegisteredIntegrations, registerBundles, registerIntegrations } from '../../modules/integrations/types'
@@ -89,9 +90,12 @@ export function createBootstrap(data: BootstrapData, options: BootstrapOptions =
     }
 
     // === 6e. Mutation guards (for CRUD mutation lifecycle) ===
-    if (data.guardEntries) {
-      registerMutationGuards(data.guardEntries)
-    }
+    // Prepend the built-in UI read-only write guard — inert unless enabled via
+    // OM_UI_READ_ONLY_ENFORCE_WRITES, so it is safe to register for every app.
+    registerMutationGuards([
+      { moduleId: 'shared', guards: [createUiReadOnlyWriteGuard()] },
+      ...(data.guardEntries ?? []),
+    ])
 
     // === 6f. Command interceptors (for command bus lifecycle) ===
     if (data.commandInterceptorEntries) {

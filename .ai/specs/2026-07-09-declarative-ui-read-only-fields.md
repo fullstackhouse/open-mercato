@@ -65,9 +65,13 @@ input**, and hide the edit toggle / add-row / delete affordances.
   *(planned)*
 
 ## Optional server-side enforcement
-The same declaration can pair with a server-side write guard (via the existing
-`MutationGuard` registry) so a read-only field/entity both hides the UI **and**
-rejects the write — configurable, defense-in-depth. *(planned)*
+The same declaration pairs with a built-in `MutationGuard`
+(`createUiReadOnlyWriteGuard`) so a read-only field/entity both hides the UI
+**and** rejects the write — defense-in-depth. It is registered for every app but
+**inert unless enabled** via `OM_UI_READ_ONLY_ENFORCE_WRITES`
+(`off` (default) | `all` | comma-separated entity ids). Whole-entity read-only
+rejects create/update/delete; per-field read-only rejects only writes that touch
+those fields. *(implemented)*
 
 ## Why upstream
 OM has no "read-only backoffice" story — a framework gap. Generally useful for
@@ -83,6 +87,7 @@ CSS) with clean per-field granularity.
 - [x] Client provider + `useUiReadOnly` hook
 - [x] CrudForm display-only rendering + whole-entity footer/submit gating
 - [x] Backend layout wiring (template + demo app)
-- [ ] DataTable action suppression
+- [x] DataTable action suppression (row + bulk, via `mutates`/`destructive`)
+- [x] Optional server-side write guard (`OM_UI_READ_ONLY_ENFORCE_WRITES`)
 - [ ] Inline detail editors (sales/customers/catalog)
-- [ ] Optional server-side write guard
+- [ ] Annotate core DataTable edit actions with `mutates: true`
