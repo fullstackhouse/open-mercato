@@ -174,7 +174,9 @@ export async function POST(req: Request) {
     if (cache) {
       await cache.deleteByTags([`nav:entities:${auth.tenantId || 'null'}`])
     }
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
   return NextResponse.json({ ok: true, item: { id: ent.id, entityId: ent.entityId, label: ent.label, description: ent.description ?? undefined } })
 }
 
@@ -217,7 +219,9 @@ export async function DELETE(req: Request) {
     if (cache) {
       await cache.deleteByTags([`nav:entities:${auth.tenantId || 'null'}`])
     }
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
   return NextResponse.json({ ok: true })
 }
 

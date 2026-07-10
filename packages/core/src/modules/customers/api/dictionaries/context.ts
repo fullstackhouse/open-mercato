@@ -135,7 +135,9 @@ export async function resolveDictionaryRouteContext(
   let cache: CacheStrategy | undefined
   try {
     cache = (container.resolve('cache') as CacheStrategy)
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
 
   const readableOrganizationIds = new Set<string>()
   try {

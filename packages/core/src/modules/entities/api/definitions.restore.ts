@@ -29,7 +29,9 @@ export async function POST(req: Request) {
   let cache: CacheStrategy | undefined
   try {
     cache = resolve('cache') as CacheStrategy
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
 
   const where: any = { entityId, key, organizationId: auth.orgId ?? null, tenantId: auth.tenantId ?? null }
   const def = await em.findOne(CustomFieldDef, where)

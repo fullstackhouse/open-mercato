@@ -377,7 +377,9 @@ export async function PUT(req: Request) {
     if (cache?.deleteByTags) {
       try {
         await cache.deleteByTags([`nav:sidebar:role:${role.id}`])
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
     const rolesPayload = await loadRolesPayload(em, { tenantId: auth.tenantId ?? null, locale })
     return NextResponse.json({
@@ -488,7 +490,9 @@ export async function PUT(req: Request) {
   if (filteredClearRoleIds.length > 0 && cache?.deleteByTags) {
     try {
       await cache.deleteByTags(filteredClearRoleIds.map((roleId) => `nav:sidebar:role:${roleId}`))
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
 
   if (cache?.deleteByTags) {
@@ -499,7 +503,9 @@ export async function PUT(req: Request) {
     ]
     try {
       await cache.deleteByTags(tags)
-    } catch {}
+    } catch {
+      // best-effort cache write/invalidation; must not fail the request
+    }
   }
 
   let rolesPayload: Array<{ id: string; name: string; hasPreference: boolean }> = []
@@ -573,7 +579,9 @@ export async function DELETE(req: Request) {
   if (cache?.deleteByTags) {
     try {
       await cache.deleteByTags([`nav:sidebar:role:${role.id}`])
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
 
   return NextResponse.json({ ok: true, scope: { type: 'role', roleId: role.id } })

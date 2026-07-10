@@ -556,7 +556,7 @@ export default function EditUserPage({ params }: { params?: { id?: string } }) {
               await saveUserAcl()
             }
             await widgetEditorRef.current?.save()
-            try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch {}
+            try { window.dispatchEvent(new Event('om:refresh-sidebar')) } catch { /* best-effort UI refresh signal; ignore if it cannot be dispatched */ }
           }}
           onDelete={async () => {
             const userOptimisticLockHeader = buildOptimisticLockHeader(initialUser?.updatedAt)

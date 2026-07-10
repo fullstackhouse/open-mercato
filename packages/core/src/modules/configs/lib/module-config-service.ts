@@ -46,7 +46,9 @@ const readCache = async (cache: CacheStrategy | null, key: string): Promise<Cach
     if (cached && typeof cached === 'object' && 'found' in cached) {
       return cached as CachePayload
     }
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
   return null
 }
 
@@ -54,21 +56,27 @@ const writeCache = async (cache: CacheStrategy | null, key: string, payload: Cac
   if (!cache) return
   try {
     await cache.set(key, payload, { ttl: CACHE_TTL_MS, tags: [moduleTag(moduleId)] })
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 }
 
 const deleteCacheKey = async (cache: CacheStrategy | null, key: string) => {
   if (!cache) return
   try {
     await cache.delete(key)
-  } catch {}
+  } catch {
+    // best-effort cache write/invalidation; must not fail the request
+  }
 }
 
 const deleteCacheByModule = async (cache: CacheStrategy | null, moduleId: string) => {
   if (!cache) return
   try {
     await cache.deleteByTags([moduleTag(moduleId)])
-  } catch {}
+  } catch {
+    // best-effort cache write/invalidation; must not fail the request
+  }
 }
 
 const normalizeKey = (moduleId: string, name: string) => moduleConfigKeySchema.parse({ moduleId, name })
@@ -181,7 +189,9 @@ export function createModuleConfigService(container: AppContainer): ModuleConfig
           dirty = true
           touched.push(entity)
         }
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
     if (!dirty) return
     await em.flush()

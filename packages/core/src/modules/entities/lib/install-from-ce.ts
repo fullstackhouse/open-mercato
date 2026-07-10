@@ -233,7 +233,9 @@ export async function installCustomEntitiesFromModules(
             skipped++
             continue
           }
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
       }
 
       let entityResult: UpsertCustomEntityResult = 'unchanged'
@@ -277,7 +279,9 @@ export async function installCustomEntitiesFromModules(
         if (!dryRun && cache) {
           try {
             await cache.set(cacheKey, checksum, { tags: [`custom-entity:${entityId}`, `custom-entity-scope:${scopeKey}`] })
-          } catch {}
+          } catch {
+            // intentionally ignored: best-effort operation
+          }
         }
         if (logger) {
           const parts: string[] = []
@@ -292,7 +296,9 @@ export async function installCustomEntitiesFromModules(
         if (!dryRun && cache) {
           try {
             await cache.set(cacheKey, checksum, { tags: [`custom-entity:${entityId}`, `custom-entity-scope:${scopeKey}`] })
-          } catch {}
+          } catch {
+            // intentionally ignored: best-effort operation
+          }
         }
       }
     }

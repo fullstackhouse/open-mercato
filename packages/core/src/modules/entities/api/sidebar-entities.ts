@@ -34,7 +34,9 @@ export async function GET(req: Request) {
       const cached = await cache.get(cacheKey)
       if (cached && Array.isArray(cached.items)) return NextResponse.json(cached)
     }
-  } catch {}
+  } catch {
+    // best-effort cache read; fall back to the source of truth on any error
+  }
 
   const entities = await em.find(CustomEntity as any, where as any, { orderBy: { label: 'asc' } as any })
   
@@ -47,7 +49,9 @@ export async function GET(req: Request) {
   const payload = { items }
   try {
     if (cache) await cache.set(cacheKey, payload, { tags: [`nav:entities:${auth.tenantId || 'null'}`] })
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
   return NextResponse.json(payload)
 }
 

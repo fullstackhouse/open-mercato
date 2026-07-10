@@ -55,7 +55,9 @@ export function register(container: AppContainer) {
     )
     // Replace existing registration
     ;(container as any).register({ queryEngine: { resolve: () => hybrid } })
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 
   // Subscribe to CRUD events and forward to query_index subscribers for unified handling
   const setup = () => {
@@ -81,7 +83,9 @@ export function register(container: AppContainer) {
               .executeTakeFirst() as { organization_id: string | null; tenant_id: string | null } | undefined
             orgId = row?.organization_id ?? orgId
             tenantId = row?.tenant_id ?? tenantId
-          } catch {}
+          } catch {
+            // intentionally ignored: best-effort operation
+          }
         }
         // Optional: only index when custom field definitions exist for this entity (org/global)
         try {
@@ -109,12 +113,18 @@ export function register(container: AppContainer) {
           }
           const hasCf = await cfQuery.executeTakeFirst()
           if (!hasCf) return
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
         try {
           const bus = ctx.resolve('eventBus') as any
           await bus.emitEvent('query_index.upsert_one', { entityType, recordId: id, organizationId: orgId, tenantId })
-        } catch {}
-      } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
     const makeDeleteHandler = (entityType: string) => async (payload: any, ctx: any) => {
       try {
@@ -134,13 +144,19 @@ export function register(container: AppContainer) {
               .executeTakeFirst() as { organization_id: string | null; tenant_id: string | null } | undefined
             orgId = row?.organization_id ?? orgId
             tenantId = row?.tenant_id ?? tenantId
-          } catch {}
+          } catch {
+            // intentionally ignored: best-effort operation
+          }
         }
         try {
           const bus = ctx.resolve('eventBus') as any
           await bus.emitEvent('query_index.delete_one', { entityType, recordId: id, organizationId: orgId, tenantId })
-        } catch {}
-      } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
 
     // Build list of entity ids to subscribe to
@@ -178,8 +194,10 @@ export function register(container: AppContainer) {
             }).catch(() => {})
           }
         })
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
 
-  try { setup() } catch {}
+  try { setup() } catch { /* index setup is best-effort; a failure here must not break bootstrap */ }
 }

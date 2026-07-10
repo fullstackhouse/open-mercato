@@ -24,7 +24,9 @@ export async function POST(req: Request) {
   let em: any | null = null
   try {
     em = container.resolve('em')
-  } catch {}
+  } catch {
+    // entity manager is optional in this context; proceed without it
+  }
   const bus = container.resolve('eventBus') as any
 
   const guardUserId = typeof auth.sub === 'string' ? auth.sub : ''

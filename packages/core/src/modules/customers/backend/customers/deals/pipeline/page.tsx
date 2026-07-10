@@ -198,7 +198,9 @@ function saveLaneWidths(scopeKey: string, widths: Record<string, number>) {
     } else {
       window.localStorage.setItem(`${LANE_WIDTHS_STORAGE_KEY_PREFIX}:${scopeKey}`, JSON.stringify(widths))
     }
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 }
 
 function normalizeAmount(value: unknown): number | null {

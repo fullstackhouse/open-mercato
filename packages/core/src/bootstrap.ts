@@ -149,7 +149,9 @@ export async function bootstrap(container: AwilixContainer) {
     try {
       const { getModules } = await import('@open-mercato/shared/lib/i18n/server')
       loadedModules = getModules()
-    } catch {}
+    } catch {
+      // optional module metadata; continue with whatever loaded
+    }
     const subs = loadedModules.flatMap((m) => m.subscribers || [])
     if (subs.length) (container.resolve as any)('eventBus').registerModuleSubscribers(subs)
 

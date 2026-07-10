@@ -51,7 +51,9 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
       const baseDeleted = baseMissing || (row && row.deleted_at != null)
       baseCheckSucceeded = true
       if (baseDeleted) baseDelta = -1
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
     if (!baseCheckSucceeded) baseDelta = -1
 
     const baseDeltaOverride =

@@ -142,7 +142,9 @@ export async function GET(req: Request) {
     const cfRows = await cfQuery.execute() as Array<{ entity_id: string }>
     const enabled = new Set<string>((cfRows || []).map((r) => String(r.entity_id)))
     entityIds = entityIds.filter((id) => enabled.has(id))
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 
   const HEARTBEAT_STALE_MS = 60_000
   const COVERAGE_STALE_MS = 60_000
@@ -379,7 +381,9 @@ export async function GET(req: Request) {
           )
         )
       }
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
 
   let errorQuery = db

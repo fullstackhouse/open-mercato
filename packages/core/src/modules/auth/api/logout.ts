@@ -37,7 +37,9 @@ export async function POST(req: Request) {
       if (sessToken) {
         await auth.deleteSessionByToken(sessToken)
       }
-    } catch {}
+    } catch {
+      // logout is best-effort; continue clearing the client session on error
+    }
   }
   const res = NextResponse.redirect(buildRequestOriginUrl(req, '/login'))
   res.cookies.set('auth_token', '', { path: '/', maxAge: 0 })

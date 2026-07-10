@@ -149,7 +149,9 @@ export async function GET(req: Request, ctx: { params?: { dictionaryId?: string 
             ],
           }),
         )
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
 
     return NextResponse.json(payload)

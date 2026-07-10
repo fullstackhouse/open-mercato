@@ -63,7 +63,9 @@ export default function CreateEntityPage() {
             })
             try {
               window.dispatchEvent(new Event('om:refresh-sidebar'))
-            } catch {}
+            } catch {
+              // best-effort UI refresh signal; ignore if it cannot be dispatched
+            }
             const successMessage = t('entities.userEntities.flash.created', 'Entity created')
             pushWithFlash(router, `/backend/entities/user/${encodeURIComponent(entityId)}`, successMessage, 'success')
           }}

@@ -168,7 +168,9 @@ async function resolveEntityDefaultEditor(em: any, entityId: string, tenantId: s
       ],
     } as any)
     if (ent && typeof (ent as any).defaultEditor === 'string') return (ent as any).defaultEditor
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
   return undefined
 }
 
@@ -217,7 +219,9 @@ export async function GET(req: Request) {
   let cache: CacheStrategy | undefined
   try {
     cache = resolve('cache') as CacheStrategy
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
 
   let canManageDefinitions = false
   if (typeof auth.sub === 'string' && auth.sub.length > 0) {
@@ -473,7 +477,9 @@ export async function POST(req: Request) {
   let cache: CacheStrategy | undefined
   try {
     cache = resolve('cache') as CacheStrategy
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
 
   const where: any = { entityId: input.entityId, key: input.key, organizationId: auth.orgId ?? null, tenantId: auth.tenantId ?? null }
   let def = await em.findOne(CustomFieldDef, where)
@@ -548,7 +554,9 @@ export async function DELETE(req: Request) {
   let cache: CacheStrategy | undefined
   try {
     cache = resolve('cache') as CacheStrategy
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
   const where: any = { entityId, key, organizationId: auth.orgId ?? null, tenantId: auth.tenantId ?? null }
   const def = await em.findOne(CustomFieldDef, where)
   if (!def) return NextResponse.json({ error: 'Not found' }, { status: 404 })

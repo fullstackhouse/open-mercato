@@ -319,7 +319,9 @@ export async function POST(req: Request) {
       if (typeof cfg.partitionCode === 'string' && cfg.partitionCode.trim().length > 0) {
         partitionFromField = sanitizePartitionCode(cfg.partitionCode)
       }
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
   if (hasDangerousExecutableExtension(file.name)) {
     return NextResponse.json({

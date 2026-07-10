@@ -69,7 +69,9 @@ export async function POST(req: Request) {
   let cache: CacheStrategy | undefined
   try {
     cache = resolve('cache') as CacheStrategy
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
 
   const guard = await beginEntitiesMutationGuard({
     container,
@@ -145,7 +147,7 @@ export async function POST(req: Request) {
     await em.flush()
     await em.commit()
   } catch (e) {
-    try { await em.rollback() } catch {}
+    try { await em.rollback() } catch { /* ignore rollback failure so the original error is not masked */ }
     return NextResponse.json({ error: 'Failed to save definitions batch' }, { status: 500 })
   }
 

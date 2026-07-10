@@ -241,7 +241,9 @@ export async function PUT(req: Request) {
   try {
     const cache = container.resolve('cache') as any
     if (cache) await cache.deleteByTags([`rbac:user:${parsed.data.userId}`])
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 
   return NextResponse.json({
     ok: true,

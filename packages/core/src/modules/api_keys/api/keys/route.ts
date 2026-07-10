@@ -315,7 +315,9 @@ const crud = makeCrudRoute<
       try {
         const rbac = (ctx.container.resolve('rbacService') as RbacService)
         await rbac.invalidateUserCache(`api_key:${entity.id}`)
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     },
     beforeDelete: async (id, ctx) => {
       const auth = ctx.auth
@@ -341,7 +343,9 @@ const crud = makeCrudRoute<
       try {
         const rbac = (ctx.container.resolve('rbacService') as RbacService)
         await rbac.invalidateUserCache(`api_key:${id}`)
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     },
   },
 })

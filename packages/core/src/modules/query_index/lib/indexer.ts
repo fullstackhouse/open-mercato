@@ -119,7 +119,9 @@ export async function buildIndexDoc(em: EntityManager, params: BuildDocParams): 
         }
       }
     }
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 
   try {
     doc = attachAggregateSearchField(doc)
@@ -130,7 +132,9 @@ export async function buildIndexDoc(em: EntityManager, params: BuildDocParams): 
       { tenantId: params.tenantId ?? null, organizationId: params.organizationId ?? null },
       encryption,
     )
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 
   return doc
 }
@@ -183,7 +187,9 @@ export async function upsertIndexRow(
           tenantId: args.tenantId ?? null,
           doc: null,
         })
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
     if (existed) {
       await scopeEntityIndexes(
@@ -232,7 +238,9 @@ export async function upsertIndexRow(
           .insertInto('entity_indexes' as any)
           .values({ ...payload, created_at: sql`now()` } as any)
           .execute()
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
     }
   }
 
@@ -251,7 +259,9 @@ export async function upsertIndexRow(
         doc,
         searchTokenDoc: args.searchTokenDoc ?? null,
       })
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
   return { doc, existed, wasDeleted, created, revived }
 }
@@ -323,7 +333,9 @@ export async function markDeleted(
         organizationId: args.organizationId ?? null,
         tenantId: args.tenantId ?? null,
       })
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
     await scopeEntityIndexes(
       db.deleteFrom('entity_indexes' as any) as any,
       args,

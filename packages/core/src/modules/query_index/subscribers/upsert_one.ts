@@ -93,7 +93,9 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
             organizationId: organizationId ?? null,
             delayMs: coverageDelayMs,
           })
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
       }
     }
     // Defer the heavy, eventually-consistent tail: search-token rebuild + vectorize +

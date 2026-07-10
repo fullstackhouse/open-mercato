@@ -177,7 +177,9 @@ export function AclEditor({
       setGranted(actorSanitizeFeatures(aclJson.features))
       setOrganizations(aclJson.organizations == null ? null : Array.isArray(aclJson.organizations) ? aclJson.organizations : [])
       onVersionChange?.(typeof aclJson.updatedAt === 'string' ? aclJson.updatedAt : null)
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }, [kind, targetId, actorSanitizeFeatures, onVersionChange])
 
   React.useEffect(() => {
@@ -194,7 +196,9 @@ export function AclEditor({
           setFeatures(fJson.items || [])
           setModules(fJson.modules || [])
         }
-      } catch {}
+      } catch {
+        // intentionally ignored: best-effort operation
+      }
       await fetchAclState(tenantIdRef.current, cancelled)
       hasMountedRef.current = true
       if (!cancelled.current) setLoading(false)
@@ -225,7 +229,9 @@ export function AclEditor({
             { items: [] },
           )
           if (!cancelled) setOrgOptions(normalizeOrganizationOptions(oJson.items))
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
       }
       if (kind === 'user' && userRoles && userRoles.length > 0) {
         try {
@@ -242,7 +248,9 @@ export function AclEditor({
             const userRoleDetails: RoleSummary[] = buildRoleSummaries(allRoles, userRoles)
             setRoleDetails(userRoleDetails)
           }
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
       }
     }
     loadTenantScoped()

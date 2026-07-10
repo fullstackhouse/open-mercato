@@ -34,7 +34,9 @@ export async function GET(req: Request) {
       if (typeof cached === 'number') {
         return Response.json({ unreadCount: cached })
       }
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
 
   const count = await em.count(Notification, {
@@ -51,7 +53,9 @@ export async function GET(req: Request) {
           tags: buildCollectionTags(UNREAD_COUNT_RESOURCE, scope.tenantId, [null]),
         }),
       )
-    } catch {}
+    } catch {
+      // intentionally ignored: best-effort operation
+    }
   }
 
   return Response.json({ unreadCount: count })
