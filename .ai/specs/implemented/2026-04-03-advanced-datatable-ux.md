@@ -339,6 +339,29 @@ type ColumnChooserField = {
 
 **Search placeholder** updated to "Search by name, email, phone…" to indicate broader scope.
 
+### F11 — Native Inline Row-Expand (Sub-Row Detail)
+
+> Added 2026-07-10. DataTable had no native way to reveal a row's detail in place.
+
+**Problem**: Clicking a row could not expand its detail inline. Hosts that wanted an in-place detail (e.g. the orders cockpit's `OrderRowDetail`) had to fall back to a popover/drawer, or hand-roll their own `<table>` with a full-width `<tr colSpan>` — losing DataTable's perspectives, injection, sticky columns, and virtualization.
+
+**Solution**: A `rowDetail` prop renders a full-width `<tr>` with a single `colSpan` cell immediately beneath every row for which `isExpanded(row)` returns true, containing `render(row)`. The detail is an accordion (pushes following rows down), not an overlay. `colSpan` is computed from the row's visible cells plus the optional bulk-selection and row-actions spacer columns, so the panel always spans the full table width.
+
+DataTable stays presentational: the host owns expansion state (typically a `Set` of expanded row ids toggled from `onRowClick` or a chevron column cell). Backward compatible — no extra `<tr>` is rendered while a row is collapsed or when the prop is unset.
+
+**New prop**:
+```tsx
+<DataTable
+  rowDetail={{
+    isExpanded: (row) => expandedIds.has(row.id),
+    render: (row) => <OrderRowDetail row={row} />,
+    // className?: optional override for the detail <td> (default: subtle muted panel)
+  }}
+/>
+```
+
+**Caveat**: Not measured under `virtualized` — the row virtualizer estimates a uniform row height, so a detail taller than a normal row can clip or offset virtualized scrolling. Prefer a non-virtualized table when using `rowDetail`.
+
 ---
 
 ## Backward Compatibility
@@ -357,6 +380,7 @@ All features are opt-in via new props. Existing pages that don't pass these prop
 | Virtual scrolling | `virtualized` | `false` |
 | Auto-discovery | `advancedFilter.auto` / `columnChooser.auto` | Manual fields |
 | Full-text search | Server-side `$or` in `buildFilters` | Name only |
+| Inline row-expand | `rowDetail={{ isExpanded, render }}` | `undefined` (no sub-row) |
 
 The existing `filters`/`filterValues`/`onFiltersApply`/`onFiltersClear` props remain functional for pages using the old filter model. The `advancedFilter` prop is a separate code path.
 
@@ -623,3 +647,4 @@ No other new dependencies. All other features built on existing TanStack React T
 | 2026-04-04 | Added F9 (auto-discovery) and F10 (full-text search). Post-implementation requirements documented. |
 | 2026-04-04 | Phase 5: useAutoDiscoveredFields hook, auto mode props, $or query engine support, customer pages migrated to auto mode |
 | 2026-04-04 | Phase 6: UX bug fixes — sticky column, bulk action visibility, column chooser dedup, filter UX, page size dropdown, DnD persistence, hydration fix |
+| 2026-07-10 | Added F11 — native inline row-expand (`rowDetail`): full-width `<tr colSpan>` accordion sub-row beneath expanded rows, host-owned expansion state, backward compatible (no `<tr>` when collapsed/unset) |

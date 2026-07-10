@@ -232,6 +232,36 @@ export type DataTableProps<T> = {
   onRowClick?: (row: T) => void
   rowClickActionIds?: string[]
   disableRowClick?: boolean
+  /**
+   * Native inline row-expand (sub-row detail). When set, DataTable renders a
+   * full-width `<tr>` with a single `colSpan` cell immediately beneath every
+   * row for which `isExpanded(row)` returns true, containing `render(row)`.
+   * The expanded detail pushes the following rows down (accordion) rather than
+   * overlaying them, so hosts no longer need a popover/drawer workaround to
+   * reveal a row's detail in place.
+   *
+   * DataTable stays presentational: the host owns expansion state and decides
+   * how it toggles (e.g. an `onRowClick` handler, or a dedicated chevron column
+   * whose cell flips a `Set` of expanded row ids). Backward compatible — no
+   * extra `<tr>` is rendered while a row is collapsed or when the prop is unset.
+   *
+   * Not measured under `virtualized`: the row virtualizer estimates a uniform
+   * row height, so a detail taller than a normal row can clip or offset
+   * virtualized scrolling. Prefer a non-virtualized table when using
+   * `rowDetail`, or keep the detail height close to a single row.
+   */
+  rowDetail?: {
+    /** Renders the detail content for an expanded row. */
+    render: (row: T) => React.ReactNode
+    /** Returns true when the given row's detail should be shown. */
+    isExpanded: (row: T) => boolean
+    /**
+     * Optional className applied to the full-width detail `<td>`. Defaults to a
+     * subtle muted panel (`bg-muted/30`). The cell carries no padding so the
+     * rendered content controls its own spacing.
+     */
+    className?: string
+  }
   bulkActions?: BulkAction<T>[]
   selectionScopeKey?: string
 
@@ -988,6 +1018,7 @@ export function DataTable<T>({
   onRowClick,
   rowClickActionIds,
   disableRowClick = false,
+  rowDetail,
   bulkActions: bulkActionsProp,
   selectionScopeKey,
   searchValue,
@@ -2831,10 +2862,17 @@ export function DataTable<T>({
                 const rowActionsElement = resolvedRowActions(row.original as T)
                 const defaultRowAction = onRowClick ? null : pickDefaultRowAction(rowActionsElement, resolvedRowClickActionIds)
                 const isClickable = !disableRowClick && (onRowClick || defaultRowAction)
-                
+                const rowDetailNode = rowDetail && rowDetail.isExpanded(row.original as T)
+                  ? rowDetail.render(row.original as T)
+                  : null
+                const rowDetailColSpan =
+                  row.getVisibleCells().length
+                  + (hasInjectedBulkActions ? 1 : 0)
+                  + (rowActions || injectedRowActions.length > 0 ? 1 : 0)
+
                 return (
-                  <TableRow 
-                    key={row.id} 
+                  <React.Fragment key={row.id}>
+                  <TableRow
                     data-state={row.getIsSelected() && 'selected'}
                     className={isClickable ? 'cursor-pointer hover:bg-muted/50 transition-colors' : ''}
                     onClick={isClickable ? (e) => {
@@ -2929,6 +2967,14 @@ export function DataTable<T>({
                       </TableCell>
                     ) : null}
                   </TableRow>
+                  {rowDetailNode != null ? (
+                    <TableRow className="hover:bg-transparent" data-row-detail={row.id}>
+                      <TableCell colSpan={rowDetailColSpan} className={cn('bg-muted/30 p-0', rowDetail?.className)}>
+                        {rowDetailNode}
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                  </React.Fragment>
                 )
               })}
               {virtualized && rowVirtualizer ? (() => {

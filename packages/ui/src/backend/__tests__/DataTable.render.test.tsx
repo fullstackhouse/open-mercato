@@ -128,4 +128,118 @@ describe('DataTable SSR render', () => {
       queryClient.clear()
     }
   })
+
+  it('renders a full-width detail row beneath an expanded row via rowDetail', () => {
+    const columns: ColumnDef<Row>[] = [
+      { accessorKey: 'name', header: 'Name' },
+      { accessorKey: 'id', header: 'Id' },
+    ]
+    const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: 0 } } })
+    try {
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <I18nProvider locale="en" dict={{}}>
+            <DataTable
+              columns={columns}
+              data={[{ id: '1', name: 'Ada' }, { id: '2', name: 'Zed' }]}
+              rowDetail={{
+                isExpanded: (row) => row.id === '1',
+                render: (row) => <div>Detail for {row.name}</div>,
+              }}
+            />
+          </I18nProvider>
+        </QueryClientProvider>,
+      )
+      const detailRow = container.querySelector('tr[data-row-detail="1"]')
+      expect(detailRow).not.toBeNull()
+      expect(detailRow?.textContent).toContain('Detail for Ada')
+      // Only the expanded row gets a detail sub-row.
+      expect(container.querySelector('tr[data-row-detail="2"]')).toBeNull()
+      expect(container.textContent).not.toContain('Detail for Zed')
+      // Detail cell spans every column (2 data columns, no bulk/actions column).
+      const detailCell = detailRow?.querySelector('td')
+      expect(detailCell?.getAttribute('colspan')).toBe('2')
+    } finally {
+      queryClient.clear()
+    }
+  })
+
+  it('toggles the detail row when host expansion state changes (accordion)', () => {
+    const columns: ColumnDef<Row>[] = [
+      { accessorKey: 'name', header: 'Name' },
+    ]
+    function Harness() {
+      const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
+      return (
+        <>
+          <button onClick={() => setExpanded(new Set(['1']))}>expand-1</button>
+          <button onClick={() => setExpanded(new Set())}>collapse-all</button>
+          <DataTable
+            columns={columns}
+            data={[{ id: '1', name: 'Ada' }, { id: '2', name: 'Zed' }]}
+            rowDetail={{
+              isExpanded: (row) => expanded.has(row.id),
+              render: (row) => <div>Detail for {row.name}</div>,
+            }}
+          />
+        </>
+      )
+    }
+    const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: 0 } } })
+    try {
+      const { container } = render(
+        <QueryClientProvider client={queryClient}>
+          <I18nProvider locale="en" dict={{}}>
+            <Harness />
+          </I18nProvider>
+        </QueryClientProvider>,
+      )
+      // Collapsed initially — no detail sub-row.
+      expect(container.querySelector('tr[data-row-detail]')).toBeNull()
+      // Expanding row 1 reveals exactly its detail.
+      fireEvent.click(screen.getByText('expand-1'))
+      expect(container.querySelector('tr[data-row-detail="1"]')).not.toBeNull()
+      expect(container.querySelector('tr[data-row-detail="2"]')).toBeNull()
+      expect(container.textContent).toContain('Detail for Ada')
+      // Collapsing removes the detail sub-row again.
+      fireEvent.click(screen.getByText('collapse-all'))
+      expect(container.querySelector('tr[data-row-detail]')).toBeNull()
+      expect(container.textContent).not.toContain('Detail for Ada')
+    } finally {
+      queryClient.clear()
+    }
+  })
+
+  it('renders no detail row when rowDetail is unset or every row is collapsed', () => {
+    const columns: ColumnDef<Row>[] = [
+      { accessorKey: 'name', header: 'Name' },
+    ]
+    const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: 0 } } })
+    try {
+      const { container, rerender } = render(
+        <QueryClientProvider client={queryClient}>
+          <I18nProvider locale="en" dict={{}}>
+            <DataTable columns={columns} data={[{ id: '1', name: 'Ada' }]} />
+          </I18nProvider>
+        </QueryClientProvider>,
+      )
+      expect(container.querySelector('tr[data-row-detail]')).toBeNull()
+
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <I18nProvider locale="en" dict={{}}>
+            <DataTable
+              columns={columns}
+              data={[{ id: '1', name: 'Ada' }]}
+              rowDetail={{ isExpanded: () => false, render: () => <div>never</div> }}
+            />
+          </I18nProvider>
+        </QueryClientProvider>,
+      )
+      expect(container.querySelector('tr[data-row-detail]')).toBeNull()
+      expect(container.textContent).not.toContain('never')
+    } finally {
+      queryClient.clear()
+    }
+  })
 })
