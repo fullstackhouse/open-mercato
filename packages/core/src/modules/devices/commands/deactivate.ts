@@ -40,7 +40,7 @@ const deactivateDeviceCommand: CommandHandler<DeactivateDeviceCommandInput, { id
     const parsed = deactivateDeviceCommandSchema.parse(rawInput)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
     const device = assertFound(
-      await em.findOne(UserDevice, { id: parsed.id, deletedAt: null }),
+      await findOneWithDecryption(em, UserDevice, { id: parsed.id, deletedAt: null }),
       'Device not found',
     )
     ensureTenantScope(ctx, device.tenantId)
@@ -94,7 +94,7 @@ const deactivateDeviceCommand: CommandHandler<DeactivateDeviceCommandInput, { id
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: before.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: before.id })
     if (!device) return
 
     await withAtomicFlush(em, [() => applySnapshot(device, before)], { transaction: true })

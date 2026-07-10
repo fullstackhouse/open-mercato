@@ -7,6 +7,7 @@ import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/d
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { UserDevice } from '../../../../data/entities'
 import { updateDeviceSchema } from '../../../../data/validators'
@@ -29,7 +30,9 @@ async function loadDevice(
   tenantId: string,
 ): Promise<UserDevice | null> {
   const em = container.resolve('em') as EntityManager
-  return em.findOne(UserDevice, { id, tenantId, deletedAt: null })
+  // push_token is encrypted at rest; the org is not known until the row loads, so pass tenant only —
+  // the helper prefers each record's own tenant/org and treats this scope as a fallback.
+  return findOneWithDecryption(em, UserDevice, { id, tenantId, deletedAt: null }, undefined, { tenantId })
 }
 
 // push_token is a secret and is never returned.

@@ -6,6 +6,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { UserDevice } from '../../data/entities'
@@ -43,12 +44,18 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     // reads as not-found. When there is no active org, scope by tenant only.
     const currentOrganizationId = scope?.selectedId ?? auth.orgId ?? null
     const em = container.resolve('em') as EntityManager
-    const device = await em.findOne(UserDevice, {
-      id: parsedParams.data.id,
-      tenantId: auth.tenantId,
-      ...(currentOrganizationId ? { organizationId: currentOrganizationId } : {}),
-      deletedAt: null,
-    })
+    const device = await findOneWithDecryption(
+      em,
+      UserDevice,
+      {
+        id: parsedParams.data.id,
+        tenantId: auth.tenantId,
+        ...(currentOrganizationId ? { organizationId: currentOrganizationId } : {}),
+        deletedAt: null,
+      },
+      undefined,
+      { tenantId: auth.tenantId, organizationId: currentOrganizationId },
+    )
     if (!device) {
       return NextResponse.json({ error: translate('devices.errors.not_found', 'Device not found') }, { status: 404 })
     }
@@ -98,12 +105,18 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
     // Same active-org scoping as PUT/the list route: a device outside the current org reads as not-found.
     const currentOrganizationId = scope?.selectedId ?? auth.orgId ?? null
     const em = container.resolve('em') as EntityManager
-    const device = await em.findOne(UserDevice, {
-      id: parsedParams.data.id,
-      tenantId: auth.tenantId,
-      ...(currentOrganizationId ? { organizationId: currentOrganizationId } : {}),
-      deletedAt: null,
-    })
+    const device = await findOneWithDecryption(
+      em,
+      UserDevice,
+      {
+        id: parsedParams.data.id,
+        tenantId: auth.tenantId,
+        ...(currentOrganizationId ? { organizationId: currentOrganizationId } : {}),
+        deletedAt: null,
+      },
+      undefined,
+      { tenantId: auth.tenantId, organizationId: currentOrganizationId },
+    )
     if (!device) {
       return NextResponse.json({ error: translate('devices.errors.not_found', 'Device not found') }, { status: 404 })
     }

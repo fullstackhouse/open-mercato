@@ -119,7 +119,7 @@ const updateDeviceCommand: CommandHandler<UpdateDeviceCommandInput, { id: string
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: before.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: before.id })
     if (!device) return
 
     await withAtomicFlush(em, [() => applySnapshot(device, before)], { transaction: true })

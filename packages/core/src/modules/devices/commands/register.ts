@@ -162,7 +162,7 @@ const registerDeviceCommand: CommandHandler<RegisterDeviceCommandInput, { id: st
     if (!after) return
     const before = payload?.before ?? null
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const device = await em.findOne(UserDevice, { id: after.id })
+    const device = await findOneWithDecryption(em, UserDevice, { id: after.id })
     if (!device) return
 
     await withAtomicFlush(
