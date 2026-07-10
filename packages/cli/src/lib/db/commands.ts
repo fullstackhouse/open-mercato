@@ -507,7 +507,9 @@ export async function dbGreenfield(resolver: PackageResolver, options: Greenfiel
     } finally {
       try {
         await client.end()
-      } catch { }
+      } catch {
+        // best-effort connection teardown; ignore close errors
+      }
     }
   } catch (e) {
     console.error('Failed to drop migration tables:', (e as any)?.message || e)
@@ -543,7 +545,9 @@ export async function dbGreenfield(resolver: PackageResolver, options: Greenfiel
     } finally {
       try {
         await client.end()
-      } catch { }
+      } catch {
+        // best-effort connection teardown; ignore close errors
+      }
     }
   } catch (e) {
     console.error('Failed to drop public tables:', (e as any)?.message || e)

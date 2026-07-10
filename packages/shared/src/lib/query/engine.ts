@@ -102,7 +102,9 @@ export function resolveRegisteredEntityTableName(
       if (meta?.tableName) {
         return String(meta.tableName)
       }
-    } catch {}
+    } catch {
+      // best-effort metadata lookup; fall through to the next resolution strategy
+    }
   }
 
   // Secondary lookup: search ORM metadata by candidate table names
@@ -119,7 +121,9 @@ export function resolveRegisteredEntityTableName(
         return String(meta.tableName)
       }
     }
-  } catch {}
+  } catch {
+    // best-effort metadata lookup; fall through to the next resolution strategy
+  }
 
   return null
 }

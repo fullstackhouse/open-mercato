@@ -26,7 +26,9 @@ export function debugCrudCache(event: string, context: Record<string, unknown>) 
   if (!isCrudCacheDebugEnabled()) return
   try {
     console.debug('[crud][cache]', event, context)
-  } catch {}
+  } catch {
+    // never let a logging failure mask the original error
+  }
 }
 
 export function resolveCrudCache(container: AwilixContainer): CacheStrategy | null {
@@ -35,7 +37,9 @@ export function resolveCrudCache(container: AwilixContainer): CacheStrategy | nu
     if (cache && typeof cache.get === 'function' && typeof cache.set === 'function') {
       return cache
     }
-  } catch {}
+  } catch {
+    // cache is an optional dependency; proceed without it if unregistered
+  }
   return null
 }
 

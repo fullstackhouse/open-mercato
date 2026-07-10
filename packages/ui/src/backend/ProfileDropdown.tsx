@@ -127,7 +127,9 @@ export function ProfileDropdown({
         body: JSON.stringify({ locale }),
       })
       window.location.reload()
-    } catch {}
+    } catch {
+      // best-effort request; ignore transient failures
+    }
   }
 
   // Unified row class — every menu item uses this for perfectly aligned layout.

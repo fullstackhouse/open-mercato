@@ -165,7 +165,9 @@ export async function deleteImportedProductsWithProgress(params: {
         ctx: commandContext,
       })
       deletedProductCount += 1
-    } catch {}
+    } catch {
+      // best-effort cleanup; continue with the remaining records on failure
+    }
 
     await progressService.updateProgress(
       progressJobId,

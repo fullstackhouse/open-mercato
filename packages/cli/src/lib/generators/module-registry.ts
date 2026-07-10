@@ -204,7 +204,9 @@ function buildCacheBustedSourceImportUrl(sourceFile: string): string {
   try {
     const stat = fs.statSync(sourceFile)
     url.searchParams.set('v', `${stat.mtimeMs}-${stat.size}`)
-  } catch {}
+  } catch {
+    // best-effort filesystem cleanup; ignore if the file is missing
+  }
   return url.href
 }
 
@@ -2593,7 +2595,9 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
           pluginState.set(plugin.id, { imports: [], configs: [] })
         }
       }
-    } catch {}
+    } catch {
+      // optional module/metadata load; continue with whatever is available
+    }
   }
 
   const imports: string[] = []
@@ -2665,7 +2669,9 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
         const reqs: string[] | undefined =
           mod?.metadata && Array.isArray(mod.metadata.requires) ? mod.metadata.requires : undefined
         if (reqs && reqs.length) requiresByModule.set(modId, reqs)
-      } catch {}
+      } catch {
+        // optional module/metadata load; continue with whatever is available
+      }
     }
 
     // 2. Pages: frontend
@@ -2949,7 +2955,9 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
               else if (feat?.id) declaredFeatures.add(feat.id)
             }
           }
-        } catch {}
+        } catch {
+          // optional module/metadata load; continue with whatever is available
+        }
       }
 
       // Collect component overrides
@@ -2974,7 +2982,9 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
               }
             }
           }
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
       }
 
       // Collect interceptors
@@ -3003,7 +3013,9 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
               }
             }
           }
-        } catch {}
+        } catch {
+          // intentionally ignored: best-effort operation
+        }
       }
     }
 
@@ -3233,7 +3245,9 @@ export async function generateModuleRegistryApp(options: ModuleRegistryOptions):
         const reqs: string[] | undefined =
           mod?.metadata && Array.isArray(mod.metadata.requires) ? mod.metadata.requires : undefined
         if (reqs && reqs.length) requiresByModule.set(modId, reqs)
-      } catch {}
+      } catch {
+        // optional module/metadata load; continue with whatever is available
+      }
     }
 
     {
@@ -3568,7 +3582,9 @@ export async function generateModuleRegistryCli(options: ModuleRegistryOptions):
         const reqs: string[] | undefined =
           mod?.metadata && Array.isArray(mod.metadata.requires) ? mod.metadata.requires : undefined
         if (reqs && reqs.length) requiresByModule.set(modId, reqs)
-      } catch {}
+      } catch {
+        // optional module/metadata load; continue with whatever is available
+      }
     }
 
     // Module setup configuration: setup.ts

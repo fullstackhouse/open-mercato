@@ -703,7 +703,9 @@ function logForbidden(details: Record<string, unknown>) {
   try {
     // eslint-disable-next-line no-console
     console.warn('[crud] Forbidden request', details)
-  } catch {}
+  } catch {
+    // never let a logging failure mask the original error
+  }
 }
 
 function collectFieldNames(items: any[]): string[] {
@@ -821,7 +823,9 @@ export async function logCrudAccess(options: LogCrudAccessOptions): Promise<LogC
             Promise.resolve(service.log(payload)).catch((err) => {
               try {
                 console.error('[crud] failed to record access log', { err, payload })
-              } catch {}
+              } catch {
+                // never let a logging failure mask the original error
+              }
               return undefined
             }),
           ),
@@ -830,7 +834,9 @@ export async function logCrudAccess(options: LogCrudAccessOptions): Promise<LogC
     } catch (err) {
       try {
         console.error('[crud] failed to record access logs (batch)', { err, count: payloads.length })
-      } catch {}
+      } catch {
+        // never let a logging failure mask the original error
+      }
     }
   })()
   trackPendingCrudAccessLogPromise(writePromise)
@@ -852,7 +858,9 @@ function safeClone<T>(value: T): T {
     if (typeof structuredCloneFn === 'function') {
       return structuredCloneFn(value)
     }
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
   try {
     return JSON.parse(JSON.stringify(value)) as T
   } catch {
@@ -1041,7 +1049,9 @@ export function makeCrudRoute<TCreate = any, TUpdate = any, TList = any>(opts: C
         let cfDefCache: CacheStrategy | null = null
         try {
           cfDefCache = ctx.container.resolve('cache') as CacheStrategy
-        } catch {}
+        } catch {
+          // cache is an optional dependency; proceed without it if unregistered
+        }
         definitionIndex = await loadCustomFieldDefinitionIndex({
           em,
           entityIds,

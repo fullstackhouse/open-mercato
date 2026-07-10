@@ -70,7 +70,9 @@ function emit(formId: string) {
   listeners.forEach((listener) => {
     try {
       listener()
-    } catch {}
+    } catch {
+      // best-effort listener notification; one failing listener must not stop the rest
+    }
   })
 }
 

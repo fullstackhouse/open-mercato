@@ -211,7 +211,9 @@ async function searchCommand(rest: string[]): Promise<void> {
     try {
       const em = container.resolve('em') as any
       await em?.getConnection?.()?.close?.()
-    } catch {}
+    } catch {
+      // best-effort connection teardown; ignore close errors
+    }
   }
 }
 
@@ -265,7 +267,9 @@ async function statusCommand(): Promise<void> {
     try {
       const em = container.resolve('em') as any
       await em?.getConnection?.()?.close?.()
-    } catch {}
+    } catch {
+      // best-effort connection teardown; ignore close errors
+    }
   }
 }
 
@@ -343,7 +347,9 @@ async function indexCommand(rest: string[]): Promise<void> {
     try {
       const em = container.resolve('em') as any
       await em?.getConnection?.()?.close?.()
-    } catch {}
+    } catch {
+      // best-effort connection teardown; ignore close errors
+    }
   }
 }
 

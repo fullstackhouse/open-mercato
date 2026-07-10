@@ -38,7 +38,9 @@ export default async function RootLayout({
                     : stored === 'light' ? 'light'
                     : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                   if (theme === 'dark') document.documentElement.classList.add('dark');
-                } catch (e) {}
+                } catch (e) {
+                  // best-effort persistence; ignore storage errors (quota / private mode)
+                }
               })();
             `,
           }}

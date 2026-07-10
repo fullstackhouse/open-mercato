@@ -95,7 +95,9 @@ export function lazyDashboardWidget<TSettings>(
           if (!cancelled) {
             try {
               console.error('Failed to load dashboard widget component', err)
-            } catch {}
+            } catch {
+              // never let a logging failure mask the original error
+            }
             setTick((value) => value + 1)
           }
         })

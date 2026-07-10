@@ -75,7 +75,9 @@ export function CollapsibleNavSection({
       } else if (hasActiveChild) {
         setExpanded(true)
       }
-    } catch {}
+    } catch {
+      // best-effort persistence; ignore storage errors (quota / private mode)
+    }
   }, [storageKey, hasActiveChild])
 
   // Auto-expand when navigating to a child page
@@ -90,7 +92,9 @@ export function CollapsibleNavSection({
     if (!mounted) return
     try {
       localStorage.setItem(storageKey, expanded ? '1' : '0')
-    } catch {}
+    } catch {
+      // best-effort persistence; ignore storage errors (quota / private mode)
+    }
   }, [expanded, storageKey, mounted])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

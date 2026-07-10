@@ -619,7 +619,9 @@ export class CommandBus {
       if (isCrudCacheDebugEnabled()) {
         try {
           console.debug('[crud][cache] execute-invalidation failed', { commandId, err })
-        } catch {}
+        } catch {
+          // never let a logging failure mask the original error
+        }
       }
     }
   }
@@ -651,7 +653,9 @@ export class CommandBus {
       if (isCrudCacheDebugEnabled()) {
         try {
           console.debug('[crud][cache] undo-invalidation failed', { commandId: log.commandId, err })
-        } catch {}
+        } catch {
+          // never let a logging failure mask the original error
+        }
       }
     }
   }

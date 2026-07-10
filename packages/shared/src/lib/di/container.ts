@@ -174,7 +174,7 @@ export async function createRequestContainer(): Promise<AppContainer> {
   })
   // Allow modules to override/extend
   for (const reg of diRegistrars) {
-    try { reg?.(container) } catch {}
+    try { reg?.(container) } catch { /* best-effort optional DI registrar; a failing module must not block startup */ }
   }
   // Core bootstrap (cache, event bus, encryption subscriber/KMS, module subscribers)
   // Phase 5 — process-scoped once-guard. The first request runs the full
@@ -210,9 +210,13 @@ export async function createRequestContainer(): Promise<AppContainer> {
       try {
         const maybe = appDi.register(container)
         if (maybe && typeof maybe.then === 'function') await maybe
-      } catch {}
+      } catch {
+        // optional module/metadata load; continue with whatever is available
+      }
     }
-  } catch {}
+  } catch {
+    // optional module/metadata load; continue with whatever is available
+  }
   applyDiOverridesToContainer({
     register: (registrations) => container.register(toAwilixRegistrations(registrations)),
     unregister: (key) => container.register({ [key]: asValue(undefined) }),

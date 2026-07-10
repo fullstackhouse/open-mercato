@@ -487,10 +487,10 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
   } finally {
     // Shut down esbuild's persistent Go service so it does not deadlock at
     // process exit when a plugin request is still in flight.
-    try { await esbuild.stop() } catch {}
+    try { await esbuild.stop() } catch { /* best-effort teardown; ignore if the service already stopped */ }
     // Clean up old files from previous tsx-based approach
     for (const file of ['_openapi-register.mjs', '_openapi-loader.mjs', '_next-stub.cjs']) {
-      try { fs.unlinkSync(path.join(cacheDir, file)) } catch {}
+      try { fs.unlinkSync(path.join(cacheDir, file)) } catch { /* best-effort teardown; ignore if the service already stopped */ }
     }
   }
 }

@@ -68,10 +68,10 @@ export class TenantEncryptionSubscriber implements EventSubscriber<any> {
     const name = ctor?.name
     const registry = em?.getMetadata?.()
     if (!registry || !name) return meta
-    try { return registry.find?.(name) } catch {}
-    try { return registry.find?.(ctor) } catch {}
-    try { return registry.get?.(name) } catch {}
-    try { return registry.get?.(ctor) } catch {}
+    try { return registry.find?.(name) } catch { /* best-effort metadata lookup; fall through to the next resolution strategy */ }
+    try { return registry.find?.(ctor) } catch { /* best-effort metadata lookup; fall through to the next resolution strategy */ }
+    try { return registry.get?.(name) } catch { /* best-effort metadata lookup; fall through to the next resolution strategy */ }
+    try { return registry.get?.(ctor) } catch { /* best-effort metadata lookup; fall through to the next resolution strategy */ }
     const all =
       (typeof registry.getAll === 'function' && registry.getAll()) ||
       (Array.isArray((registry as any).metadata) ? (registry as any).metadata : undefined) ||

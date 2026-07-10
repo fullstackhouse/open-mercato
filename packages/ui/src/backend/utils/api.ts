@@ -203,7 +203,9 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
           requiredFeatures: features,
           details: payload,
         })
-      } catch {}
+      } catch {
+        // never let a logging failure mask the original error
+      }
       const hasAclHints = Boolean((roles && roles.length) || (features && features.length))
       if (hasAclHints) {
         notifyForbiddenAccess({ requiredRoles: roles, requiredFeatures: features })

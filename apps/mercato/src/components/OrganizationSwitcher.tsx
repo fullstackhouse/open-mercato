@@ -157,7 +157,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
       // ignore failures
     }
     if (options?.refresh !== false) {
-      try { router.refresh() } catch {}
+      try { router.refresh() } catch { /* best-effort route refresh; ignore if the router is unavailable */ }
     }
   }, [router])
 
@@ -174,7 +174,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
     }
     emitOrganizationScopeChanged({ organizationId: resolved || null, tenantId: tenantId ?? null })
     if (options?.refresh !== false) {
-      try { router.refresh() } catch {}
+      try { router.refresh() } catch { /* best-effort route refresh; ignore if the router is unavailable */ }
     }
   }, [persistTenant, router])
 
@@ -236,7 +236,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
           persistSelection(resolvedTenantId, fallbackSelected, { refresh: false })
         }
         if (options?.refreshAfter) {
-          try { router.refresh() } catch {}
+          try { router.refresh() } catch { /* best-effort route refresh; ignore if the router is unavailable */ }
         }
         return
       }
@@ -284,7 +284,7 @@ export default function OrganizationSwitcher({ compact }: OrganizationSwitcherEx
         }
       }
       if (options?.refreshAfter) {
-        try { router.refresh() } catch {}
+        try { router.refresh() } catch { /* best-effort route refresh; ignore if the router is unavailable */ }
       }
     } catch {
       if (abortRef?.current) return

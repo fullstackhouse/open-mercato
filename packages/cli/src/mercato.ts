@@ -250,7 +250,7 @@ async function ensureDatabaseExists(dbUrl: string): Promise<boolean> {
   } catch {
     return true
   } finally {
-    try { await adminClient.end() } catch {}
+    try { await adminClient.end() } catch { /* best-effort connection teardown; ignore close errors */ }
   }
 }
 
@@ -302,7 +302,9 @@ async function ensureEnvLoaded(options: { createIfMissing?: boolean; quiet?: boo
   // Fall back to default dotenv behavior (loads from cwd)
   try {
     await import('dotenv/config')
-  } catch {}
+  } catch {
+    // optional module/metadata load; continue with whatever is available
+  }
 }
 
 function resolveInstalledBinary(baseDirs: string[], relativeBinPath: string): string {
@@ -796,7 +798,9 @@ async function buildAllModules(): Promise<Module[]> {
     const dynImport: any = (Function('return import') as any)()
     const app = await dynImport.then((f: any) => f('@/cli')).catch(() => null)
     if (app && Array.isArray(app?.default)) appCli = app.default
-  } catch {}
+  } catch {
+    // intentionally ignored: best-effort operation
+  }
 
   const all = modules.slice()
 
@@ -920,7 +924,7 @@ export async function run(argv = process.argv) {
             }
           }
         } finally {
-          try { await client.end() } catch {}
+          try { await client.end() } catch { /* best-effort connection teardown; ignore close errors */ }
         }
         // Also flush Redis when configured. Skip silently if no URL is set —
         // a stray ioredis client with auto-reconnect would otherwise spam
@@ -944,7 +948,7 @@ export async function run(argv = process.argv) {
             const message = err instanceof Error ? err.message : String(err)
             console.log(`   Redis flush skipped (${message}).`)
           } finally {
-            try { redis.disconnect() } catch {}
+            try { redis.disconnect() } catch { /* best-effort connection teardown; ignore close errors */ }
           }
         } else {
           console.log('   Redis flush skipped (REDIS_URL not configured).')
@@ -990,7 +994,9 @@ export async function run(argv = process.argv) {
         } finally {
           try {
             await client.end()
-          } catch {}
+          } catch {
+            // best-effort connection teardown; ignore close errors
+          }
         }
       }
 
