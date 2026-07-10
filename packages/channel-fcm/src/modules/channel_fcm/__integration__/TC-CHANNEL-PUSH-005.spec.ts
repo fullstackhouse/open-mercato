@@ -28,8 +28,9 @@ const PROVIDER = 'fcm'
 
 test.describe('TC-CHANNEL-PUSH-005: real FCM adapter reaches sent with a correct native message', () => {
   test('delivers a visible notification and maps pushOptions onto the FCM message', async ({ request }) => {
-    // `test.slow()` only triples the config's 20s budget (→ 60s), which the two queue drains plus the
-    // 30s poll below consume on a loaded runner — leaving nothing for setup. Budget the test explicitly.
+    // Budgeted explicitly rather than via `test.slow()` (which only triples the config's 20s budget).
+    // NOTE: this does not fix the current CI failure — `POST /api/notifications` hangs >30s in the
+    // channel-package shard, so the test dies on `apiRequest`'s own 30s timeout. See the spec changelog.
     test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, organizationId, userId } = getTokenScope(adminToken)

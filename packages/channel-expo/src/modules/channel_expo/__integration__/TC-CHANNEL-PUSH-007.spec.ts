@@ -24,8 +24,9 @@ const PROVIDER = 'expo'
 
 test.describe('TC-CHANNEL-PUSH-007: real Expo adapter reaches sent with a correct native message', () => {
   test('maps sound and priority onto the Expo message', async ({ request }) => {
-    // `test.slow()` only triples the config's 20s budget (→ 60s), which the two queue drains plus the
-    // 30s poll below consume on a loaded runner — leaving nothing for setup. Budget the test explicitly.
+    // Budgeted explicitly rather than via `test.slow()` (which only triples the config's 20s budget).
+    // NOTE: this does not fix the current CI failure — `POST /api/notifications` hangs >30s in the
+    // channel-package shard, so the test dies on `apiRequest`'s own 30s timeout. See the spec changelog.
     test.setTimeout(120_000)
     const adminToken = await getAuthToken(request, 'admin')
     const { tenantId, userId } = getTokenScope(adminToken)
