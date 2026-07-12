@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useReactTable, getCoreRowModel, getSortedRowModel, flexRender, type ColumnDef, type SortingState, type Column as TableColumn, type VisibilityState, type RowSelectionState } from '@tanstack/react-table'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Loader2, SlidersHorizontal, MoreHorizontal, Circle, Filter, Columns3, ChevronUp, ChevronDown, ChevronsUpDown, Check, Inbox } from 'lucide-react'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../primitives/table'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '../primitives/table'
 import { Button } from '../primitives/button'
 import { Checkbox } from '../primitives/checkbox'
 import {
@@ -214,6 +214,16 @@ export type BulkAction<T = Record<string, unknown>> = {
 }
 
 export type DataTableProps<T> = {
+  /**
+   * Column definitions. Set a column's native TanStack `footer` (a `ReactNode`
+   * or `(ctx) => ReactNode`) to render a summary/aggregate row in a real
+   * `<tfoot>` beneath the body, column-aligned with the header. A `<tfoot>` is
+   * only rendered when at least one column defines a `footer`. For server-side
+   * totals (sums across all pages, not just the current one) pass the
+   * pre-computed value as the footer node. Column-aligned totals live in the
+   * table; for free-form content below the table use the `:footer` injection
+   * spot instead.
+   */
   columns: ColumnDef<T, any>[]
   data: T[]
   toolbar?: React.ReactNode
@@ -1184,6 +1194,7 @@ export function DataTable<T>({
           perspectives: [],
           defaultPerspectiveId: null,
           rolePerspectives: [],
+          manageableRolePerspectives: [],
           roles: [],
           canApplyToRoles: false,
         }
@@ -1356,6 +1367,11 @@ export function DataTable<T>({
     }
     return result
   }, [columns, injectedColumnDefs])
+  // Render a native <tfoot> only when at least one column defines a footer.
+  const hasColumnFooter = React.useMemo(
+    () => mergedColumns.some((col) => col.footer != null),
+    [mergedColumns],
+  )
   const resolvedRowActions = React.useCallback((row: T) => {
     const injectedItems: (RowActionItem & { placement?: InjectionRowActionDefinition['placement'] })[] = injectedRowActions.map((action) => ({
       id: action.id,
@@ -1716,6 +1732,10 @@ export function DataTable<T>({
   }
 
   const perspectiveQueryKey: [string, string | null] = ['table-perspectives', perspectiveTableId]
+  const rolePerspectivesForLocking = React.useMemo(
+    () => perspectiveData?.manageableRolePerspectives ?? perspectiveData?.rolePerspectives ?? [],
+    [perspectiveData],
+  )
 
   type PerspectiveMutationContext = {
     formId: string
@@ -1740,6 +1760,21 @@ export function DataTable<T>({
   const savePerspectiveMutation = useMutation<PerspectiveSaveResponse, Error, SavePerspectivePayload>({
     mutationFn: async (input) => {
       if (!perspectiveTableId) throw new Error('Missing table id')
+      const roleExpectedUpdatedAtByRoleId: Record<string, string> = {}
+      const roleExpectedUpdatedAtByPerspectiveId: Record<string, string> = {}
+      for (const roleId of input.applyToRoles) {
+        const rolePerspectives = rolePerspectivesForLocking.filter((p) => p.roleId === roleId)
+        const matching = rolePerspectives.find((p) => p.name.trim() === input.name.trim()) ?? null
+        const defaultPerspective = input.setRoleDefault
+          ? rolePerspectives.find((p) => p.isDefault) ?? null
+          : null
+        for (const candidate of [matching, defaultPerspective]) {
+          if (!candidate?.updatedAt) continue
+          roleExpectedUpdatedAtByPerspectiveId[candidate.id] = candidate.updatedAt
+        }
+        const roleFallback = matching ?? defaultPerspective
+        if (roleFallback?.updatedAt) roleExpectedUpdatedAtByRoleId[roleId] = roleFallback.updatedAt
+      }
       const payload = {
         perspectiveId: input.perspectiveId ?? undefined,
         name: input.name,
@@ -1747,6 +1782,12 @@ export function DataTable<T>({
         isDefault: input.isDefault,
         applyToRoles: input.applyToRoles,
         setRoleDefault: input.setRoleDefault,
+        ...(Object.keys(roleExpectedUpdatedAtByRoleId).length > 0
+          ? { roleExpectedUpdatedAtByRoleId }
+          : {}),
+        ...(Object.keys(roleExpectedUpdatedAtByPerspectiveId).length > 0
+          ? { roleExpectedUpdatedAtByPerspectiveId }
+          : {}),
       }
       if (process.env.NODE_ENV !== 'production') {
         // eslint-disable-next-line no-console
@@ -1819,11 +1860,15 @@ export function DataTable<T>({
   const deletePerspectiveMutation = useMutation<void, Error, { perspectiveId: string }>({
     mutationFn: async ({ perspectiveId }) => {
       if (!perspectiveTableId) throw new Error('Missing table id')
+      const existing = perspectiveData?.perspectives.find((p) => p.id === perspectiveId) ?? null
       await runPerspectiveMutation({
         operation: async () => {
-          const call = await apiCall(
-            `/api/perspectives/${encodeURIComponent(perspectiveTableId)}/${encodeURIComponent(perspectiveId)}`,
-            { method: 'DELETE' },
+          const call = await withScopedApiRequestHeaders(
+            buildOptimisticLockHeader(existing?.updatedAt ?? null),
+            () => apiCall(
+              `/api/perspectives/${encodeURIComponent(perspectiveTableId)}/${encodeURIComponent(perspectiveId)}`,
+              { method: 'DELETE' },
+            ),
           )
           if (call.status === 404) throw new Error(t('ui.dataTable.perspectives.error.apiUnavailable', 'Perspectives API is not available. Run `yarn generate` and restart the dev server.'))
           if (!call.ok) {
@@ -1856,16 +1901,38 @@ export function DataTable<T>({
         initialPerspectiveAppliedRef.current = false
       }
     },
+    onError: () => {
+      // Conflict surfacing is handled inside `runPerspectiveMutation`
+      // (surfaceRecordConflict); only the cache refresh remains here.
+      if (perspectiveTableId) {
+        void queryClient.invalidateQueries({ queryKey: perspectiveQueryKey })
+      }
+    },
   })
 
-  const clearRoleMutation = useMutation<void, Error, { roleId: string }>({
-    mutationFn: async ({ roleId }) => {
+  const clearRoleMutation = useMutation<void, Error, {
+    roleId: string
+    updatedAt?: string | null
+    expectedUpdatedAtByPerspectiveId?: Record<string, string>
+  }>({
+    mutationFn: async ({ roleId, updatedAt, expectedUpdatedAtByPerspectiveId }) => {
       if (!perspectiveTableId) throw new Error('Missing table id')
+      const hasPerRowVersions = expectedUpdatedAtByPerspectiveId
+        && Object.keys(expectedUpdatedAtByPerspectiveId).length > 0
       await runPerspectiveMutation({
         operation: async () => {
-          const call = await apiCall(
-            `/api/perspectives/${encodeURIComponent(perspectiveTableId)}/roles/${encodeURIComponent(roleId)}`,
-            { method: 'DELETE' },
+          const call = await withScopedApiRequestHeaders(
+            hasPerRowVersions ? {} : buildOptimisticLockHeader(updatedAt ?? null),
+            () => apiCall(
+              `/api/perspectives/${encodeURIComponent(perspectiveTableId)}/roles/${encodeURIComponent(roleId)}`,
+              hasPerRowVersions
+                ? {
+                  method: 'DELETE',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ roleExpectedUpdatedAtByPerspectiveId: expectedUpdatedAtByPerspectiveId }),
+                }
+                : { method: 'DELETE' },
+            ),
           )
           if (call.status === 404) throw new Error(t('ui.dataTable.perspectives.error.apiUnavailable', 'Perspectives API is not available. Run `yarn generate` and restart the dev server.'))
           if (!call.ok) {
@@ -1898,6 +1965,13 @@ export function DataTable<T>({
         }
       }
     },
+    onError: () => {
+      // Conflict surfacing is handled inside `runPerspectiveMutation`
+      // (surfaceRecordConflict); only the cache refresh remains here.
+      if (perspectiveTableId) {
+        void queryClient.invalidateQueries({ queryKey: perspectiveQueryKey })
+      }
+    },
   })
 
   const handlePerspectiveActivate = React.useCallback((item: PerspectiveDto | RolePerspectiveDto, _source?: 'personal' | 'role') => {
@@ -1920,9 +1994,18 @@ export function DataTable<T>({
     await deletePerspectiveMutation.mutateAsync({ perspectiveId })
   }, [deletePerspectiveMutation])
 
-  const handleClearRole = React.useCallback(async (roleId: string) => {
-    await clearRoleMutation.mutateAsync({ roleId })
-  }, [clearRoleMutation])
+  const handleClearRole = React.useCallback(async (perspective: RolePerspectiveDto) => {
+    const expectedUpdatedAtByPerspectiveId = Object.fromEntries(
+      rolePerspectivesForLocking
+        .filter((item) => item.roleId === perspective.roleId && item.updatedAt)
+        .map((item) => [item.id, item.updatedAt as string]),
+    )
+    await clearRoleMutation.mutateAsync({
+      roleId: perspective.roleId,
+      updatedAt: perspective.updatedAt ?? null,
+      expectedUpdatedAtByPerspectiveId,
+    })
+  }, [clearRoleMutation, rolePerspectivesForLocking])
 
   const handleColumnChooserToggle = React.useCallback((key: string) => {
     const column = table.getColumn(key)
@@ -2622,14 +2705,18 @@ export function DataTable<T>({
     return () => observer.disconnect()
   }, [tableScrollEl])
   const allRows = table.getRowModel().rows
-  const rowVirtualizer = virtualized
-    ? useVirtualizer({
-        count: allRows.length,
-        getScrollElement: () => virtualScrollRef.current,
-        estimateSize: () => 48,
-        overscan: virtualizedOverscan,
-      })
-    : null
+  // Hooks must run on every render regardless of props (Rules of Hooks). Call
+  // useVirtualizer unconditionally and keep it inert when virtualization is off
+  // (count 0, no scroll element → no observers, no measurement work), then
+  // derive the nullable handle from the prop. Mirrors the unconditional-hooks-
+  // first pattern in RowActions.
+  const rowVirtualizerInstance = useVirtualizer({
+    count: virtualized ? allRows.length : 0,
+    getScrollElement: () => (virtualized ? virtualScrollRef.current : null),
+    estimateSize: () => 48,
+    overscan: virtualizedOverscan,
+  })
+  const rowVirtualizer = virtualized ? rowVirtualizerInstance : null
   const virtualMaxHeightStyle: React.CSSProperties | undefined = virtualized
     ? {
         maxHeight: typeof virtualizedMaxHeight === 'number'
@@ -2982,6 +3069,34 @@ export function DataTable<T>({
               </TableRow>
             )}
           </TableBody>
+          {hasColumnFooter ? (
+            <TableFooter>
+              {table.getFooterGroups().map((fg) => (
+                <TableRow key={fg.id}>
+                  {hasInjectedBulkActions ? <TableCell className="w-8" /> : null}
+                  {fg.headers.map((footer, footerIndex) => {
+                    const columnMeta = (footer.column.columnDef as any)?.meta
+                    const priority = resolvePriority(footer.column)
+                    const isFirstDataColumn = footerIndex === 0
+                    const stickyClass = stickyFirstColumn && isFirstDataColumn ? ` md:sticky md:left-0 md:z-10 md:bg-background ${STICKY_LEFT_SHADOW_CLASS}` : ''
+                    return (
+                      <TableCell key={footer.id} className={responsiveClass(priority, columnMeta?.hidden) + stickyClass}>
+                        {footer.isPlaceholder ? null : flexRender(footer.column.columnDef.footer, footer.getContext())}
+                      </TableCell>
+                    )
+                  })}
+                  {rowActions || injectedRowActions.length > 0 ? (
+                    <TableCell
+                      className={cn(
+                        actionsColumnAlign === 'center' ? 'text-center' : 'text-right',
+                        stickyActionsColumn && `md:sticky md:right-0 md:z-10 md:bg-background ${STICKY_RIGHT_SHADOW_CLASS}`,
+                      )}
+                    />
+                  ) : null}
+                </TableRow>
+              ))}
+            </TableFooter>
+          ) : null}
         </Table>
       </div>
       </HeaderDndWrapper>
