@@ -39,6 +39,7 @@ jest.mock('@open-mercato/ui/backend/detail', () => ({
   ),
   ErrorMessage: ({ label }: { label: string }) => <div>{label}</div>,
   LoadingMessage: ({ label }: { label: string }) => <div>{label}</div>,
+  DetailReadOnlyContext: require('react').createContext(false),
 }))
 
 jest.mock('@open-mercato/ui/primitives/button', () => ({
