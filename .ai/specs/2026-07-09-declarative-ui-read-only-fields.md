@@ -84,11 +84,10 @@ those fields. *(implemented)*
 
 ## Why upstream
 OM has no "read-only backoffice" story — a framework gap. Generally useful for
-view-only ops consoles, compliance, and data synced from an external system of
-record (e.g. contractors/products/orders synced from an ERP that must never be
-hand-edited because a manual edit is overwritten on the next sync). Replaces the
-app-side stopgaps (custom read-only pages, transport-level write guard, leaky
-CSS) with clean per-field granularity.
+view-only ops consoles, compliance, and records mastered by an external system
+that must never be hand-edited (a manual edit would be overwritten on the next
+sync). Replaces the app-side stopgaps (custom read-only pages, transport-level
+write guard, leaky CSS) with clean per-field granularity.
 
 ## Status / rollout
 - [x] Core policy + resolver (shared)
