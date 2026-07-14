@@ -51,12 +51,17 @@ import { registerMessageObjectTypes } from '@open-mercato/core/modules/messages/
 import { runBootstrapRegistrations } from '@/.mercato/generated/bootstrap-registrations.generated'
 import { allCodeWorkflows } from '@/.mercato/generated/workflows.generated'
 import { registerCodeWorkflows } from '@open-mercato/core/modules/workflows/lib/code-registry'
+import { crudWriteFeatures } from '@/.mercato/generated/crud-write-features.generated'
+import { seedCrudWriteFeatureRegistry } from '@open-mercato/shared/lib/ui-read-only/rbac'
 
 // Register event configs globally (similar to search)
 registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })
 registerMessageObjectTypes(messageObjectTypes, { replace: true })
 registerCodeWorkflows(allCodeWorkflows)
+// Seed the CRUD write-feature registry deterministically so RBAC-driven UI
+// read-only resolves completely regardless of which routes have been imported.
+seedCrudWriteFeatureRegistry(crudWriteFeatures)
 runBootstrapRegistrations()
 
 // Bootstrap factory from shared package

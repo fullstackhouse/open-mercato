@@ -1,23 +1,65 @@
-# Declarative field-level UI editability (read-only fields/sections)
+# RBAC-driven UI read-only (+ declarative field-level overrides)
 
 **Status:** draft
 **Owner:** ui / shared
-**Date:** 2026-07-09
+**Date:** 2026-07-09 (reframed 2026-07-14)
 
 ## TLDR
-Open Mercato has no clean way to mark a field, section or entity as **not
-editable in the admin UI**. RBAC feature-gating does not reliably hide/disable
-edit affordances, and a **superadmin bypasses every feature check**, so a
-role-based approach cannot restrict a superadmin at all. Nulling write routes
-blocks persistence but still lets the UI mount editors (bad UX); CSS-hiding
-leaks because many core controls are clickable containers, not icon buttons.
+Removing a content `*.manage` feature from a role blocks the write API (`403`)
+but the admin **UI still shows** every edit/create/delete affordance — RBAC
+gates *data*, not the *UI*. So a role stripped to view-only still mounts editors
+that fail on save: bad UX and a bug in OM.
 
-This spec introduces a **declarative, role-independent** mechanism to mark
-entity fields (or whole entities) read-only **in the UI** — a *display policy,
-not a permission* — enforced even for a superadmin, and orthogonal to /
-composable with RBAC.
+The primary fix is **RBAC-driven**: an entity becomes whole-entity read-only in
+the UI when the viewer lacks the write feature its CRUD mutation API already
+requires (the `requireFeatures` on its `POST/PUT/DELETE`). The feature the write
+API enforces is the single source of truth — the UI hides exactly the
+affordances the caller cannot exercise.
 
-## Config surface
+A superadmin **bypasses every feature check**, so RBAC alone cannot restrict a
+superadmin. For cases that need editability suppressed regardless of grants
+(data mastered by an external system of record, per-field read-only, or a
+view-only superadmin), a secondary **declarative, role-independent** layer marks
+fields/sections/entities read-only in the UI as a *display policy, not a
+permission*. Both layers resolve into the same `UiReadOnlyMap` and share the same
+enforcement primitives.
+
+## Two composable sources → one map
+The backend layout merges two independently-resolved maps
+(`mergeUiReadOnlyMaps`) and hands the result to the UI provider:
+
+1. **RBAC-driven** (`packages/shared/src/lib/ui-read-only/rbac.ts`) —
+   `resolveRbacReadOnlyMap(principal, { enforceForSuperAdmin })` returns
+   whole-entity read-only (`['*']`) for every registered entity whose write
+   feature the principal does not hold. A superadmin resolves to an empty map
+   (fully editable) unless `enforceForSuperAdmin` is set (env
+   `OM_UI_READ_ONLY_ENFORCE_SUPERADMIN`) — the knob for a view-only superadmin.
+2. **Declarative** (`policy.ts` / `resolve.ts`) — per-entity, per-field or
+   whole-entity read-only declared through the unified `modules.ts` override
+   surface, independent of RBAC and enforced even for a superadmin.
+
+### RBAC source: registry + deterministic manifest
+The RBAC map is keyed by the write feature an entity's CRUD mutations require.
+`makeCrudRoute` records this automatically for every factory-built route
+(`registerCrudWriteFeatures(entityId, union(POST/PUT/DELETE.requireFeatures))`),
+so there is **zero per-route wiring**.
+
+That registry is populated *lazily* at route import, so a request-time
+resolution is only as complete as the set of routes Next.js has loaded — a
+determinism gap. It is closed by a generated manifest:
+
+- `mercato generate` emits `.mercato/generated/crud-write-features.generated.ts`
+  (`{ entityId: writeFeatures[] }`, sorted/deterministic). The snapshot is
+  captured by the **OpenAPI generator's existing module-execution pass** — it
+  already bundles and runs every route module (which populates the registry), so
+  the manifest rides on that single pass with no second route bundle.
+- `bootstrap.ts` seeds it up front (`seedCrudWriteFeatureRegistry`), so the
+  registry is deterministically complete before the first resolution. Seeding is
+  additive over the lazy registrations, so a stale/partial manifest can only
+  under-populate, never mis-populate; on a static-fallback generate the manifest
+  is empty and the lazy registrations remain the backstop.
+
+### Declarative source: config surface
 Read-only is declared per canonical entity id (`module:entity`), valued by a
 list of field ids or the wildcard `'*'` (whole entity):
 
@@ -40,18 +82,7 @@ This reuses the existing unified `modules.ts` override surface — `uiReadOnly`
 is registered as a first-class override domain alongside `interceptors`, `di`,
 `encryption`, etc.
 
-## Resolution & data flow
-- `packages/shared/src/lib/ui-read-only/policy.ts` — pure, framework-agnostic
-  types + resolver (`createUiReadOnlyPolicy`, `mergeUiReadOnlyMaps`,
-  `applyUiReadOnlyOverrideMap`). Shared by server and client.
-- `packages/shared/src/lib/ui-read-only/resolve.ts` — server-only
-  `resolveUiReadOnlyMap()` = module tier (from the module registry) with app
-  overrides layered on top.
-- The backend layout (server component) resolves the map and hands it to
-  `UiReadOnlyPolicyProvider` (`@open-mercato/ui/backend/ui-read-only/context`).
-  Editable primitives read it via `useUiReadOnly(entityId)`.
-
-## Enforcement in UI primitives
+## Enforcement in UI primitives (shared by both sources)
 For any read-only target: render the value **display-only, do not mount the
 input**, and hide the edit toggle / add-row / delete affordances.
 
@@ -73,8 +104,8 @@ input**, and hide the edit toggle / add-row / delete affordances.
   page: media manager, variant builder, custom "Edit name" control) are not yet
   covered and must opt in per-section. *(follow-up)*
 
-## Optional server-side enforcement
-The same declaration pairs with a built-in `MutationGuard`
+## Optional server-side enforcement (declarative source)
+The declarative source pairs with a built-in `MutationGuard`
 (`createUiReadOnlyWriteGuard`) so a read-only field/entity both hides the UI
 **and** rejects the write — defense-in-depth. It is registered for every app but
 **inert unless enabled** via `OM_UI_READ_ONLY_ENFORCE_WRITES`
@@ -82,22 +113,30 @@ The same declaration pairs with a built-in `MutationGuard`
 rejects create/update/delete; per-field read-only rejects only writes that touch
 those fields. *(implemented)*
 
+The RBAC source needs no such guard: the write API it derives from is the guard
+— the `requireFeatures` it reads already reject the mutation server-side.
+
 ## Why upstream
-OM has no "read-only backoffice" story — a framework gap. Generally useful for
-view-only ops consoles, compliance, and data synced from an external system of
-record (e.g. contractors/products/orders synced from an ERP that must never be
-hand-edited because a manual edit is overwritten on the next sync). Replaces the
-app-side stopgaps (custom read-only pages, transport-level write guard, leaky
-CSS) with clean per-field granularity.
+The RBAC-driven layer fixes a real bug: view-only roles see edit affordances
+that 403 on save. The declarative layer adds a "read-only backoffice" story OM
+otherwise lacks — useful for view-only ops consoles, compliance, and data synced
+from an external system of record (e.g. contractors/products/orders synced from
+an ERP that must never be hand-edited because a manual edit is overwritten on the
+next sync). Together they replace the app-side stopgaps (custom read-only pages,
+transport-level write guard, leaky CSS) with clean granularity.
 
 ## Status / rollout
 - [x] Core policy + resolver (shared)
-- [x] `uiReadOnly` override domain + module-manifest field
+- [x] RBAC-driven source: registry (`registerCrudWriteFeatures` in `makeCrudRoute`) + `resolveRbacReadOnlyMap`
+- [x] Deterministic manifest (`crud-write-features.generated.ts`) via the OpenAPI route-execution pass + bootstrap seeding
+- [x] `enforceForSuperAdmin` knob (`OM_UI_READ_ONLY_ENFORCE_SUPERADMIN`)
+- [x] Declarative `uiReadOnly` override domain + module-manifest field
 - [x] Client provider + `useUiReadOnly` hook
 - [x] CrudForm display-only rendering + whole-entity footer/submit gating
-- [x] Backend layout wiring (template + demo app)
+- [x] Backend layout wiring — merges RBAC + declarative maps (template + app)
 - [x] DataTable suppression (create/"New", row actions, bulk actions, empty-state CTA)
 - [x] Inline detail editors (customer person/company) via `DetailReadOnlyContext`
-- [x] Optional server-side write guard (`OM_UI_READ_ONLY_ENFORCE_WRITES`)
+- [x] Optional server-side write guard for the declarative source (`OM_UI_READ_ONLY_ENFORCE_WRITES`)
 - [ ] Sales document inline sections + heavily-bespoke pages (product edit)
 - [ ] Annotate core DataTable edit row actions with `mutates: true` (drop the heuristic)
+- [ ] First-class superadmin view-only ergonomics (beyond the env flag)

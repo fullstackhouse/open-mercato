@@ -18,6 +18,7 @@ import {
   type GeneratorResult,
   createGeneratorResult,
 } from '../utils'
+import { writeCrudWriteFeaturesManifest } from './ui-read-only'
 
 export interface GenerateOpenApiOptions {
   resolver: PackageResolver
@@ -186,6 +187,13 @@ function parseOpenApiFromSource(filePath: string): Record<string, any> | null {
   }
 }
 
+/** Result of the route-execution bundle: the OpenAPI doc plus the RBAC
+ *  write-feature registry snapshot captured during the same pass. */
+interface OpenApiBundleResult {
+  doc: Record<string, any>
+  crudWriteFeatures: Record<string, string[]>
+}
+
 /**
  * Generate a complete OpenAPI document by bundling route files with esbuild
  * and executing the bundle to call buildOpenApiDocument from @open-mercato/shared.
@@ -198,7 +206,7 @@ async function generateOpenApiViaBundle(
   routes: ApiRouteInfo[],
   resolver: PackageResolver,
   quiet: boolean
-): Promise<Record<string, any> | null> {
+): Promise<OpenApiBundleResult | null> {
   let esbuild: typeof import('esbuild')
   try {
     esbuild = await import('esbuild')
@@ -236,6 +244,11 @@ async function generateOpenApiViaBundle(
   // Build the entry script that imports all routes and calls buildOpenApiDocument
   const importLines: string[] = [
     `import { buildOpenApiDocument } from ${JSON.stringify(generatorPath)};`,
+    // Importing every route module runs each `makeCrudRoute` call, which
+    // populates the RBAC write-feature registry as a byproduct. We read that
+    // snapshot here so the same single route-execution pass also feeds the
+    // deterministic UI read-only manifest — no second route bundle needed.
+    `import { getCrudWriteFeatureRegistry } from '@open-mercato/shared/lib/ui-read-only/rbac';`,
   ]
   const routeMapLines: string[] = []
 
@@ -291,8 +304,9 @@ const deepClone = (v, ancestors = []) => {
   }
   return out;
 };
-process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
-  typeof v === 'bigint' ? Number(v) : v
+process.stdout.write(JSON.stringify(
+  { openapi: deepClone(doc), crudWriteFeatures: getCrudWriteFeatureRegistry() },
+  (_, v) => typeof v === 'bigint' ? Number(v) : v
 ));
 `
 
@@ -446,7 +460,9 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
     })
 
     const lastLine = stdout.trim().split('\n').pop()!
-    const doc = JSON.parse(lastLine) as Record<string, any>
+    const parsed = JSON.parse(lastLine) as { openapi: Record<string, any>; crudWriteFeatures?: Record<string, string[]> }
+    const doc = parsed.openapi
+    const crudWriteFeatures = parsed.crudWriteFeatures ?? {}
 
     if (!quiet) {
       const pathCount = Object.keys(doc.paths || {}).length
@@ -456,10 +472,10 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
         }
         return n
       }, 0)
-      console.log(`[OpenAPI] Bundle approach: ${pathCount} paths, ${withBody} with requestBody schemas`)
+      console.log(`[OpenAPI] Bundle approach: ${pathCount} paths, ${withBody} with requestBody schemas; ${Object.keys(crudWriteFeatures).length} CRUD write-feature entries`)
     }
 
-    return doc
+    return { doc, crudWriteFeatures }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     const stderr = (err as any)?.stderr
@@ -567,7 +583,23 @@ export async function generateOpenApi(options: GenerateOpenApiOptions): Promise<
 
   // Determine project root (cli package is at packages/cli/src/lib/generators/)
   // Try esbuild bundle approach first — produces full requestBody/response schemas
-  let doc: Record<string, any> | null = await generateOpenApiViaBundle(routes, resolver, quiet)
+  const bundleResult = await generateOpenApiViaBundle(routes, resolver, quiet)
+  let doc: Record<string, any> | null = bundleResult?.doc ?? null
+
+  // The route-execution pass also captured the RBAC write-feature registry.
+  // Emit the deterministic manifest bootstrap seeds for UI read-only. When the
+  // bundle was skipped/failed (static fallback below), we write an empty
+  // manifest so bootstrap can always import it — the lazy `makeCrudRoute`
+  // registrations remain the runtime backstop.
+  writeCrudWriteFeaturesManifest({
+    resolver,
+    registry: bundleResult?.crudWriteFeatures ?? null,
+    quiet,
+    result,
+  })
+  if (!bundleResult && !quiet) {
+    console.log('[OpenAPI] Route-execution pass unavailable — wrote empty CRUD write-feature manifest (UI read-only falls back to lazy registration)')
+  }
 
   // Fallback to static regex approach (extracts operationId/summary/tags but no schemas)
   if (!doc) {

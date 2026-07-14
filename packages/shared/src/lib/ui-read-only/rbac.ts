@@ -57,6 +57,26 @@ export function registerCrudWriteFeatures(
   }
 }
 
+/**
+ * Bulk-seed the registry from a pre-computed manifest (`entity id -> write
+ * features`), typically the `crud-write-features.generated` artifact emitted at
+ * `mercato generate` by executing every route module. Called once at bootstrap
+ * so the registry is *deterministically complete* before the first UI read-only
+ * resolution — without it, resolution depends on which routes have been imported
+ * (Next.js server bundles load routes lazily). Additive and idempotent: it
+ * layers on top of any lazy `makeCrudRoute` registrations via
+ * `registerCrudWriteFeatures`, so a stale or partial manifest can only
+ * under-populate, never mis-populate. No-op on nullish input.
+ */
+export function seedCrudWriteFeatureRegistry(
+  manifest: CrudWriteFeatureRegistry | null | undefined,
+): void {
+  if (!manifest || typeof manifest !== 'object') return
+  for (const [entityId, features] of Object.entries(manifest)) {
+    registerCrudWriteFeatures(entityId, features)
+  }
+}
+
 /** Immutable snapshot of the process-wide registry. */
 export function getCrudWriteFeatureRegistry(): CrudWriteFeatureRegistry {
   const out: Record<string, string[]> = {}

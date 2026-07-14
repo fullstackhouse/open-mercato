@@ -1,5 +1,6 @@
 import {
   registerCrudWriteFeatures,
+  seedCrudWriteFeatureRegistry,
   getCrudWriteFeatureRegistry,
   clearCrudWriteFeatureRegistry,
   resolveRbacReadOnlyMap,
@@ -29,6 +30,24 @@ describe('crud write-feature registry', () => {
     registerCrudWriteFeatures('', ['x.manage'])
     registerCrudWriteFeatures('catalog:catalog_product', [])
     registerCrudWriteFeatures(undefined, ['x.manage'])
+    expect(getCrudWriteFeatureRegistry()).toEqual({})
+  })
+
+  it('seeds the registry from a manifest, additively over lazy registrations', () => {
+    registerCrudWriteFeatures('sales:sales_order', ['sales.orders.export'])
+    seedCrudWriteFeatureRegistry({
+      'catalog:catalog_product': ['catalog.products.manage'],
+      'sales:sales_order': ['sales.orders.manage'],
+    })
+    const reg = getCrudWriteFeatureRegistry()
+    expect(reg['catalog:catalog_product']).toEqual(['catalog.products.manage'])
+    // merged with the pre-existing lazy registration, not replaced
+    expect(reg['sales:sales_order']).toEqual(['sales.orders.export', 'sales.orders.manage'])
+  })
+
+  it('seeding is a no-op on nullish/invalid input', () => {
+    seedCrudWriteFeatureRegistry(null)
+    seedCrudWriteFeatureRegistry(undefined)
     expect(getCrudWriteFeatureRegistry()).toEqual({})
   })
 })
