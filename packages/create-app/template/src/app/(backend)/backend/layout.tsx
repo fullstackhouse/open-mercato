@@ -12,6 +12,8 @@ import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
 import { UiReadOnlyPolicyProvider } from '@open-mercato/ui/backend/ui-read-only/context'
 import { resolveUiReadOnlyMap } from '@open-mercato/shared/lib/ui-read-only/resolve'
+import { resolveRbacReadOnlyMap } from '@open-mercato/shared/lib/ui-read-only/rbac'
+import { mergeUiReadOnlyMaps } from '@open-mercato/shared/lib/ui-read-only/policy'
 import { DemoFeedbackWidget } from '@/components/DemoFeedbackWidget'
 import { BackendHeaderChrome } from '@/components/BackendHeaderChrome'
 
@@ -90,6 +92,18 @@ export default async function BackendLayout({
     : []
   const canManageUpgradeActions =
     auth?.isSuperAdmin === true || hasAllFeatures(['configs.manage'], grantedFeatures)
+
+  // Effective UI read-only map = declarative field-level policy (role-independent)
+  // merged with the RBAC-driven map (whole-entity read-only wherever the viewer
+  // lacks the entity's CRUD write feature). `OM_UI_READ_ONLY_ENFORCE_SUPERADMIN`
+  // opts a superadmin into the RBAC map too (their bypass otherwise stands).
+  const uiReadOnlyMap = mergeUiReadOnlyMaps(
+    resolveUiReadOnlyMap(),
+    resolveRbacReadOnlyMap(
+      { features: grantedFeatures, isSuperAdmin: auth?.isSuperAdmin === true },
+      { enforceForSuperAdmin: parseBooleanWithDefault(process.env.OM_UI_READ_ONLY_ENFORCE_SUPERADMIN, false) },
+    ),
+  )
   const baseProductName = translate('appShell.productName', 'Open Mercato')
   const productName = deployEnv && deployEnv !== 'local'
     ? `${baseProductName} (${deployEnv.charAt(0).toUpperCase() + deployEnv.slice(1)})`
@@ -131,7 +145,7 @@ export default async function BackendLayout({
         profileSectionTitle={translate('profile.page.title', 'Profile')}
         profilePathPrefixes={profilePathPrefixes}
       >
-        <UiReadOnlyPolicyProvider map={resolveUiReadOnlyMap()}>
+        <UiReadOnlyPolicyProvider map={uiReadOnlyMap}>
           <PageInjectionBoundary path={path} context={injectionContext}>
             {children}
           </PageInjectionBoundary>
