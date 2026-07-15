@@ -7,7 +7,7 @@ import { CrudForm, type CrudField, type CrudFormGroup } from '@open-mercato/ui/b
 import { updateCrud } from '@open-mercato/ui/backend/utils/crud'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
+import { LoadingMessage, ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 
 type DeviceDetail = {
@@ -34,6 +34,7 @@ export default function DeviceAdminEditPage({ params }: { params?: { id?: string
   const [device, setDevice] = React.useState<DeviceDetail | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+  const [notFound, setNotFound] = React.useState(false)
   const [userLabel, setUserLabel] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -41,16 +42,19 @@ export default function DeviceAdminEditPage({ params }: { params?: { id?: string
     async function load() {
       setIsLoading(true)
       setError(null)
+      setNotFound(false)
       const call = await apiCall<{ item?: DeviceDetail }>(
         `/api/devices/admin/devices/${encodeURIComponent(id)}`,
         undefined,
         { fallback: null },
       )
       if (cancelled) return
-      if (!call.ok || !call.result?.item) {
-        setError(t('devices.form.error.loadFailed'))
-      } else {
+      if (call.ok && call.result?.item) {
         setDevice(call.result.item)
+      } else if (call.status === 404 || (call.ok && !call.result?.item)) {
+        setNotFound(true)
+      } else {
+        setError(t('devices.form.error.loadFailed'))
       }
       setIsLoading(false)
     }
@@ -91,6 +95,19 @@ export default function DeviceAdminEditPage({ params }: { params?: { id?: string
   if (isLoading) {
     return <Page><PageBody><LoadingMessage label={t('common.loading')} /></PageBody></Page>
   }
+  if (notFound) {
+    return (
+      <Page>
+        <PageBody>
+          <RecordNotFoundState
+            label={t('devices.errors.not_found')}
+            backHref="/backend/devices"
+            backLabel={t('devices.list.title')}
+          />
+        </PageBody>
+      </Page>
+    )
+  }
   if (error || !device) {
     return <Page><PageBody><ErrorMessage label={error ?? t('devices.form.error.loadFailed')} /></PageBody></Page>
   }
@@ -98,18 +115,29 @@ export default function DeviceAdminEditPage({ params }: { params?: { id?: string
   return (
     <Page>
       <PageBody>
-        <div className="mb-4 rounded-md border bg-muted/30 p-4 text-sm space-y-1">
-          <div><span className="text-muted-foreground">{t('devices.form.deviceId')}: </span><code className="text-xs">{device.device_id}</code></div>
-          <div><span className="text-muted-foreground">{t('devices.form.platform')}: </span>{device.platform}</div>
-          <div><span className="text-muted-foreground">{t('devices.form.userId')}: </span>{userLabel ? (
-            <Link href={`/backend/users/${encodeURIComponent(device.user_id)}/edit`} className="text-primary hover:underline">{userLabel}</Link>
-          ) : (
-            <code className="text-xs">{device.user_id}</code>
-          )}</div>
-        </div>
         <CrudForm<FormValues>
           title={t('devices.form.editTitle')}
           backHref="/backend/devices"
+          contentHeader={(
+            <dl className="grid grid-cols-1 gap-3 rounded-md border bg-muted p-4 text-sm sm:grid-cols-3">
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground">{t('devices.form.deviceId')}</dt>
+                <dd className="mt-1"><code className="text-xs">{device.device_id}</code></dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground">{t('devices.form.platform')}</dt>
+                <dd className="mt-1">{device.platform}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground">{t('devices.form.userId')}</dt>
+                <dd className="mt-1">{userLabel ? (
+                  <Link href={`/backend/users/${encodeURIComponent(device.user_id)}/edit`} className="text-primary hover:underline">{userLabel}</Link>
+                ) : (
+                  <code className="text-xs">{device.user_id}</code>
+                )}</dd>
+              </div>
+            </dl>
+          )}
           fields={fields}
           groups={groups}
           optimisticLockUpdatedAt={device.updated_at}

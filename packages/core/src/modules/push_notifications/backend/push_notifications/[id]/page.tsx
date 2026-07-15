@@ -2,6 +2,8 @@
 import * as React from 'react'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { LoadingMessage, ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
+import { JsonDisplay } from '@open-mercato/ui/backend/JsonDisplay'
 import { StatusBadge, type StatusMap } from '@open-mercato/ui/primitives/status-badge'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -36,20 +38,12 @@ const statusVariant: StatusMap<PushDeliveryStatus> = {
   expired: 'warning',
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="text-sm">{children}</span>
+    <div>
+      <dt className="text-sm font-medium text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-sm text-foreground">{children}</dd>
     </div>
-  )
-}
-
-function JsonBlock({ value }: { value: Record<string, unknown> | null }) {
-  return (
-    <pre className="max-h-80 overflow-auto rounded-md border border-border bg-muted p-3 text-xs">
-      {value ? JSON.stringify(value, null, 2) : '—'}
-    </pre>
   )
 }
 
@@ -102,44 +96,51 @@ export default function PushDeliveryDetailPage({ params }: { params?: { id?: str
           <ErrorMessage label={error} />
         ) : item ? (
           <div className="flex flex-col gap-6">
-            <div className="flex items-center gap-3">
-              <h1 className="text-lg font-semibold">{t('push_notifications.deliveries.detail.pageTitle')}</h1>
-              <StatusBadge variant={statusVariant[item.status] ?? 'neutral'} dot>
-                {t(`push_notifications.deliveries.status.${item.status}`)}
-              </StatusBadge>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label={t('push_notifications.deliveries.columns.type')}>{item.notification_type_id}</Field>
-              <Field label={t('push_notifications.deliveries.columns.provider')}>{item.provider}</Field>
-              <Field label={t('push_notifications.deliveries.columns.attempts')}>{item.attempts}</Field>
-              <Field label={t('push_notifications.deliveries.columns.user')}>
-                <code className="text-xs">{item.user_id}</code>
-              </Field>
-              <Field label={t('push_notifications.deliveries.detail.device')}>
-                <code className="text-xs">{item.user_device_id}</code>
-              </Field>
-              <Field label={t('push_notifications.deliveries.detail.tokenSnapshot')}>
-                <code className="text-xs">…{item.token_snapshot}</code>
-              </Field>
-              <Field label={t('push_notifications.deliveries.columns.created')}>
-                {item.created_at ? new Date(item.created_at).toLocaleString() : '—'}
-              </Field>
-              <Field label={t('push_notifications.deliveries.columns.sent')}>
-                {item.sent_at ? new Date(item.sent_at).toLocaleString() : '—'}
-              </Field>
-              <Field label={t('push_notifications.deliveries.detail.nextRetry')}>
-                {item.next_retry_at ? new Date(item.next_retry_at).toLocaleString() : '—'}
-              </Field>
-              <Field label={t('push_notifications.deliveries.detail.lastError')}>{item.last_error ?? '—'}</Field>
-            </div>
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium">{t('push_notifications.deliveries.detail.payload')}</span>
-              <JsonBlock value={item.payload} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium">{t('push_notifications.deliveries.detail.providerResponse')}</span>
-              <JsonBlock value={item.provider_response} />
-            </div>
+            <FormHeader
+              mode="detail"
+              backHref="/backend/push_notifications"
+              backLabel={t('push_notifications.deliveries.title')}
+              entityTypeLabel={t('push_notifications.deliveries.detail.pageTitle')}
+              title={item.notification_type_id}
+              statusBadge={(
+                <StatusBadge variant={statusVariant[item.status] ?? 'neutral'} dot>
+                  {t(`push_notifications.deliveries.status.${item.status}`)}
+                </StatusBadge>
+              )}
+            />
+            <section className="rounded-lg border bg-card p-6">
+              <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <DetailRow label={t('push_notifications.deliveries.columns.type')}>{item.notification_type_id}</DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.columns.provider')}>{item.provider}</DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.columns.attempts')}>{item.attempts}</DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.columns.user')}>
+                  <code className="font-mono text-xs break-all">{item.user_id}</code>
+                </DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.detail.device')}>
+                  <code className="font-mono text-xs break-all">{item.user_device_id}</code>
+                </DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.detail.tokenSnapshot')}>
+                  <code className="font-mono text-xs">…{item.token_snapshot}</code>
+                </DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.columns.created')}>
+                  {item.created_at ? new Date(item.created_at).toLocaleString() : '—'}
+                </DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.columns.sent')}>
+                  {item.sent_at ? new Date(item.sent_at).toLocaleString() : '—'}
+                </DetailRow>
+                <DetailRow label={t('push_notifications.deliveries.detail.nextRetry')}>
+                  {item.next_retry_at ? new Date(item.next_retry_at).toLocaleString() : '—'}
+                </DetailRow>
+              </dl>
+            </section>
+            {item.last_error ? (
+              <section className="rounded-lg border border-status-error-border bg-status-error-bg p-6">
+                <h2 className="mb-2 text-sm font-medium text-status-error-text">{t('push_notifications.deliveries.detail.lastError')}</h2>
+                <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-status-error-text">{item.last_error}</pre>
+              </section>
+            ) : null}
+            <JsonDisplay data={item.payload ?? {}} title={t('push_notifications.deliveries.detail.payload')} />
+            <JsonDisplay data={item.provider_response ?? {}} title={t('push_notifications.deliveries.detail.providerResponse')} />
           </div>
         ) : null}
       </PageBody>
