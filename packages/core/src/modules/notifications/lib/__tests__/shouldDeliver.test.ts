@@ -147,3 +147,40 @@ describe('operator channel-eligibility override (notification_types.channels)', 
     expect(channels).toEqual(['in_app'])
   })
 })
+
+describe('operator nonOptOut override (notification_types.non_opt_out)', () => {
+  it('override true forces delivery despite an explicit user opt-out', async () => {
+    const channels = await resolveEffectiveChannels(
+      base({ preferences: prefs([['orders.created', 'email']]), nonOptOutOverride: true }),
+    )
+    expect(channels).toEqual(['in_app', 'email', 'push'])
+  })
+
+  it('override false makes a code-required type respect user opt-outs again', async () => {
+    const type = def('security.alert', { nonOptOut: true })
+    const channels = await resolveEffectiveChannels(
+      base({
+        typeId: type.type,
+        type,
+        preferences: prefs([['security.alert', 'push']]),
+        nonOptOutOverride: false,
+      }),
+    )
+    expect(channels).toEqual(['in_app', 'email'])
+  })
+
+  it('no override inherits the code-declared flag', async () => {
+    const type = def('security.alert', { nonOptOut: true })
+    const channels = await resolveEffectiveChannels(
+      base({ typeId: type.type, type, preferences: prefs([['security.alert', 'push']]), nonOptOutOverride: null }),
+    )
+    expect(channels).toEqual(['in_app', 'email', 'push'])
+  })
+
+  it('the eligibility check still wins over a forced nonOptOut', async () => {
+    const channels = await resolveEffectiveChannels(
+      base({ nonOptOutOverride: true, channelsOverride: ['in_app'] }),
+    )
+    expect(channels).toEqual(['in_app'])
+  })
+})

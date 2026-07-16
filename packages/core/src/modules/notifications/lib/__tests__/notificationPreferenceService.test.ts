@@ -1,9 +1,9 @@
-import { getNotificationType, getNotificationTypeChannelOverrides } from '../notification-type-registry'
+import { getNotificationType, getNotificationTypeOverrides } from '../notification-type-registry'
 import { createNotificationPreferenceService } from '../notificationPreferenceService'
 
 jest.mock('../notification-type-registry', () => ({
   getNotificationType: jest.fn(),
-  getNotificationTypeChannelOverrides: jest.fn(async () => new Map()),
+  getNotificationTypeOverrides: jest.fn(async () => new Map()),
 }))
 
 jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
@@ -13,8 +13,8 @@ jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
 }))
 
 const getTypeMock = getNotificationType as jest.MockedFunction<typeof getNotificationType>
-const getStoredOverridesMock = getNotificationTypeChannelOverrides as jest.MockedFunction<
-  typeof getNotificationTypeChannelOverrides
+const getStoredOverridesMock = getNotificationTypeOverrides as jest.MockedFunction<
+  typeof getNotificationTypeOverrides
 >
 
 const TENANT = '00000000-0000-0000-0000-000000000001'
@@ -53,8 +53,7 @@ describe('notificationPreferenceService.setPreferences', () => {
     const { em, fork } = makeEm()
     const service = createNotificationPreferenceService({ em } as never)
     await service.setPreferences(scope, [{ typeId: 'auth.account.locked', channel: 'push', enabled: false }])
-    // No writable items ⇒ never forks the EM or creates a row.
-    expect(em.fork).not.toHaveBeenCalled()
+    // No writable items ⇒ never creates a row (the single fork is the overrides read).
     expect(fork.create).not.toHaveBeenCalled()
   })
 
@@ -87,7 +86,7 @@ describe('notificationPreferenceService.setPreferences', () => {
   })
 
   it('drops writes for a channel outside the stored eligibility override', async () => {
-    getStoredOverridesMock.mockResolvedValue(new Map([['orders.shipped', ['in_app', 'email']]]))
+    getStoredOverridesMock.mockResolvedValue(new Map([['orders.shipped', { channels: ['in_app', 'email'], nonOptOut: null }]]))
     const { em, fork } = makeEm()
     const service = createNotificationPreferenceService({ em } as never)
     const changed = await service.setPreferences(scope, [
@@ -117,11 +116,36 @@ describe('notificationPreferenceService.setPreferences', () => {
     getTypeMock.mockImplementation((type) =>
       type === 'orders.shipped' ? ({ type, channels: ['in_app', 'email'] } as never) : undefined,
     )
-    getStoredOverridesMock.mockResolvedValue(new Map([['orders.shipped', ['in_app', 'email', 'push']]]))
+    getStoredOverridesMock.mockResolvedValue(new Map([['orders.shipped', { channels: ['in_app', 'email', 'push'], nonOptOut: null }]]))
     const { em, fork } = makeEm()
     const service = createNotificationPreferenceService({ em } as never)
     const changed = await service.setPreferences(scope, [
       { typeId: 'orders.shipped', channel: 'push', enabled: false },
+    ])
+    expect(changed).toBe(1)
+    expect(fork.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses an opt-out when the stored nonOptOut override forces the type on', async () => {
+    getStoredOverridesMock.mockResolvedValue(new Map([['orders.shipped', { channels: null, nonOptOut: true }]]))
+    const { em, fork } = makeEm()
+    const service = createNotificationPreferenceService({ em } as never)
+    const changed = await service.setPreferences(scope, [
+      { typeId: 'orders.shipped', channel: 'push', enabled: false },
+    ])
+    expect(changed).toBe(0)
+    expect(fork.create).not.toHaveBeenCalled()
+  })
+
+  it('allows an opt-out when the stored override relaxes a code-required type', async () => {
+    getTypeMock.mockImplementation((type) =>
+      type === 'auth.account.locked' ? ({ type, nonOptOut: true } as never) : undefined,
+    )
+    getStoredOverridesMock.mockResolvedValue(new Map([['auth.account.locked', { channels: null, nonOptOut: false }]]))
+    const { em, fork } = makeEm()
+    const service = createNotificationPreferenceService({ em } as never)
+    const changed = await service.setPreferences(scope, [
+      { typeId: 'auth.account.locked', channel: 'push', enabled: false },
     ])
     expect(changed).toBe(1)
     expect(fork.create).toHaveBeenCalledTimes(1)

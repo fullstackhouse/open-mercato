@@ -50,7 +50,6 @@ type ExistingRow = {
   description_key: string | null
   category?: string | null
   silent?: boolean
-  non_opt_out?: boolean
 }
 
 /**
@@ -66,9 +65,9 @@ function createFakeEm(existing: ExistingRow[]) {
     deletedIds: [] as unknown[],
   }
 
-  // Mirror the DB defaults (category null, silent/non_opt_out false) so rows that omit the
+  // Mirror the DB defaults (category null, silent false) so rows that omit the
   // Phase-5 columns don't read back as `undefined` and register spurious drift.
-  const selectRows = existing.map((row) => ({ category: null, silent: false, non_opt_out: false, ...row }))
+  const selectRows = existing.map((row) => ({ category: null, silent: false, ...row }))
   const selectChain: any = {
     select: () => selectChain,
     where: () => selectChain,
@@ -175,7 +174,7 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
     expect(res.deleted).toBe(0)
   })
 
-  it('mirrors category/silent/nonOptOut onto a newly inserted row', async () => {
+  it('mirrors category/silent onto a newly inserted row; nonOptOut is operator-owned and never mirrored', async () => {
     registerNotificationTypes(
       [def('a.secure', { category: 'security', silent: true, nonOptOut: true })],
       { replace: true },
@@ -188,8 +187,8 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
       id: 'a.secure',
       category: 'security',
       silent: true,
-      non_opt_out: true,
     })
+    expect(Object.keys(recorded.inserted[0]!)).not.toContain('non_opt_out')
   })
 
   it('does not mirror a hiddenFromSettings type to the catalogue', async () => {
@@ -220,7 +219,6 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
         description_key: null,
         category: null,
         silent: false,
-        non_opt_out: false,
       },
     ])
     const res = await syncNotificationTypes(em as never, { force: true })
@@ -228,6 +226,7 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
     expect(res.updated).toBe(1)
     expect(recorded.inserted).toHaveLength(0)
     expect(recorded.updated[0]?.set).toMatchObject({ category: 'security', silent: true })
+    expect(Object.keys(recorded.updated[0]!.set)).not.toContain('non_opt_out')
   })
 
   it('never writes the channels override column — operator edits survive a re-sync (regression)', async () => {

@@ -1,7 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { NotificationPreference } from '../data/entities'
-import { getNotificationType, getNotificationTypeChannelOverrides } from './notification-type-registry'
+import { getNotificationType, getNotificationTypeOverrides } from './notification-type-registry'
 
 /**
  * Tenant + user scope for preference operations. Tenant scoping is mandatory,
@@ -63,27 +63,27 @@ export function createNotificationPreferenceService(
     },
 
     async setPreferences(scope, items) {
-      // nonOptOut types ignore stored preferences at delivery time; refuse to persist an opt-out
-      // row for them so the stored state can never contradict enforcement. An `enabled: true` write
-      // matches the forced-on state and is allowed through (a preferences UI can still confirm it).
-      const optOutFiltered = items.filter(
-        (item) => item.enabled === true || getNotificationType(item.typeId)?.nonOptOut !== true,
-      )
+      const storedOverrides = items.length
+        ? await getNotificationTypeOverrides(rootEm.fork(), items.map((item) => item.typeId))
+        : new Map()
+      // Effectively-nonOptOut types (operator override ?? code flag) ignore stored preferences at
+      // delivery time; refuse to persist an opt-out row for them so the stored state can never
+      // contradict enforcement. An `enabled: true` write matches the forced-on state and is
+      // allowed through (a preferences UI can still confirm it).
+      const optOutFiltered = items.filter((item) => {
+        if (item.enabled === true) return true
+        const nonOptOut =
+          storedOverrides.get(item.typeId)?.nonOptOut ?? getNotificationType(item.typeId)?.nonOptOut
+        return nonOptOut !== true
+      })
       // Channels outside the type's effective eligibility (operator override on
       // `notification_types.channels`, else the code-declared `type.channels`) are locked:
       // delivery rejects them before preferences and the UI renders the cell off, so a stored
       // row would only lie. Drop those writes server-side (the UI lock is not a guarantee).
-      let writable = optOutFiltered
-      if (optOutFiltered.length > 0) {
-        const storedOverrides = await getNotificationTypeChannelOverrides(
-          rootEm.fork(),
-          optOutFiltered.map((item) => item.typeId),
-        )
-        writable = optOutFiltered.filter((item) => {
-          const eligible = storedOverrides.get(item.typeId) ?? getNotificationType(item.typeId)?.channels
-          return !eligible || eligible.includes(item.channel)
-        })
-      }
+      const writable = optOutFiltered.filter((item) => {
+        const eligible = storedOverrides.get(item.typeId)?.channels ?? getNotificationType(item.typeId)?.channels
+        return !eligible || eligible.includes(item.channel)
+      })
       if (writable.length === 0) return 0
       const em = rootEm.fork()
       const existing = await em.find(NotificationPreference, {

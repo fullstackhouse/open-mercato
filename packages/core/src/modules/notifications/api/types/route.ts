@@ -6,7 +6,7 @@ import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { z } from 'zod'
 import { NotificationType } from '../../data/entities'
 import { getNotificationType, syncNotificationTypes } from '../../lib/notification-type-registry'
-import { notificationTypeItemSchema, updateNotificationTypeChannelsSchema } from '../../data/validators'
+import { notificationTypeItemSchema, updateNotificationTypeSchema } from '../../data/validators'
 import { errorResponseSchema } from '../openapi'
 import {
   NOTIFICATION_SETTINGS_RESOURCE_KIND,
@@ -33,9 +33,11 @@ const typeItem = (row: NotificationType) => ({
   descriptionKey: row.descriptionKey ?? null,
   category: row.category ?? null,
   silent: row.silent === true,
-  nonOptOut: row.nonOptOut === true,
+  // Effective nonOptOut: operator override (stored non_opt_out) ?? code-declared flag.
+  nonOptOut: (row.nonOptOut ?? getNotificationType(row.id)?.nonOptOut) === true,
   channels: effectiveChannels(row),
   storedChannels: row.channels ?? null,
+  storedNonOptOut: row.nonOptOut ?? null,
 })
 
 export async function GET(req: Request) {
@@ -79,7 +81,7 @@ export async function PATCH(req: Request) {
     )
   }
 
-  const parsed = updateNotificationTypeChannelsSchema.safeParse(body)
+  const parsed = updateNotificationTypeSchema.safeParse(body)
   if (!parsed.success) {
     return NextResponse.json(
       { error: t('notifications.types.invalidChannels', 'Invalid channels payload') },
@@ -113,7 +115,8 @@ export async function PATCH(req: Request) {
         payload: parsed.data as unknown as Record<string, unknown>,
       },
       async () => {
-        row.channels = parsed.data.channels
+        if (parsed.data.channels !== undefined) row.channels = parsed.data.channels
+        if (parsed.data.nonOptOut !== undefined) row.nonOptOut = parsed.data.nonOptOut
         await em.flush()
         return typeItem(row)
       },
@@ -152,13 +155,13 @@ export const openApi = {
     },
   },
   PATCH: {
-    summary: 'Override a notification type\'s channel eligibility',
-    description: 'Operator override of the channels a type may deliver on (`notification_types.channels`). The stored array replaces the code-declared `type.channels`; pass `channels: null` to clear the override and inherit the code default. A channel outside the effective set is completely off for the type: it beats user preferences and `nonOptOut`, and preference UIs lock the cell.',
+    summary: 'Override a notification type\'s channel eligibility and opt-out governance',
+    description: 'Operator overrides for a notification type. `channels` replaces the code-declared eligibility (a channel outside the effective set is completely off: it beats user preferences and `nonOptOut`, and preference UIs lock the cell). `nonOptOut` overrides the code-declared opt-out governance (`true` forces the type on for users, `false` makes a required type user-editable). Omitted fields stay untouched; pass `null` to clear a stored override and inherit the code declaration.',
     tags: ['Notifications'],
     requestBody: {
       required: true,
       content: {
-        'application/json': { schema: updateNotificationTypeChannelsSchema },
+        'application/json': { schema: updateNotificationTypeSchema },
       },
     },
     responses: {

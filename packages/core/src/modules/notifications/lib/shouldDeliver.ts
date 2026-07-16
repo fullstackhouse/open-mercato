@@ -13,7 +13,8 @@ import type { NotificationPreferenceScope } from './notificationPreferenceServic
  *      this runs BEFORE the `nonOptOut` bypass and before user preferences, so a channel
  *      outside the effective set is completely off for the type,
  *   3. it is in the per-send target (`targetChannels`, when provided),
- *   4. either the type is `nonOptOut`, or the recipient has not disabled it (`isChannelEnabled`).
+ *   4. either the type is effectively `nonOptOut` (operator override ?? code flag), or the
+ *      recipient has not disabled it (`isChannelEnabled`).
  *
  * `silent` is intentionally NOT consulted here — it selects push delivery STYLE, not whether a
  * channel delivers at all. Absent `type.channels` and absent `targetChannels` both mean "no
@@ -51,16 +52,24 @@ export type ShouldDeliverParams = {
    * `undefined`/`null` ⇒ no override; the code-declared `type.channels` applies.
    */
   channelsOverride?: string[] | null
+  /**
+   * Operator override of the type's `nonOptOut` flag from `notification_types.non_opt_out`.
+   * `undefined`/`null` ⇒ no override; the code-declared flag applies.
+   */
+  nonOptOutOverride?: boolean | null
 }
 
 export async function shouldDeliver(params: ShouldDeliverParams): Promise<boolean> {
-  const { typeId, type, channel, scope, targetChannels, registeredChannels, preferences, channelsOverride } = params
+  const {
+    typeId, type, channel, scope, targetChannels, registeredChannels, preferences,
+    channelsOverride, nonOptOutOverride,
+  } = params
 
   if (!registeredChannels.includes(channel)) return false
   const eligible = resolveEligibleChannels(type, channelsOverride)
   if (eligible && !eligible.includes(channel)) return false
   if (targetChannels && !targetChannels.includes(channel)) return false
-  if (type?.nonOptOut === true) return true
+  if ((nonOptOutOverride ?? type?.nonOptOut) === true) return true
 
   return preferences.isChannelEnabled(scope, typeId, channel)
 }

@@ -75,6 +75,8 @@
   "notifications.settings.types.description": "Kanały dostarczania per typ powiadomienia. Wyłączenie kanału całkowicie dezaktywuje go dla tego typu — nigdy nie jest dostarczany, a użytkownicy nie mogą go włączyć w swoich preferencjach. Twoje ustawienie nadpisuje domyślne z modułu.",
   "notifications.settings.types.empty": "Nie zarejestrowano jeszcze żadnych typów powiadomień.",
   "notifications.settings.types.loadError": "Nie udało się wczytać typów powiadomień",
+  "notifications.settings.types.requiredColumn": "Wymagane",
+  "notifications.settings.types.requiredHint": "Użytkownicy nie mogą zrezygnować, gdy włączone.",
   "notifications.settings.types.saveError": "Nie udało się zapisać kanałów typu",
   "notifications.settings.types.saveSuccess": "Zapisano kanały typu",
   "notifications.settings.types.title": "Domyślne kanały per typ",

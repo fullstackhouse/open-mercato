@@ -146,8 +146,14 @@ export class NotificationType {
   @Property({ name: 'silent', type: 'boolean', default: false })
   silent: boolean = false
 
-  @Property({ name: 'non_opt_out', type: 'boolean', default: false })
-  nonOptOut: boolean = false
+  /**
+   * Operator override of the code-declared `nonOptOut` flag — same contract as `channels`:
+   * `true` forces the type on (users cannot opt out), `false` makes an otherwise-required type
+   * user-editable, `NULL` inherits the code declaration. Operator-owned: never mirrored by
+   * `syncNotificationTypes`, so admin edits survive catalogue re-syncs.
+   */
+  @Property({ name: 'non_opt_out', type: 'boolean', nullable: true })
+  nonOptOut?: boolean | null
 
   /**
    * Operator override of the code-declared channel eligibility

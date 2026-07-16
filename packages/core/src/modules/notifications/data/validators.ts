@@ -149,7 +149,8 @@ export const notificationTypeItemSchema = z.object({
   category: z.string().nullable().optional(),
   // When true the type is delivered as a silent / content-available push.
   silent: z.boolean(),
-  // When true the type cannot be opted out of; a preferences UI should lock it on.
+  // Effective "cannot be opted out of" flag (operator override ?? code-declared); a preferences
+  // UI should lock the type on when true.
   nonOptOut: z.boolean(),
   // Effective channel eligibility (operator override ?? code-declared `type.channels`).
   // `null` = no restriction (every registered channel). A channel outside the set never
@@ -159,14 +160,22 @@ export const notificationTypeItemSchema = z.object({
   // Admin editors base PATCH payloads on the EFFECTIVE set, but this shows whether an
   // override exists at all.
   storedChannels: z.array(z.string()).nullable(),
+  // The raw operator-stored `nonOptOut` override (`null` = inherit the code-declared flag).
+  storedNonOptOut: z.boolean().nullable(),
 })
 
-// PATCH /api/notifications/types — operator override of a type's channel eligibility.
-// `channels: null` clears the override (the code-declared set applies again).
-export const updateNotificationTypeChannelsSchema = z.object({
-  id: z.string().min(1),
-  channels: z.array(z.string().min(1)).nullable(),
-})
+// PATCH /api/notifications/types — operator override of a type's channel eligibility and/or
+// nonOptOut governance. Omitted fields stay untouched; `null` clears the stored override so
+// the code declaration applies again.
+export const updateNotificationTypeSchema = z
+  .object({
+    id: z.string().min(1),
+    channels: z.array(z.string().min(1)).nullable().optional(),
+    nonOptOut: z.boolean().nullable().optional(),
+  })
+  .refine((value) => value.channels !== undefined || value.nonOptOut !== undefined, {
+    message: 'At least one of channels or nonOptOut must be provided',
+  })
 
 // Per-user channel preferences
 export const notificationPreferenceItemSchema = z.object({
@@ -197,7 +206,7 @@ export const adminUpdatePreferencesSchema = updatePreferencesSchema.extend({
 })
 
 export type NotificationTypeItem = z.infer<typeof notificationTypeItemSchema>
-export type UpdateNotificationTypeChannelsInput = z.infer<typeof updateNotificationTypeChannelsSchema>
+export type UpdateNotificationTypeInput = z.infer<typeof updateNotificationTypeSchema>
 export type NotificationPreferenceItem = z.infer<typeof notificationPreferenceItemSchema>
 export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>
 export type AdminUpdatePreferencesInput = z.infer<typeof adminUpdatePreferencesSchema>

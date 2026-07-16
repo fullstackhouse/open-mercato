@@ -21,7 +21,7 @@ import {
 } from './notificationRecipients'
 import { assertSafeNotificationHref, sanitizeNotificationActions } from './safeHref'
 import { createLogger } from '@open-mercato/shared/lib/logger'
-import { getNotificationType, getNotificationTypeChannelOverrides } from './notification-type-registry'
+import { getNotificationType, getNotificationTypeOverrides, type NotificationTypeOverrides } from './notification-type-registry'
 import { getNotificationDeliveryStrategies } from './deliveryStrategies'
 import { resolveEffectiveChannels } from './shouldDeliver'
 import {
@@ -261,7 +261,7 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
     recipientUserId: string,
     scopeCtx: NotificationServiceContext,
     preferences: NotificationPreferenceService = createNotificationPreferenceService({ em: rootEm.fork() }),
-    channelsOverride?: string[] | null,
+    typeOverrides?: NotificationTypeOverrides | null,
   ): Promise<string[] | null> => {
     const registeredChannels = getNotificationDeliveryStrategies().map((strategy) => strategy.id)
     if (registeredChannels.length === 0) return null
@@ -269,9 +269,9 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
     // a programmatic caller that computed an empty array should not silently black-hole the
     // notification. The HTTP layer rejects an empty `channels` outright (see validators.ts).
     const targetChannels = content.channels && content.channels.length > 0 ? content.channels : null
-    const storedOverride = channelsOverride === undefined
-      ? (await getNotificationTypeChannelOverrides(rootEm.fork(), [content.type])).get(content.type) ?? null
-      : channelsOverride
+    const overrides = typeOverrides === undefined
+      ? (await getNotificationTypeOverrides(rootEm.fork(), [content.type])).get(content.type) ?? null
+      : typeOverrides
     return resolveEffectiveChannels({
       typeId: content.type,
       type: getNotificationType(content.type),
@@ -279,7 +279,8 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
       targetChannels,
       registeredChannels,
       preferences,
-      channelsOverride: storedOverride,
+      channelsOverride: overrides?.channels ?? null,
+      nonOptOutOverride: overrides?.nonOptOut ?? null,
     })
   }
 
@@ -296,14 +297,14 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
     scopeCtx: NotificationServiceContext,
   ): Promise<Array<{ recipientUserId: string; channels: string[] | null }>> => {
     const preferences = createNotificationPreferenceService({ em: rootEm.fork() })
-    // The stored override is per-type (not per-recipient) — read once for the whole broadcast.
-    const channelsOverride =
-      (await getNotificationTypeChannelOverrides(rootEm.fork(), [content.type])).get(content.type) ?? null
+    // Stored overrides are per-type (not per-recipient) — read once for the whole broadcast.
+    const typeOverrides =
+      (await getNotificationTypeOverrides(rootEm.fork(), [content.type])).get(content.type) ?? null
     const resolved: Array<{ recipientUserId: string; channels: string[] | null }> = []
     for (const recipientUserId of recipientUserIds) {
       resolved.push({
         recipientUserId,
-        channels: await resolveChannelsFor(content, recipientUserId, scopeCtx, preferences, channelsOverride),
+        channels: await resolveChannelsFor(content, recipientUserId, scopeCtx, preferences, typeOverrides),
       })
     }
     return resolved

@@ -16,11 +16,14 @@ type NotificationTypeCatalogueItem = {
   id: string
   labelKey: string
   descriptionKey?: string | null
+  // Effective "required" flag (operator override ?? code-declared).
   nonOptOut?: boolean
   // Effective channel eligibility (operator override ?? code-declared; null = every channel).
   channels: string[] | null
   // Raw operator-stored override (null = inherit the code-declared set).
   storedChannels: string[] | null
+  // Raw operator-stored nonOptOut override (null = inherit the code-declared flag).
+  storedNonOptOut: boolean | null
 }
 
 type TypesResponse = { items?: NotificationTypeCatalogueItem[] }
@@ -130,7 +133,54 @@ export function NotificationSettingsPageClient() {
       setTypes((prev) =>
         prev.map((item) =>
           item.id === type.id && saved
-            ? { ...item, channels: saved.channels, storedChannels: saved.storedChannels }
+            ? {
+                ...item,
+                channels: saved.channels,
+                storedChannels: saved.storedChannels,
+                nonOptOut: saved.nonOptOut,
+                storedNonOptOut: saved.storedNonOptOut,
+              }
+            : item,
+        ),
+      )
+      flash(t('notifications.settings.types.saveSuccess', 'Type channels saved'), 'success')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('notifications.settings.types.saveError', 'Failed to save type channels')
+      flash(message, 'error')
+    } finally {
+      setSavingTypeCell(null)
+    }
+  }
+
+  const handleTypeNonOptOutToggle = async (type: NotificationTypeCatalogueItem, required: boolean) => {
+    const cellKey = `${type.id}::nonOptOut`
+    setSavingTypeCell(cellKey)
+    try {
+      const response = await runMutation({
+        operation: () =>
+          apiCall<PatchTypeResponse>('/api/notifications/types', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: type.id, nonOptOut: required }),
+          }),
+        context: { formId: SETTINGS_CONTEXT_ID, resourceKind: 'notifications.settings', retryLastMutation },
+        mutationPayload: { id: type.id, nonOptOut: required },
+      })
+      if (!response.ok || !response.result?.ok) {
+        const message = response.result?.error || t('notifications.settings.types.saveError', 'Failed to save type channels')
+        throw new Error(message)
+      }
+      const saved = response.result.item
+      setTypes((prev) =>
+        prev.map((item) =>
+          item.id === type.id && saved
+            ? {
+                ...item,
+                channels: saved.channels,
+                storedChannels: saved.storedChannels,
+                nonOptOut: saved.nonOptOut,
+                storedNonOptOut: saved.storedNonOptOut,
+              }
             : item,
         ),
       )
@@ -354,6 +404,12 @@ export function NotificationSettingsPageClient() {
                         {t(channel.labelKey, channel.id)}
                       </th>
                     ))}
+                    <th className="px-4 py-3 font-medium">
+                      <div>{t('notifications.settings.types.requiredColumn', 'Required')}</div>
+                      <div className="text-xs font-normal text-muted-foreground">
+                        {t('notifications.settings.types.requiredHint', 'Users cannot opt out when on.')}
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -390,6 +446,19 @@ export function NotificationSettingsPageClient() {
                           </td>
                         )
                       })}
+                      <td className="px-4 py-3">
+                        <span className="relative inline-flex">
+                          <Switch
+                            checked={type.nonOptOut === true}
+                            disabled={savingTypeCell !== null}
+                            aria-label={`${t(type.labelKey, type.id)} – ${t('notifications.settings.types.requiredColumn', 'Required')}`}
+                            onCheckedChange={(checked) => handleTypeNonOptOutToggle(type, checked)}
+                          />
+                          {savingTypeCell === `${type.id}::nonOptOut` ? (
+                            <Spinner size="sm" className="absolute left-full ml-2" />
+                          ) : null}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -4,7 +4,7 @@ import { NOTIFICATION_EVENTS } from '../lib/events'
 import { DEFAULT_NOTIFICATION_DELIVERY_CONFIG, resolveNotificationDeliveryConfig, resolveNotificationPanelUrl } from '../lib/deliveryConfig'
 import { getNotificationDeliveryStrategies, type NotificationDeliveryContext } from '../lib/deliveryStrategies'
 import { resolveEffectiveChannels } from '../lib/shouldDeliver'
-import { getNotificationType, getNotificationTypeChannelOverrides } from '../lib/notification-type-registry'
+import { getNotificationType, getNotificationTypeOverrides } from '../lib/notification-type-registry'
 import { resolveNotificationPreferenceService } from '../lib/notificationPreferenceService'
 import { resolveNotificationCopy } from '../lib/notificationCopy'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
@@ -160,9 +160,13 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
       targetChannels: null,
       registeredChannels: strategies.map((strategy) => strategy.id),
       preferences: resolveNotificationPreferenceService({ resolve: ctx.resolve }),
-      channelsOverride:
-        (await getNotificationTypeChannelOverrides(em as EntityManager, [notification.type])).get(notification.type) ??
-        null,
+      ...await (async () => {
+        const overrides = (await getNotificationTypeOverrides(em as EntityManager, [notification.type])).get(notification.type)
+        return {
+          channelsOverride: overrides?.channels ?? null,
+          nonOptOutOverride: overrides?.nonOptOut ?? null,
+        }
+      })(),
     })
     // Persist the recomputed set back onto a null-channels row so the in-app
     // VISIBILITY path (bell/inbox/unread — see notificationVisibility.ts) reads

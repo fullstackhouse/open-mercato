@@ -75,6 +75,8 @@
   "notifications.settings.types.description": "Canales de entrega por tipo de notificación. Apagar un canal lo desactiva por completo para ese tipo: nunca se entrega y los usuarios no pueden activarlo en sus preferencias. Tu configuración anula el valor predeterminado del módulo.",
   "notifications.settings.types.empty": "Aún no hay tipos de notificación registrados.",
   "notifications.settings.types.loadError": "No se pudieron cargar los tipos de notificación",
+  "notifications.settings.types.requiredColumn": "Obligatoria",
+  "notifications.settings.types.requiredHint": "Los usuarios no pueden desactivarla cuando está activada.",
   "notifications.settings.types.saveError": "No se pudieron guardar los canales del tipo",
   "notifications.settings.types.saveSuccess": "Canales del tipo guardados",
   "notifications.settings.types.title": "Valores predeterminados de canal por tipo",
