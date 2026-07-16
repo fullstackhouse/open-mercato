@@ -230,6 +230,18 @@ packages/core/src/helpers/integration/{pushFake,appRoot}.ts
 packages/shared/src/modules/notifications/types.ts   # additive optional fields
 ```
 
+### Admin UI placement
+
+| Surface | Location | Why there |
+|---|---|---|
+| Devices (list/create/edit) | Settings → Auth | User-adjacent registry, next to User Notification Preferences |
+| User Notification Preferences (admin) | Settings → Auth | Admin edits *other users'* preferences — an auth/user-admin task |
+| Notification Delivery (type catalogue) | Settings → Module Configs | It is module configuration |
+| Push Deliveries (log) + Send Push (tool) | Settings → External systems | Operational delivery log + send tool for external providers — same nature as Webhooks deliveries and Payment Transactions |
+| Communication Channels (connect FCM/APNs/Expo) | Main sidebar → Integrations | Pre-existing hub page; push providers ride it |
+| Notification Preferences (own) | Profile — entry in the top-right profile dropdown (`notifications.injection.profile-preferences-menu` widget, mirroring `communication_channels`' pattern) | `pageContext: 'profile'` pages are otherwise only reachable from the profile-mode sidebar |
+| My communication channels (own) | Profile dropdown (pre-existing widget) | Per-user channel connect |
+
 ## Data Models
 
 ### UserDevice (`user_devices`)
@@ -473,7 +485,7 @@ The sibling `.meta.ts` (`requiredEnvVars: ['OM_PUSH_FAKE_PROVIDERS']`) already s
 ## Changelog
 
 ### 2026-07-16
-- **QA click-through nav fixes.** (1) The per-user preferences page (`pageContext: 'profile'`) was unreachable except via the profile-mode sidebar or a direct URL — added a `menu:topbar:profile-dropdown` injection widget (`notifications.injection.profile-preferences-menu`), mirroring `communication_channels`' profile-channels-menu, gated on the page's own `notifications.manage_preferences`. (2) Moved **Push Deliveries** and **Send Push** from Settings → Module Configs to Settings → **External systems** (`backend.nav.externalSystems`), alongside Webhooks and Payment Transactions: they are an operational delivery log and a send tool for external providers, not module configuration. **Notification Delivery** (the type catalogue) stays in Module Configs — it is configuration.
+- **Admin UI placement finalized after QA click-through** — see the new § Admin UI placement table (profile-dropdown entry for own preferences; Push Deliveries/Send Push under External systems).
 - **`TC-CHANNEL-PUSH-005..007` blocker cleared — full CI green.** After rebasing the branch onto upstream `develop` (726 commits), CI run `29481474913` passed every job, and the three specs **ran and passed** in their shard (visible ✓ with timings — not a `requiredEnvVars` skip): TC-CHANNEL-PUSH-005 (FCM) 0.6s, 006 (APNs) 17.9s + 1.1s, 007 (Expo) 0.6s. The hanging `POST /api/notifications` did not reproduce; the most plausible explanations are the rebase changing shard composition/runner load and upstream `develop` changes to the notifications route path, but the root cause of the original hang was never isolated — if it recurs, start from the 2026-07-10 diagnosis below (it is a hanging HTTP request, not a test-timeout budget).
 - **Unblocked the three CI jobs the develop rebase broke** (none a logic regression): routed the modules' 26 raw `console.*` calls through `createLogger(...)` for develop's now-strict console guard; added the three `channel-*` package manifests to the Dockerfile COPY stages (`yarn install --immutable` inside the image failed with "Workspace not found"); pinned `websocket-driver@0.7.5` in root resolutions for GHSA-xv26-6w52-cph6 (critical, published 2026-07-15 — four hours after develop's last green run, so upstream `develop` will fail its next audit too). Documented in `UPGRADE_NOTES.md` alongside the `node-forge` pin.
 
