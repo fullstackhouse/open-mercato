@@ -12,9 +12,9 @@ export const metadata = {
   requireFeatures: ['push_notifications.send_custom'],
   pageTitle: 'Send Push',
   pageTitleKey: 'push_notifications.send.pageTitle',
-  pageGroup: 'Module Configs',
-  pageGroupKey: 'settings.sections.moduleConfigs',
-  pageOrder: 9,
+  pageGroup: 'External systems',
+  pageGroupKey: 'backend.nav.externalSystems',
+  pageOrder: 55,
   icon: megaphoneIcon,
   pageContext: 'settings' as const,
   breadcrumb: [
