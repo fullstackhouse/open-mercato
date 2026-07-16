@@ -149,6 +149,17 @@ export class NotificationType {
   @Property({ name: 'non_opt_out', type: 'boolean', default: false })
   nonOptOut: boolean = false
 
+  /**
+   * Operator override of the code-declared channel eligibility
+   * (`NotificationTypeDefinition.channels`). A stored array REPLACES the code set; `null`
+   * inherits it. A channel outside the effective set never delivers for the type (checked
+   * before both the `nonOptOut` bypass and user preferences) and users cannot opt into it —
+   * the preference UIs render the cell locked off. This column is intentionally NOT mirrored
+   * by `syncNotificationTypes` so operator edits survive catalogue re-syncs.
+   */
+  @Property({ name: 'channels', type: 'json', nullable: true })
+  channels?: string[] | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 

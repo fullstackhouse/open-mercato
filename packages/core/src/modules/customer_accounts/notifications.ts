@@ -3,6 +3,9 @@ import type { NotificationTypeDefinition } from '@open-mercato/shared/modules/no
 export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.user.signup',
+    // Ships without push — operators re-enable it per type from the Notification Delivery settings.
+
+    channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.user.signup.title',
     bodyKey: 'customer_accounts.notifications.user.signup.body',
@@ -22,6 +25,9 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   },
   {
     type: 'customer_accounts.user.locked',
+    // Ships without push — operators re-enable it per type from the Notification Delivery settings.
+
+    channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.user.locked.title',
     bodyKey: 'customer_accounts.notifications.user.locked.body',
@@ -41,6 +47,9 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   },
   {
     type: 'customer_accounts.domain_mapping.verified',
+    // Ships without push — operators re-enable it per type from the Notification Delivery settings.
+
+    channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.verified.title',
     bodyKey: 'customer_accounts.notifications.domain_mapping.verified.body',
@@ -60,6 +69,9 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   },
   {
     type: 'customer_accounts.domain_mapping.activated',
+    // Ships without push — operators re-enable it per type from the Notification Delivery settings.
+
+    channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.activated.title',
     bodyKey: 'customer_accounts.notifications.domain_mapping.activated.body',
@@ -79,6 +91,9 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   },
   {
     type: 'customer_accounts.domain_mapping.dns_failed',
+    // Ships without push — operators re-enable it per type from the Notification Delivery settings.
+
+    channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.dns_failed.title',
     bodyKey: 'customer_accounts.notifications.domain_mapping.dns_failed.body',
@@ -98,6 +113,9 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   },
   {
     type: 'customer_accounts.domain_mapping.tls_failed',
+    // Ships without push — operators re-enable it per type from the Notification Delivery settings.
+
+    channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.tls_failed.title',
     bodyKey: 'customer_accounts.notifications.domain_mapping.tls_failed.body',

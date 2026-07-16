@@ -37,6 +37,35 @@ export function getNotificationTypes(): NotificationTypeDefinition[] {
   return Array.from(registry.values())
 }
 
+/**
+ * Read the operator-stored channel-eligibility overrides (`notification_types.channels`) for the
+ * given type ids (system-wide rows). Returns a map keyed by type id; types without a row or
+ * without a stored override are absent (⇒ the code-declared `type.channels` applies). Used by
+ * the create-time gate and the deliver-subscriber recompute so `shouldDeliver` applies the same
+ * effective eligibility the types API reports.
+ */
+export async function getNotificationTypeChannelOverrides(
+  em: EntityManager,
+  typeIds: string[],
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>()
+  const uniqueIds = Array.from(new Set(typeIds)).filter((id) => id.length > 0)
+  if (!uniqueIds.length) return result
+  const db = em.getKysely<any>() as Kysely<any>
+  const rows = (await db
+    .selectFrom('notification_types')
+    .select(['id', 'channels'])
+    .where('tenant_id', 'is', null)
+    .where('id', 'in', uniqueIds)
+    .execute()) as Array<{ id: string; channels: string[] | null }>
+  for (const row of rows) {
+    if (Array.isArray(row.channels)) {
+      result.set(row.id, row.channels)
+    }
+  }
+  return result
+}
+
 export type SyncNotificationTypesResult = {
   created: number
   updated: number

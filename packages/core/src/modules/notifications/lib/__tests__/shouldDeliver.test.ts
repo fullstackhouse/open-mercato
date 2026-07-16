@@ -1,5 +1,10 @@
 import type { NotificationTypeDefinition } from '@open-mercato/shared/modules/notifications/types'
-import { resolveEffectiveChannels, shouldDeliver, type ChannelPreferenceReader } from '../shouldDeliver'
+import {
+  resolveEligibleChannels,
+  resolveEffectiveChannels,
+  shouldDeliver,
+  type ChannelPreferenceReader,
+} from '../shouldDeliver'
 
 const SCOPE = { tenantId: 't1', userId: 'u1' }
 const REGISTERED = ['in_app', 'email', 'push']
@@ -91,5 +96,54 @@ describe('shouldDeliver', () => {
   it('empty per-send target resolves to nothing deliverable', async () => {
     const channels = await resolveEffectiveChannels(base({ targetChannels: [] }))
     expect(channels).toEqual([])
+  })
+})
+
+describe('operator channel-eligibility override (notification_types.channels)', () => {
+  it('resolveEligibleChannels: stored override replaces the code set; both absent \u21d2 null (no restriction)', () => {
+    const type = def('orders.created', { channels: ['in_app', 'email'] })
+    expect(resolveEligibleChannels(type, null)).toEqual(['in_app', 'email'])
+    expect(resolveEligibleChannels(type, ['in_app', 'email', 'push'])).toEqual(['in_app', 'email', 'push'])
+    expect(resolveEligibleChannels(undefined, ['in_app'])).toEqual(['in_app'])
+    expect(resolveEligibleChannels(def('x'), null)).toBeNull()
+  })
+
+  it('a code-declared set without push excludes push completely (no user opt-in possible)', async () => {
+    const optedIn: ChannelPreferenceReader = { isChannelEnabled: async () => true }
+    const type = def('orders.created', { channels: ['in_app', 'email'] })
+    const channels = await resolveEffectiveChannels(base({ type, preferences: optedIn }))
+    expect(channels).toEqual(['in_app', 'email'])
+  })
+
+  it('a stored override re-enables a channel the code set excluded', async () => {
+    const type = def('orders.created', { channels: ['in_app', 'email'] })
+    const channels = await resolveEffectiveChannels(
+      base({ type, channelsOverride: ['in_app', 'email', 'push'] }),
+    )
+    expect(channels).toEqual(['in_app', 'email', 'push'])
+  })
+
+  it('a stored override narrows even a nonOptOut type (runs before the bypass)', async () => {
+    const type = def('security.alert', { nonOptOut: true })
+    const channels = await resolveEffectiveChannels(
+      base({ typeId: type.type, type, channelsOverride: ['email'] }),
+    )
+    expect(channels).toEqual(['email'])
+  })
+
+  it('an explicit user opt-in cannot beat the override (channel outside the set stays off)', async () => {
+    const optedIn: ChannelPreferenceReader = { isChannelEnabled: async () => true }
+    const channels = await resolveEffectiveChannels(
+      base({ preferences: optedIn, channelsOverride: ['in_app'] }),
+    )
+    expect(channels).toEqual(['in_app'])
+  })
+
+  it('user preferences still apply normally to channels inside the effective set', async () => {
+    const type = def('orders.created', { channels: ['in_app', 'email'] })
+    const channels = await resolveEffectiveChannels(
+      base({ type, preferences: prefs([['orders.created', 'email']]) }),
+    )
+    expect(channels).toEqual(['in_app'])
   })
 })

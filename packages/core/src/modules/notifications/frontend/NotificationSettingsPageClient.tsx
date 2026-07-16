@@ -12,6 +12,21 @@ import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@open-mercato/ui/primitives/card'
 
+type NotificationTypeCatalogueItem = {
+  id: string
+  labelKey: string
+  descriptionKey?: string | null
+  nonOptOut?: boolean
+  // Effective channel eligibility (operator override ?? code-declared; null = every channel).
+  channels: string[] | null
+  // Raw operator-stored override (null = inherit the code-declared set).
+  storedChannels: string[] | null
+}
+
+type TypesResponse = { items?: NotificationTypeCatalogueItem[] }
+type ChannelsResponse = { items?: Array<{ id: string; labelKey: string; descriptionKey?: string | null }> }
+type PatchTypeResponse = { ok?: boolean; item?: NotificationTypeCatalogueItem; error?: string }
+
 type NotificationDeliveryConfig = {
   appUrl?: string
   panelPath: string
@@ -53,6 +68,80 @@ export function NotificationSettingsPageClient() {
     contextId: SETTINGS_CONTEXT_ID,
     blockedMessage: t('ui.forms.flash.saveBlocked', 'Save blocked by validation'),
   })
+
+  const [types, setTypes] = React.useState<NotificationTypeCatalogueItem[]>([])
+  const [channels, setChannels] = React.useState<Array<{ id: string; labelKey: string }>>([])
+  const [savingTypeCell, setSavingTypeCell] = React.useState<string | null>(null)
+
+  const fetchCatalogue = React.useCallback(async () => {
+    try {
+      const [typesBody, channelsBody] = await Promise.all([
+        readApiResultOrThrow<TypesResponse>('/api/notifications/types', undefined, {
+          errorMessage: t('notifications.settings.types.loadError', 'Failed to load notification types'),
+          allowNullResult: true,
+        }),
+        readApiResultOrThrow<ChannelsResponse>('/api/notifications/channels', undefined, {
+          errorMessage: t('notifications.settings.types.loadError', 'Failed to load notification types'),
+          allowNullResult: true,
+        }),
+      ])
+      setTypes(typesBody?.items ?? [])
+      setChannels((channelsBody?.items ?? []).map((item) => ({ id: item.id, labelKey: item.labelKey })))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('notifications.settings.types.loadError', 'Failed to load notification types')
+      flash(message, 'error')
+    }
+  }, [t])
+
+  React.useEffect(() => {
+    fetchCatalogue()
+  }, [fetchCatalogue])
+
+  const handleTypeChannelToggle = async (
+    type: NotificationTypeCatalogueItem,
+    channelId: string,
+    enabled: boolean,
+    registeredChannelIds: string[],
+  ) => {
+    const cellKey = `${type.id}::${channelId}`
+    setSavingTypeCell(cellKey)
+    // Base the next eligibility set on the EFFECTIVE one (override ?? code ?? all registered),
+    // then add/remove the toggled channel. The stored array replaces the code-declared set.
+    const effective = type.channels ?? registeredChannelIds
+    const nextChannels = enabled
+      ? Array.from(new Set([...effective, channelId]))
+      : effective.filter((channel) => channel !== channelId)
+    try {
+      const response = await runMutation({
+        operation: () =>
+          apiCall<PatchTypeResponse>('/api/notifications/types', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: type.id, channels: nextChannels }),
+          }),
+        context: { formId: SETTINGS_CONTEXT_ID, resourceKind: 'notifications.settings', retryLastMutation },
+        mutationPayload: { id: type.id, channels: nextChannels },
+      })
+      if (!response.ok || !response.result?.ok) {
+        const message = response.result?.error || t('notifications.settings.types.saveError', 'Failed to save type channels')
+        throw new Error(message)
+      }
+      const saved = response.result.item
+      setTypes((prev) =>
+        prev.map((item) =>
+          item.id === type.id && saved
+            ? { ...item, channels: saved.channels, storedChannels: saved.storedChannels }
+            : item,
+        ),
+      )
+      flash(t('notifications.settings.types.saveSuccess', 'Type channels saved'), 'success')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('notifications.settings.types.saveError', 'Failed to save type channels')
+      flash(message, 'error')
+    } finally {
+      setSavingTypeCell(null)
+    }
+  }
 
   const fetchSettings = React.useCallback(async () => {
     setLoading(true)
@@ -234,6 +323,79 @@ export function NotificationSettingsPageClient() {
               onChange={(event) => updateStrategy('email', { subjectPrefix: event.target.value || undefined })}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('notifications.settings.types.title', 'Type channel defaults')}</CardTitle>
+          <CardDescription>
+            {t(
+              'notifications.settings.types.description',
+              'Per-type channel switches. Turning a channel OFF blocks it for everyone in the tenant (users cannot re-enable it). Turning it ON makes it default-on; users can still opt out per type. Required (non-opt-out) types always deliver on channels that are not blocked.',
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {types.length === 0 || channels.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t('notifications.settings.types.empty', 'No notification types are registered yet.')}
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50 text-left">
+                    <th className="px-4 py-3 font-medium">
+                      {t('notifications.settings.types.typeColumn', 'Notification type')}
+                    </th>
+                    {channels.map((channel) => (
+                      <th key={channel.id} className="px-4 py-3 font-medium">
+                        {t(channel.labelKey, channel.id)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {types.map((type) => (
+                    <tr key={type.id} className="border-b border-border last:border-0">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{t(type.labelKey, type.id)}</div>
+                        {type.descriptionKey ? (
+                          <div className="text-xs text-muted-foreground">{t(type.descriptionKey, '')}</div>
+                        ) : null}
+                      </td>
+                      {channels.map((channel) => {
+                        const cellKey = `${type.id}::${channel.id}`
+                        const registeredChannelIds = channels.map((item) => item.id)
+                        const channelEnabled = type.channels === null || type.channels.includes(channel.id)
+                        return (
+                          <td key={channel.id} className="px-4 py-3">
+                            {/* The saving spinner is absolutely positioned so it never joins the cell's
+                                layout flow — an in-flow sibling would widen the column mid-toggle and
+                                make the whole table jump for the duration of the save. */}
+                            <span className="relative inline-flex items-center">
+                              <Switch
+                                checked={channelEnabled}
+                                disabled={savingTypeCell !== null}
+                                aria-label={`${t(type.labelKey, type.id)} – ${t(channel.labelKey, channel.id)}`}
+                                onCheckedChange={(checked) =>
+                                  handleTypeChannelToggle(type, channel.id, checked, registeredChannelIds)
+                                }
+                              />
+                              {savingTypeCell === cellKey ? (
+                                <Spinner size="sm" className="absolute left-full ml-2" />
+                              ) : null}
+                            </span>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
 

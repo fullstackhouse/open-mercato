@@ -61,11 +61,15 @@ const buildEm = () => {
   em.transactional.mockImplementation(async (cb: (tx: typeof em) => Promise<unknown>) => cb(em))
   em.persist.mockImplementation(() => ({ flush: em.flush }))
   em.getKysely.mockReturnValue({
-    selectFrom: () => ({
-      select: () => ({
-        where: () => ({ executeTakeFirst: async () => undefined, execute: async () => [] }),
-      }),
-    }),
+    selectFrom: () => {
+      const chain: any = {
+        select: () => chain,
+        where: () => chain,
+        executeTakeFirst: async () => undefined,
+        execute: async () => [],
+      }
+      return chain
+    },
     updateTable: () => ({
       set: () => {
         const chain: any = {

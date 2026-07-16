@@ -151,6 +151,21 @@ export const notificationTypeItemSchema = z.object({
   silent: z.boolean(),
   // When true the type cannot be opted out of; a preferences UI should lock it on.
   nonOptOut: z.boolean(),
+  // Effective channel eligibility (operator override ?? code-declared `type.channels`).
+  // `null` = no restriction (every registered channel). A channel outside the set never
+  // delivers for this type and users cannot opt into it — preference UIs lock the cell off.
+  channels: z.array(z.string()).nullable(),
+  // The raw operator-stored override (`notification_types.channels`; `null` = inherit code).
+  // Admin editors base PATCH payloads on the EFFECTIVE set, but this shows whether an
+  // override exists at all.
+  storedChannels: z.array(z.string()).nullable(),
+})
+
+// PATCH /api/notifications/types — operator override of a type's channel eligibility.
+// `channels: null` clears the override (the code-declared set applies again).
+export const updateNotificationTypeChannelsSchema = z.object({
+  id: z.string().min(1),
+  channels: z.array(z.string().min(1)).nullable(),
 })
 
 // Per-user channel preferences
@@ -182,6 +197,7 @@ export const adminUpdatePreferencesSchema = updatePreferencesSchema.extend({
 })
 
 export type NotificationTypeItem = z.infer<typeof notificationTypeItemSchema>
+export type UpdateNotificationTypeChannelsInput = z.infer<typeof updateNotificationTypeChannelsSchema>
 export type NotificationPreferenceItem = z.infer<typeof notificationPreferenceItemSchema>
 export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>
 export type AdminUpdatePreferencesInput = z.infer<typeof adminUpdatePreferencesSchema>

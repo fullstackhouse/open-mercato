@@ -12,6 +12,10 @@ export type NotificationTypeItem = {
   // When true the type cannot be opted out of; the matrix locks its cells ON (the server drops
   // opt-out writes for these, so a toggleable switch would silently lie on reload).
   nonOptOut?: boolean
+  // Effective channel eligibility from /api/notifications/types (operator override, else the
+  // code-declared set; null/absent = every channel). A channel outside the set renders locked
+  // OFF and toggles are refused server-side too, so the lock is enforcement, not presentation.
+  channels?: string[] | null
 }
 export type PreferenceItem = { notificationTypeId: string; channel: string; enabled: boolean }
 
@@ -62,7 +66,12 @@ export function preferenceKey(typeId: string, channel: string): string {
   return `${typeId}::${channel}`
 }
 
-/** Build the default-on preference map for a catalogue + stored rows. */
+/** Whether the channel is outside the type's effective eligibility (cell locked off, tenant-wide). */
+export function isChannelDisabledForType(type: NotificationTypeItem, channel: string): boolean {
+  return Array.isArray(type.channels) && !type.channels.includes(channel)
+}
+
+/** Build the default-on preference map for a catalogue + stored rows; ineligible cells are forced off. */
 export function buildPreferenceMap(
   types: NotificationTypeItem[],
   stored: PreferenceItem[],
@@ -73,7 +82,7 @@ export function buildPreferenceMap(
   for (const type of types) {
     for (const channel of channels) {
       const key = preferenceKey(type.id, channel.key)
-      next[key] = storedMap.get(key) ?? true
+      next[key] = isChannelDisabledForType(type, channel.key) ? false : storedMap.get(key) ?? true
     }
   }
   return next
@@ -93,6 +102,7 @@ export function diffPreferenceItems(
   const items: PreferenceItem[] = []
   for (const type of types) {
     for (const channel of channels) {
+      if (isChannelDisabledForType(type, channel.key)) continue
       const key = preferenceKey(type.id, channel.key)
       const before = initial[key] ?? true
       const after = current[key] ?? true
@@ -153,24 +163,32 @@ export function NotificationPreferenceMatrix({
                 ) : null}
               </td>
               {channels.map((channel) => {
-                const locked = type.nonOptOut === true
+                // Operator hard-off wins over the nonOptOut forced-on lock — mirrors the gate,
+                // where the tenant-wide channel block runs before the nonOptOut bypass.
+                const channelDisabled = isChannelDisabledForType(type, channel.key)
+                const locked = !channelDisabled && type.nonOptOut === true
                 const cellLabel = `${t(type.labelKey, type.id)} – ${t(channel.labelKey, channel.labelFallback)}`
                 const requiredHint = t(
                   'notifications.preferences.requiredHint',
                   'This notification is required and cannot be turned off.',
                 )
+                const channelDisabledHint = t(
+                  'notifications.preferences.channelDisabledHint',
+                  'This channel is turned off for this notification by your administrator.',
+                )
+                const lockHint = channelDisabled ? channelDisabledHint : requiredHint
                 const switchEl = (
                   <Switch
-                    checked={locked ? true : prefs[preferenceKey(type.id, channel.key)] ?? true}
-                    disabled={disabled || locked}
+                    checked={channelDisabled ? false : locked ? true : prefs[preferenceKey(type.id, channel.key)] ?? true}
+                    disabled={disabled || locked || channelDisabled}
                     onCheckedChange={(checked) => onToggle(type.id, channel.key, checked)}
-                    aria-label={locked ? `${cellLabel} (${requiredHint})` : cellLabel}
+                    aria-label={locked || channelDisabled ? `${cellLabel} (${lockHint})` : cellLabel}
                   />
                 )
                 return (
                   <td key={channel.key} className="px-4 py-3">
-                    {locked ? (
-                      <SimpleTooltip content={requiredHint}>
+                    {locked || channelDisabled ? (
+                      <SimpleTooltip content={lockHint}>
                         <span className="inline-flex">{switchEl}</span>
                       </SimpleTooltip>
                     ) : (

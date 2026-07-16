@@ -229,4 +229,28 @@ describe('syncNotificationTypes (DB read-through mirror)', () => {
     expect(recorded.inserted).toHaveLength(0)
     expect(recorded.updated[0]?.set).toMatchObject({ category: 'security', silent: true })
   })
+
+  it('never writes the channels override column — operator edits survive a re-sync (regression)', async () => {
+    registerNotificationTypes(
+      [def('a.one', { labelKey: 'new.label', channels: ['in_app', 'email'] })],
+      { replace: true },
+    )
+    const { em, recorded } = createFakeEm([
+      { id: 'a.one', label_key: 'old.label', description_key: null },
+    ])
+    await syncNotificationTypes(em as never, { force: true })
+
+    expect(recorded.updated).toHaveLength(1)
+    expect(Object.keys(recorded.updated[0]!.set)).not.toContain('channels')
+    expect(recorded.inserted).toHaveLength(0)
+  })
+
+  it('insert also leaves the channels column unset (new rows inherit the code-declared set)', async () => {
+    registerNotificationTypes([def('a.new', { channels: ['in_app', 'email'] })], { replace: true })
+    const { em, recorded } = createFakeEm([])
+    await syncNotificationTypes(em as never, { force: true })
+
+    expect(recorded.inserted).toHaveLength(1)
+    expect(Object.keys(recorded.inserted[0]!)).not.toContain('channels')
+  })
 })
