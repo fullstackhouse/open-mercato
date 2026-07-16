@@ -111,11 +111,12 @@ export type NotificationTypeDefinition = {
    * recipient's preferences via `shouldDeliver`. Omit to make the type eligible for every
    * registered channel (pre-Phase-7 behavior).
    *
-   * Operators can override this set per install via the DB-editable `notification_types.channels`
-   * column (`PATCH /api/notifications/types` / the Notification Delivery settings page): a stored
-   * array replaces the code-declared one, `NULL` inherits it. A channel outside the effective set
-   * never delivers for the type — the check runs before both the `nonOptOut` bypass and user
-   * preferences, and the preference UIs render that cell locked off.
+   * Operators can override this set per tenant via the `notification_type_overrides` table
+   * (`PATCH /api/notifications/types` / the Notification Delivery settings page): a stored
+   * array replaces the code-declared one, an absent row (or `NULL`) inherits it. A channel
+   * outside the effective set never delivers for the type in that tenant — the check runs
+   * before both the `nonOptOut` bypass and user preferences, and the preference UIs render
+   * that cell locked off.
    */
   channels?: string[]
 }

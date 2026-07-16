@@ -21,7 +21,8 @@ import {
 } from './notificationRecipients'
 import { assertSafeNotificationHref, sanitizeNotificationActions } from './safeHref'
 import { createLogger } from '@open-mercato/shared/lib/logger'
-import { getNotificationType, getNotificationTypeOverrides, type NotificationTypeOverrides } from './notification-type-registry'
+import { getNotificationType } from './notification-type-registry'
+import { getNotificationTypeOverrides, type NotificationTypeOverrides } from './typeOverrides'
 import { getNotificationDeliveryStrategies } from './deliveryStrategies'
 import { resolveEffectiveChannels } from './shouldDeliver'
 import {
@@ -270,7 +271,7 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
     // notification. The HTTP layer rejects an empty `channels` outright (see validators.ts).
     const targetChannels = content.channels && content.channels.length > 0 ? content.channels : null
     const overrides = typeOverrides === undefined
-      ? (await getNotificationTypeOverrides(rootEm.fork(), [content.type])).get(content.type) ?? null
+      ? (await getNotificationTypeOverrides(rootEm.fork(), scopeCtx.tenantId, [content.type])).get(content.type) ?? null
       : typeOverrides
     return resolveEffectiveChannels({
       typeId: content.type,
@@ -299,7 +300,7 @@ export function createNotificationService(deps: NotificationServiceDeps): Notifi
     const preferences = createNotificationPreferenceService({ em: rootEm.fork() })
     // Stored overrides are per-type (not per-recipient) — read once for the whole broadcast.
     const typeOverrides =
-      (await getNotificationTypeOverrides(rootEm.fork(), [content.type])).get(content.type) ?? null
+      (await getNotificationTypeOverrides(rootEm.fork(), scopeCtx.tenantId, [content.type])).get(content.type) ?? null
     const resolved: Array<{ recipientUserId: string; channels: string[] | null }> = []
     for (const recipientUserId of recipientUserIds) {
       resolved.push({

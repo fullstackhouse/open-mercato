@@ -2,7 +2,9 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { apiCall, readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
+import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
+import { surfaceRecordConflict } from '@open-mercato/ui/backend/conflicts'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -11,19 +13,22 @@ import { Label } from '@open-mercato/ui/primitives/label'
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@open-mercato/ui/primitives/card'
+import { computeNextChannels } from './typeChannelSettings'
 
 type NotificationTypeCatalogueItem = {
   id: string
   labelKey: string
   descriptionKey?: string | null
-  // Effective "required" flag (operator override ?? code-declared).
+  // Effective "required" flag (tenant override ?? code-declared).
   nonOptOut?: boolean
-  // Effective channel eligibility (operator override ?? code-declared; null = every channel).
+  // Effective channel eligibility for this tenant (stored override ?? code-declared; null = every channel).
   channels: string[] | null
-  // Raw operator-stored override (null = inherit the code-declared set).
+  // Raw tenant-stored override (null = inherit the code-declared set).
   storedChannels: string[] | null
-  // Raw operator-stored nonOptOut override (null = inherit the code-declared flag).
+  // Raw tenant-stored nonOptOut override (null = inherit the code-declared flag).
   storedNonOptOut: boolean | null
+  // Optimistic-lock version of the tenant's override row (null = no override stored yet).
+  updatedAt: string | null
 }
 
 type TypesResponse = { items?: NotificationTypeCatalogueItem[] }
@@ -66,6 +71,7 @@ export function NotificationSettingsPageClient() {
   const { runMutation, retryLastMutation } = useGuardedMutation<{
     formId: string
     resourceKind: string
+    resourceId?: string
     retryLastMutation: () => Promise<boolean>
   }>({
     contextId: SETTINGS_CONTEXT_ID,
@@ -100,33 +106,39 @@ export function NotificationSettingsPageClient() {
     fetchCatalogue()
   }, [fetchCatalogue])
 
-  const handleTypeChannelToggle = async (
+  const patchType = async (
     type: NotificationTypeCatalogueItem,
-    channelId: string,
-    enabled: boolean,
-    registeredChannelIds: string[],
+    cellKey: string,
+    payload: { channels?: string[] | null; nonOptOut?: boolean | null },
   ) => {
-    const cellKey = `${type.id}::${channelId}`
     setSavingTypeCell(cellKey)
-    // Base the next eligibility set on the EFFECTIVE one (override ?? code ?? all registered),
-    // then add/remove the toggled channel. The stored array replaces the code-declared set.
-    const effective = type.channels ?? registeredChannelIds
-    const nextChannels = enabled
-      ? Array.from(new Set([...effective, channelId]))
-      : effective.filter((channel) => channel !== channelId)
     try {
       const response = await runMutation({
         operation: () =>
-          apiCall<PatchTypeResponse>('/api/notifications/types', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: type.id, channels: nextChannels }),
-          }),
-        context: { formId: SETTINGS_CONTEXT_ID, resourceKind: 'notifications.settings', retryLastMutation },
-        mutationPayload: { id: type.id, channels: nextChannels },
+          // The override row's updatedAt is the optimistic-lock version: a concurrent
+          // operator save flips it, and the full `channels` array replaces — so a stale
+          // blind write would silently revert their edit. The server 409s instead.
+          withScopedApiRequestHeaders(buildOptimisticLockHeader(type.updatedAt), () =>
+            apiCall<PatchTypeResponse>('/api/notifications/types', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: type.id, ...payload }),
+            }),
+          ),
+        context: {
+          formId: SETTINGS_CONTEXT_ID,
+          resourceKind: 'notifications.settings',
+          resourceId: type.id,
+          retryLastMutation,
+        },
+        mutationPayload: { id: type.id, ...payload },
       })
       if (!response.ok || !response.result?.ok) {
-        const message = response.result?.error || t('notifications.settings.types.saveError', 'Failed to save type channels')
+        if (surfaceRecordConflict({ status: response.status, body: response.result }, t, { onRefresh: fetchCatalogue })) {
+          await fetchCatalogue()
+          return
+        }
+        const message = response.result?.error || t('notifications.settings.types.saveError', 'Failed to save notification type settings')
         throw new Error(message)
       }
       const saved = response.result.item
@@ -139,58 +151,34 @@ export function NotificationSettingsPageClient() {
                 storedChannels: saved.storedChannels,
                 nonOptOut: saved.nonOptOut,
                 storedNonOptOut: saved.storedNonOptOut,
+                updatedAt: saved.updatedAt,
               }
             : item,
         ),
       )
-      flash(t('notifications.settings.types.saveSuccess', 'Type channels saved'), 'success')
+      flash(t('notifications.settings.types.saveSuccess', 'Notification type settings saved'), 'success')
     } catch (err) {
-      const message = err instanceof Error ? err.message : t('notifications.settings.types.saveError', 'Failed to save type channels')
+      const message = err instanceof Error ? err.message : t('notifications.settings.types.saveError', 'Failed to save notification type settings')
       flash(message, 'error')
     } finally {
       setSavingTypeCell(null)
     }
   }
 
+  const handleTypeChannelToggle = async (
+    type: NotificationTypeCatalogueItem,
+    channelId: string,
+    enabled: boolean,
+    registeredChannelIds: string[],
+  ) => {
+    const effective = type.channels ?? registeredChannelIds
+    await patchType(type, `${type.id}::${channelId}`, {
+      channels: computeNextChannels(effective, channelId, enabled),
+    })
+  }
+
   const handleTypeNonOptOutToggle = async (type: NotificationTypeCatalogueItem, required: boolean) => {
-    const cellKey = `${type.id}::nonOptOut`
-    setSavingTypeCell(cellKey)
-    try {
-      const response = await runMutation({
-        operation: () =>
-          apiCall<PatchTypeResponse>('/api/notifications/types', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: type.id, nonOptOut: required }),
-          }),
-        context: { formId: SETTINGS_CONTEXT_ID, resourceKind: 'notifications.settings', retryLastMutation },
-        mutationPayload: { id: type.id, nonOptOut: required },
-      })
-      if (!response.ok || !response.result?.ok) {
-        const message = response.result?.error || t('notifications.settings.types.saveError', 'Failed to save type channels')
-        throw new Error(message)
-      }
-      const saved = response.result.item
-      setTypes((prev) =>
-        prev.map((item) =>
-          item.id === type.id && saved
-            ? {
-                ...item,
-                channels: saved.channels,
-                storedChannels: saved.storedChannels,
-                nonOptOut: saved.nonOptOut,
-                storedNonOptOut: saved.storedNonOptOut,
-              }
-            : item,
-        ),
-      )
-      flash(t('notifications.settings.types.saveSuccess', 'Type channels saved'), 'success')
-    } catch (err) {
-      const message = err instanceof Error ? err.message : t('notifications.settings.types.saveError', 'Failed to save type channels')
-      flash(message, 'error')
-    } finally {
-      setSavingTypeCell(null)
-    }
+    await patchType(type, `${type.id}::nonOptOut`, { nonOptOut: required })
   }
 
   const fetchSettings = React.useCallback(async () => {
@@ -378,11 +366,11 @@ export function NotificationSettingsPageClient() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('notifications.settings.types.title', 'Type channel defaults')}</CardTitle>
+          <CardTitle>{t('notifications.settings.types.title', 'Delivery channels per type')}</CardTitle>
           <CardDescription>
             {t(
               'notifications.settings.types.description',
-              'Per-type channel switches. Turning a channel OFF blocks it for everyone in the tenant (users cannot re-enable it). Turning it ON makes it default-on; users can still opt out per type. Required (non-opt-out) types always deliver on channels that are not blocked.',
+              'Delivery channels per notification type. Turning a channel off disables it completely for that type in your tenant — it never delivers and users cannot enable it in their preferences. Turning it on lets users opt in or out per type; required (non-opt-out) types always deliver on enabled channels. Your setting overrides the module default.',
             )}
           </CardDescription>
         </CardHeader>

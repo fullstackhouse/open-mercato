@@ -26,6 +26,9 @@ jest.mock('../lib/shouldDeliver', () => ({
 
 jest.mock('../lib/notification-type-registry', () => ({
   getNotificationType: (...args: unknown[]) => getNotificationType(...args),
+}))
+
+jest.mock('../lib/typeOverrides', () => ({
   getNotificationTypeOverrides: async () => new Map(),
 }))
 

@@ -4,7 +4,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'communication_channels.message.received',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'communication_channels',
     titleKey: 'communication_channels.notifications.message_received.title',
@@ -34,7 +33,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
      */
     type: 'communication_channels.channel.requires_reauth',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'communication_channels',
     titleKey: 'communication_channels.notifications.channel_requires_reauth.title',

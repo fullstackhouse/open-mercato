@@ -69,4 +69,44 @@ describe('NotificationPreferenceMatrix (render)', () => {
     const first = screen.getAllByRole('switch')[0]
     expect(first).toHaveAttribute('aria-checked', 'false')
   })
+
+  it('locks ineligible channels OFF and disabled, with the admin hint (not the required hint)', () => {
+    const onToggle = jest.fn()
+    const eligibleChannels = PREFERENCE_CHANNELS.map((channel) => channel.key).filter(
+      (key) => key !== PREFERENCE_CHANNELS[0].key,
+    )
+    render(
+      <NotificationPreferenceMatrix
+        types={[{ id: 'a.one', labelKey: 'a.one.title', channels: eligibleChannels }]}
+        prefs={{ [preferenceKey('a.one', PREFERENCE_CHANNELS[0].key)]: true }}
+        onToggle={onToggle}
+      />,
+    )
+    const switches = screen.getAllByRole('switch')
+    const lockedOff = switches[0]
+    // Locked OFF even though the user has a stored opt-in for the cell.
+    expect(lockedOff).toBeDisabled()
+    expect(lockedOff).toHaveAttribute('aria-checked', 'false')
+    expect(lockedOff).toHaveAccessibleName(expect.stringContaining('administrator'))
+    fireEvent.click(lockedOff)
+    expect(onToggle).not.toHaveBeenCalled()
+    // Channels inside the eligible set stay toggleable.
+    expect(switches[1]).not.toBeDisabled()
+  })
+
+  it('the ineligible-channel lock (OFF) beats the nonOptOut lock (ON) in the same row', () => {
+    const eligibleChannels = PREFERENCE_CHANNELS.map((channel) => channel.key).slice(1)
+    render(
+      <NotificationPreferenceMatrix
+        types={[{ id: 'security.alert', labelKey: 'security.alert.title', nonOptOut: true, channels: eligibleChannels }]}
+        prefs={{}}
+        onToggle={jest.fn()}
+      />,
+    )
+    const switches = screen.getAllByRole('switch')
+    expect(switches[0]).toHaveAttribute('aria-checked', 'false')
+    expect(switches[0]).toBeDisabled()
+    expect(switches[1]).toHaveAttribute('aria-checked', 'true')
+    expect(switches[1]).toBeDisabled()
+  })
 })

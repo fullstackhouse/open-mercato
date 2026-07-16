@@ -37,44 +37,6 @@ export function getNotificationTypes(): NotificationTypeDefinition[] {
   return Array.from(registry.values())
 }
 
-/**
- * Read the operator-stored per-type overrides (`notification_types.channels` + `non_opt_out`)
- * for the given type ids (system-wide rows). Returns a map keyed by type id; types without a
- * row or without any stored override are absent (⇒ the code declarations apply). Used by the
- * create-time gate and the deliver-subscriber recompute so `shouldDeliver` applies the same
- * effective eligibility + opt-out governance the types API reports.
- */
-export type NotificationTypeOverrides = {
-  /** Stored eligibility override; `null` ⇒ inherit the code-declared `type.channels`. */
-  channels: string[] | null
-  /** Stored `nonOptOut` override; `null` ⇒ inherit the code-declared flag. */
-  nonOptOut: boolean | null
-}
-
-export async function getNotificationTypeOverrides(
-  em: EntityManager,
-  typeIds: string[],
-): Promise<Map<string, NotificationTypeOverrides>> {
-  const result = new Map<string, NotificationTypeOverrides>()
-  const uniqueIds = Array.from(new Set(typeIds)).filter((id) => id.length > 0)
-  if (!uniqueIds.length) return result
-  const db = em.getKysely<any>() as Kysely<any>
-  const rows = (await db
-    .selectFrom('notification_types')
-    .select(['id', 'channels', 'non_opt_out'])
-    .where('tenant_id', 'is', null)
-    .where('id', 'in', uniqueIds)
-    .execute()) as Array<{ id: string; channels: string[] | null; non_opt_out: boolean | null }>
-  for (const row of rows) {
-    const channels = Array.isArray(row.channels) ? row.channels : null
-    const nonOptOut = typeof row.non_opt_out === 'boolean' ? row.non_opt_out : null
-    if (channels !== null || nonOptOut !== null) {
-      result.set(row.id, { channels, nonOptOut })
-    }
-  }
-  return result
-}
-
 export type SyncNotificationTypesResult = {
   created: number
   updated: number
@@ -86,7 +48,7 @@ export type SyncNotificationTypesResult = {
  * Reconcile the in-memory catalogue into the `notification_types` table.
  * Code-registered types are system-wide, so rows are written with
  * `tenant_id IS NULL`. Idempotent: updates the mirrored columns
- * (`label_key`/`description_key`/`category`/`silent`) only on
+ * (`label_key`/`description_key`/`category`/`silent`/`non_opt_out`) only on
  * drift, and prunes system-wide rows no longer in the catalogue. Guarded by a
  * once-per-process flag on the lazy path; pass `force` to bypass it (used by the
  * explicit `notifications.type_registry.sync` subscriber).
@@ -110,7 +72,7 @@ export async function syncNotificationTypes(
   // the route's subsequent em.find reflects exactly what this function just wrote.
   const existing = (await db
     .selectFrom('notification_types')
-    .select(['id', 'label_key', 'description_key', 'category', 'silent'])
+    .select(['id', 'label_key', 'description_key', 'category', 'silent', 'non_opt_out'])
     .where('tenant_id', 'is', null)
     .execute()) as Array<{
     id: string
@@ -118,6 +80,7 @@ export async function syncNotificationTypes(
     description_key: string | null
     category: string | null
     silent: boolean
+    non_opt_out: boolean
   }>
   const byId = new Map(existing.map((row) => [row.id, row]))
 
@@ -125,6 +88,7 @@ export async function syncNotificationTypes(
   const descKeyFor = (def: NotificationTypeDefinition) => def.descriptionKey ?? null
   const categoryFor = (def: NotificationTypeDefinition) => def.category ?? null
   const silentFor = (def: NotificationTypeDefinition) => def.silent === true
+  const nonOptOutFor = (def: NotificationTypeDefinition) => def.nonOptOut === true
 
   // Internal/admin-only types (`hiddenFromSettings`) are never exposed to the client catalogue: they
   // are excluded from create/update, and — because they drop out of `validIds` below — any stale row
@@ -140,7 +104,8 @@ export async function syncNotificationTypes(
       row.label_key !== labelKeyFor(def) ||
       (row.description_key ?? null) !== descKeyFor(def) ||
       (row.category ?? null) !== categoryFor(def) ||
-      row.silent !== silentFor(def)
+      row.silent !== silentFor(def) ||
+      row.non_opt_out !== nonOptOutFor(def)
     )
   })
 
@@ -159,6 +124,7 @@ export async function syncNotificationTypes(
           description_key: descKeyFor(def),
           category: categoryFor(def),
           silent: silentFor(def),
+          non_opt_out: nonOptOutFor(def),
           created_at: sql`now()`,
           updated_at: sql`now()`,
         })),
@@ -177,6 +143,7 @@ export async function syncNotificationTypes(
         description_key: descKeyFor(def),
         category: categoryFor(def),
         silent: silentFor(def),
+        non_opt_out: nonOptOutFor(def),
         updated_at: sql`now()`,
       })
       .where('id', '=', def.type)

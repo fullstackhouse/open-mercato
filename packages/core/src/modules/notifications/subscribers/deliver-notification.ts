@@ -4,7 +4,8 @@ import { NOTIFICATION_EVENTS } from '../lib/events'
 import { DEFAULT_NOTIFICATION_DELIVERY_CONFIG, resolveNotificationDeliveryConfig, resolveNotificationPanelUrl } from '../lib/deliveryConfig'
 import { getNotificationDeliveryStrategies, type NotificationDeliveryContext } from '../lib/deliveryStrategies'
 import { resolveEffectiveChannels } from '../lib/shouldDeliver'
-import { getNotificationType, getNotificationTypeOverrides } from '../lib/notification-type-registry'
+import { getNotificationType } from '../lib/notification-type-registry'
+import { getNotificationTypeOverrides } from '../lib/typeOverrides'
 import { resolveNotificationPreferenceService } from '../lib/notificationPreferenceService'
 import { resolveNotificationCopy } from '../lib/notificationCopy'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
@@ -153,6 +154,9 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
     // every channel with no gate — so recompute the effective set from current preferences here,
     // keeping the single `shouldDeliver` gate instead of re-checking opt-out inside each strategy.
     const persistedChannels = notification.channels
+    const typeOverrides = persistedChannels == null
+      ? (await getNotificationTypeOverrides(em as EntityManager, notification.tenantId, [notification.type])).get(notification.type)
+      : undefined
     const targetChannels = persistedChannels ?? await resolveEffectiveChannels({
       typeId: notification.type,
       type: getNotificationType(notification.type),
@@ -160,13 +164,8 @@ export default async function handle(payload: NotificationCreatedPayload, ctx: R
       targetChannels: null,
       registeredChannels: strategies.map((strategy) => strategy.id),
       preferences: resolveNotificationPreferenceService({ resolve: ctx.resolve }),
-      ...await (async () => {
-        const overrides = (await getNotificationTypeOverrides(em as EntityManager, [notification.type])).get(notification.type)
-        return {
-          channelsOverride: overrides?.channels ?? null,
-          nonOptOutOverride: overrides?.nonOptOut ?? null,
-        }
-      })(),
+      channelsOverride: typeOverrides?.channels ?? null,
+      nonOptOutOverride: typeOverrides?.nonOptOut ?? null,
     })
     // Persist the recomputed set back onto a null-channels row so the in-app
     // VISIBILITY path (bell/inbox/unread — see notificationVisibility.ts) reads

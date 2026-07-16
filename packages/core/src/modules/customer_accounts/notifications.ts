@@ -4,7 +4,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.user.signup',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.user.signup.title',
@@ -26,7 +25,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.user.locked',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.user.locked.title',
@@ -48,7 +46,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.domain_mapping.verified',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.verified.title',
@@ -70,7 +67,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.domain_mapping.activated',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.activated.title',
@@ -92,7 +88,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.domain_mapping.dns_failed',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.dns_failed.title',
@@ -114,7 +109,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'customer_accounts.domain_mapping.tls_failed',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'customer_accounts',
     titleKey: 'customer_accounts.notifications.domain_mapping.tls_failed.title',

@@ -4,7 +4,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'staff.leave_request.pending',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'staff',
     titleKey: 'staff.notifications.leaveRequest.pending.title',
@@ -34,7 +33,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'staff.leave_request.approved',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'staff',
     titleKey: 'staff.notifications.leaveRequest.approved.title',
@@ -56,7 +54,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'staff.leave_request.rejected',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'staff',
     titleKey: 'staff.notifications.leaveRequest.rejected.title',

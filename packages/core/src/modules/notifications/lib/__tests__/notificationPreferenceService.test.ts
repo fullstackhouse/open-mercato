@@ -1,8 +1,12 @@
-import { getNotificationType, getNotificationTypeOverrides } from '../notification-type-registry'
+import { getNotificationType } from '../notification-type-registry'
+import { getNotificationTypeOverrides } from '../typeOverrides'
 import { createNotificationPreferenceService } from '../notificationPreferenceService'
 
 jest.mock('../notification-type-registry', () => ({
   getNotificationType: jest.fn(),
+}))
+
+jest.mock('../typeOverrides', () => ({
   getNotificationTypeOverrides: jest.fn(async () => new Map()),
 }))
 
@@ -97,6 +101,15 @@ describe('notificationPreferenceService.setPreferences', () => {
     expect(fork.create).toHaveBeenCalledTimes(1)
     const created = fork.create.mock.calls[0][1] as Record<string, unknown>
     expect(created.channel).toBe('email')
+  })
+
+  it('reads the stored overrides scoped to the caller tenant', async () => {
+    const { em } = makeEm()
+    const service = createNotificationPreferenceService({ em } as never)
+    await service.setPreferences(scope, [{ typeId: 'orders.shipped', channel: 'push', enabled: true }])
+    expect(getStoredOverridesMock).toHaveBeenCalledTimes(1)
+    expect(getStoredOverridesMock.mock.calls[0]![1]).toBe(TENANT)
+    expect(getStoredOverridesMock.mock.calls[0]![2]).toEqual(['orders.shipped'])
   })
 
   it('drops writes for a channel outside the code-declared eligibility (no override)', async () => {

@@ -4,7 +4,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'catalog.product.low_stock',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'catalog',
     titleKey: 'catalog.notifications.product.lowStock.title',

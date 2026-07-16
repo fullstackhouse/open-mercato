@@ -152,16 +152,21 @@ export const notificationTypeItemSchema = z.object({
   // Effective "cannot be opted out of" flag (operator override ?? code-declared); a preferences
   // UI should lock the type on when true.
   nonOptOut: z.boolean(),
-  // Effective channel eligibility (operator override ?? code-declared `type.channels`).
-  // `null` = no restriction (every registered channel). A channel outside the set never
-  // delivers for this type and users cannot opt into it — preference UIs lock the cell off.
+  // Effective channel eligibility for the caller's tenant (stored override ?? code-declared
+  // `type.channels`). `null` = no restriction (every registered channel). A channel outside
+  // the set never delivers for this type in the tenant and users cannot opt into it —
+  // preference UIs lock the cell off.
   channels: z.array(z.string()).nullable(),
-  // The raw operator-stored override (`notification_types.channels`; `null` = inherit code).
-  // Admin editors base PATCH payloads on the EFFECTIVE set, but this shows whether an
+  // The raw tenant-stored override (`notification_type_overrides.channels`; `null` = inherit
+  // code). Admin editors base PATCH payloads on the EFFECTIVE set, but this shows whether an
   // override exists at all.
   storedChannels: z.array(z.string()).nullable(),
-  // The raw operator-stored `nonOptOut` override (`null` = inherit the code-declared flag).
+  // The raw tenant-stored `nonOptOut` override (`null` = inherit the code-declared flag).
   storedNonOptOut: z.boolean().nullable(),
+  // Optimistic-lock version of the tenant's override row (ISO timestamp; `null` when the
+  // tenant stores no override yet). PATCH callers echo it back via the standard
+  // `x-om-ext-optimistic-lock-expected-updated-at` header.
+  updatedAt: z.string().nullable(),
 })
 
 // PATCH /api/notifications/types — operator override of a type's channel eligibility and/or

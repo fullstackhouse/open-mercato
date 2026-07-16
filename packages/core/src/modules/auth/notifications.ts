@@ -4,7 +4,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'auth.password_reset.requested',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'auth',
     titleKey: 'auth.notifications.passwordReset.requested.title',
@@ -26,7 +25,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'auth.password_reset.completed',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'auth',
     titleKey: 'auth.notifications.passwordReset.completed.title',
@@ -39,7 +37,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'auth.account.locked',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'auth',
     titleKey: 'auth.notifications.account.locked.title',
@@ -62,7 +59,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'auth.login.new_device',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'auth',
     titleKey: 'auth.notifications.login.newDevice.title',
@@ -86,7 +82,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'auth.role.assigned',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'auth',
     titleKey: 'auth.notifications.role.assigned.title',
@@ -108,7 +103,6 @@ export const notificationTypes: NotificationTypeDefinition[] = [
   {
     type: 'auth.role.revoked',
     // Ships without push — operators re-enable it per type from the Notification Delivery settings.
-
     channels: ['in_app', 'email'],
     module: 'auth',
     titleKey: 'auth.notifications.role.revoked.title',

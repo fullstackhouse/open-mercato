@@ -146,25 +146,54 @@ export class NotificationType {
   @Property({ name: 'silent', type: 'boolean', default: false })
   silent: boolean = false
 
-  /**
-   * Operator override of the code-declared `nonOptOut` flag — same contract as `channels`:
-   * `true` forces the type on (users cannot opt out), `false` makes an otherwise-required type
-   * user-editable, `NULL` inherits the code declaration. Operator-owned: never mirrored by
-   * `syncNotificationTypes`, so admin edits survive catalogue re-syncs.
-   */
-  @Property({ name: 'non_opt_out', type: 'boolean', nullable: true })
-  nonOptOut?: boolean | null
+  @Property({ name: 'non_opt_out', type: 'boolean', default: false })
+  nonOptOut: boolean = false
 
-  /**
-   * Operator override of the code-declared channel eligibility
-   * (`NotificationTypeDefinition.channels`). A stored array REPLACES the code set; `null`
-   * inherits it. A channel outside the effective set never delivers for the type (checked
-   * before both the `nonOptOut` bypass and user preferences) and users cannot opt into it —
-   * the preference UIs render the cell locked off. This column is intentionally NOT mirrored
-   * by `syncNotificationTypes` so operator edits survive catalogue re-syncs.
-   */
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+/**
+ * Tenant-scoped operator override of a notification type's delivery contract.
+ * Lazy-seeded like `NotificationPreference`: an absent row means the code
+ * declarations apply unchanged. `channels` REPLACES the code-declared
+ * `NotificationTypeDefinition.channels` when set (`null` inherits it) — a
+ * channel outside the effective set never delivers for the type in this tenant
+ * (checked before both the `nonOptOut` bypass and user preferences) and users
+ * cannot opt into it; the preference UIs render the cell locked off.
+ * `nonOptOut` overrides the code-declared flag the same way: `true` forces the
+ * type on for the tenant's users, `false` makes a code-required type
+ * user-editable, `null` inherits. The `notification_type_id` is a soft string
+ * reference to a `notification_types.id` (no cross-module ORM relationship);
+ * `syncNotificationTypes` never touches this table, so operator edits survive
+ * catalogue re-syncs.
+ */
+@Entity({ tableName: 'notification_type_overrides' })
+@Index({
+  name: 'notification_type_overrides_unique',
+  expression:
+    'create unique index "notification_type_overrides_unique" on "notification_type_overrides" ("tenant_id", "notification_type_id");',
+})
+export class NotificationTypeOverride {
+  [OptionalProps]?: 'createdAt' | 'updatedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'notification_type_id', type: 'text' })
+  notificationTypeId!: string
+
   @Property({ name: 'channels', type: 'json', nullable: true })
   channels?: string[] | null
+
+  @Property({ name: 'non_opt_out', type: 'boolean', nullable: true })
+  nonOptOut?: boolean | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
