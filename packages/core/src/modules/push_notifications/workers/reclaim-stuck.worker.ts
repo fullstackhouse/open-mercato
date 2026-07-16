@@ -1,8 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { JobContext, QueuedJob, WorkerMeta } from '@open-mercato/queue'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { PUSH_STUCK_RECLAIM_QUEUE } from '../lib/queue'
 import { reclaimStuckPushDeliveries } from '../lib/push-reaper'
 import { checkPushReceipts } from '../lib/push-receipt-reaper'
+
+const logger = createLogger('push_notifications')
 
 /**
  * Scheduler tick payload. Fired by the `@open-mercato/scheduler` interval entry registered in
@@ -31,7 +34,7 @@ export default async function handle(
   const raw = (job?.payload ?? {}) as ReclaimStuckTickPayload
   const tenantId = raw.scope?.tenantId ?? raw.tenantId ?? null
   if (!tenantId) {
-    console.warn('[push_notifications:reclaim-stuck] skipping tick — payload has no tenantId', { payload: raw })
+    logger.warn('reclaim-stuck skipping tick — payload has no tenantId', { payload: raw })
     return
   }
 
@@ -39,12 +42,14 @@ export default async function handle(
   try {
     const result = await reclaimStuckPushDeliveries(em, { tenantId })
     if (result.reEnqueued > 0 || result.expired > 0) {
-      console.log(
-        `[push_notifications:reclaim-stuck] tenant ${tenantId}: re-enqueued ${result.reEnqueued}, expired ${result.expired} stuck delivery row(s)`,
-      )
+      logger.info('reclaim-stuck swept stuck delivery rows', {
+        tenantId,
+        reEnqueued: result.reEnqueued,
+        expired: result.expired,
+      })
     }
   } catch (error) {
-    console.error('[push_notifications:reclaim-stuck] sweep failed', {
+    logger.error('reclaim-stuck sweep failed', {
       tenantId,
       error: error instanceof Error ? error.message : String(error),
     })
@@ -58,12 +63,14 @@ export default async function handle(
     const receiptEm = (ctx.resolve('em') as EntityManager).fork()
     const receipts = await checkPushReceipts(receiptEm, { tenantId }, ctx.resolve)
     if (receipts.unregistered > 0) {
-      console.log(
-        `[push_notifications:reclaim-stuck] tenant ${tenantId}: pruned ${receipts.unregistered} device(s) from ${receipts.checked} async push receipt(s)`,
-      )
+      logger.info('reclaim-stuck pruned devices from async push receipts', {
+        tenantId,
+        unregistered: receipts.unregistered,
+        checked: receipts.checked,
+      })
     }
   } catch (error) {
-    console.error('[push_notifications:reclaim-stuck] receipt sweep failed', {
+    logger.error('reclaim-stuck receipt sweep failed', {
       tenantId,
       error: error instanceof Error ? error.message : String(error),
     })

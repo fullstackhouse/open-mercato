@@ -9,11 +9,14 @@ import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { UserDevice } from '../../../../data/entities'
 import { updateDeviceSchema } from '../../../../data/validators'
 import { isOrganizationReadAccessAllowed } from '@open-mercato/core/modules/directory/utils/organizationScopeGuard'
 import { resolveDeviceActorUserId } from '../../../auth'
 import { executeUpdate, executeDeactivate, type DeviceMutationContext } from '../../../deviceOps'
+
+const logger = createLogger('devices')
 
 // Admin: read/update/deactivate ANY device in the tenant. Gated by devices.admin (no owner check).
 export const metadata = {
@@ -78,7 +81,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[devices.admin.GET]', err)
+    logger.error('devices.admin.GET failed', { err })
     return NextResponse.json({ error: translate('devices.errors.not_found', 'Device not found') }, { status: 500 })
   }
 }
@@ -126,7 +129,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[devices.admin.PUT]', err)
+    logger.error('devices.admin.PUT failed', { err })
     return NextResponse.json({ error: translate('devices.errors.update_failed', 'Failed to update device') }, { status: 500 })
   }
 }
@@ -167,7 +170,7 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[devices.admin.DELETE]', err)
+    logger.error('devices.admin.DELETE failed', { err })
     return NextResponse.json({ error: translate('devices.errors.delete_failed', 'Failed to delete device') }, { status: 500 })
   }
 }

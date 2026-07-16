@@ -9,9 +9,12 @@ import type { CommunicationChannel } from '@open-mercato/core/modules/communicat
 import type { PushOptions } from '@open-mercato/core/modules/communication_channels/lib/push-envelope'
 import type { UserDevice } from '@open-mercato/core/modules/devices/data/entities'
 import { calculateBackoffDelayMs } from '@open-mercato/shared/lib/delivery/retry'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { PushNotificationDelivery } from '../data/entities'
 import { emitPushNotificationsEvent } from '../events'
 import { enqueuePushDelivery, type PushDeliveryJob } from './queue'
+
+const logger = createLogger('push_notifications')
 
 export const MAX_ATTEMPTS = 3
 
@@ -146,7 +149,7 @@ export async function softDeleteUnregisteredDevice(
       } as never,
     })
   } catch (error) {
-    console.error('[push_notifications] Failed to deactivate unregistered device', {
+    logger.error('Failed to deactivate unregistered device', {
       userDeviceId: input.id,
       error: error instanceof Error ? error.message : String(error),
     })
@@ -254,7 +257,7 @@ export async function processPushDeliveryJob(
     )
     credentials = refreshed.credentials
   } catch (error) {
-    console.error('[push_notifications] Credential refresh failed; sending with current credentials', {
+    logger.error('Credential refresh failed; sending with current credentials', {
       deliveryId: delivery.id,
       provider: delivery.provider,
       error: error instanceof Error ? error.message : String(error),

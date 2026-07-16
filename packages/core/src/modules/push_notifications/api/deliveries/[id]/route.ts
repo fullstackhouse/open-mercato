@@ -8,8 +8,11 @@ import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/d
 import { isOrganizationReadAccessAllowed } from '@open-mercato/core/modules/directory/utils/organizationScopeGuard'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { PushNotificationDelivery } from '../../../data/entities'
+
+const logger = createLogger('push_notifications')
 import { deliveryDetailItemSchema } from '../../../data/validators'
 
 // Read-only detail for a single push delivery row (admin observability).
@@ -91,7 +94,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[push_notifications.deliveries.GET]', err)
+    logger.error('push_notifications.deliveries.GET failed', { err })
     return NextResponse.json({ error: translate('push_notifications.errors.server_error', 'Something went wrong') }, { status: 500 })
   }
 }

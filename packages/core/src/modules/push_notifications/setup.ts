@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { PUSH_STUCK_RECLAIM_QUEUE } from './lib/queue'
+
+const logger = createLogger('push_notifications')
 
 type SchedulerServiceLike = {
   register: (registration: {
@@ -81,10 +84,7 @@ export const setup: ModuleSetupConfig = {
         isEnabled: true,
       })
     } catch (error) {
-      console.warn(
-        '[push_notifications] Failed to register reclaim-stuck schedule:',
-        error instanceof Error ? error.message : error,
-      )
+      logger.warn('Failed to register reclaim-stuck schedule', { error })
     }
   },
 }

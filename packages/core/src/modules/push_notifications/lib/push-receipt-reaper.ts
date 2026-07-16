@@ -6,8 +6,11 @@ import {
   supportsReceiptChecking,
 } from '@open-mercato/core/modules/communication_channels/lib/push-adapter'
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { PushNotificationDelivery } from '../data/entities'
 import { softDeleteUnregisteredDevice } from './push-delivery'
+
+const logger = createLogger('push_notifications')
 
 type Resolve = <T = unknown>(name: string) => T
 
@@ -152,7 +155,7 @@ export async function checkPushReceipts(
     try {
       outcomes = await adapter.checkReceipts([...byTicket.keys()], credentials)
     } catch (error) {
-      console.error('[push_notifications] Push receipt check failed', {
+      logger.error('Push receipt check failed', {
         tenantId: scope.tenantId,
         provider,
         error: error instanceof Error ? error.message : String(error),

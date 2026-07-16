@@ -9,10 +9,13 @@ import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { UserDevice } from '../../data/entities'
 import { updateDeviceSchema } from '../../data/validators'
 import { resolveDeviceActorUserId } from '../auth'
 import { executeUpdate, executeDeactivate, type DeviceMutationContext } from '../deviceOps'
+
+const logger = createLogger('devices')
 
 // Self-serve: the caller may only mutate their OWN device. Cross-user device administration lives in
 // api/admin/devices/[id] (gated by devices.admin).
@@ -82,7 +85,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[devices.PUT]', err)
+    logger.error('devices.PUT failed', { err })
     return NextResponse.json({ error: translate('devices.errors.update_failed', 'Failed to update device') }, { status: 500 })
   }
 }
@@ -137,7 +140,7 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[devices.DELETE]', err)
+    logger.error('devices.DELETE failed', { err })
     return NextResponse.json({ error: translate('devices.errors.delete_failed', 'Failed to delete device') }, { status: 500 })
   }
 }

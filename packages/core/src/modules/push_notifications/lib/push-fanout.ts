@@ -7,11 +7,14 @@ import type { UserDevice } from '@open-mercato/core/modules/devices/data/entitie
 import type { CommunicationChannel } from '@open-mercato/core/modules/communication_channels/data/entities'
 import { defaultLocale } from '@open-mercato/shared/lib/i18n/config'
 import { resolveSupportedLocale } from '@open-mercato/shared/lib/i18n/locale'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import {
   resolveNotificationCopy,
   type NotificationCopySource,
 } from '@open-mercato/core/modules/notifications/lib/notificationCopy'
 import { enqueuePushDelivery } from './queue'
+
+const logger = createLogger('push_notifications')
 
 export const PUSH_CHANNEL = 'push'
 
@@ -176,7 +179,7 @@ export async function fanOutPushDeliveries(args: FanOutPushDeliveriesArgs): Prom
   // be an invisible no-op. Surface a count so a provider-config gap is diagnosable.
   const skippedNoChannel = devices.length - rows.length
   if (skippedNoChannel > 0) {
-    console.warn('[push_notifications] Skipped devices with no matching push channel', {
+    logger.warn('Skipped devices with no matching push channel', {
       tenantId,
       userId,
       notificationId,

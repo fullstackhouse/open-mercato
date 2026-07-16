@@ -5,6 +5,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveOrganizationScopeForRequest } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import {
   bridgeLegacyGuard,
   runMutationGuards,
@@ -18,6 +19,8 @@ import {
   CUSTOM_SEND_NO_DEVICES_WARNING,
 } from '../../data/validators'
 import type { PushNotificationService } from '../../lib/send-custom-push'
+
+const logger = createLogger('push_notifications')
 
 const RESOURCE_KIND = 'push_notifications.push_notification_delivery'
 
@@ -134,7 +137,7 @@ export async function POST(req: Request) {
         { status: 400 },
       )
     }
-    console.error('[push_notifications.custom-send.POST]', err)
+    logger.error('push_notifications.custom-send.POST failed', { err })
     return NextResponse.json(
       { error: translate('push_notifications.errors.send_failed', 'Failed to send push notification') },
       { status: 500 },

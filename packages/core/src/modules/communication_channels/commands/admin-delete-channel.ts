@@ -3,11 +3,14 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandHandler } from '@open-mercato/shared/lib/commands'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import { extractUndoPayload as extractSharedUndoPayload } from '@open-mercato/shared/lib/commands/undo'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { CommunicationChannel } from '../data/entities'
 import { channelOrgScopeWhere } from '../lib/access-control'
 import { pushUnregister } from './push-unregister'
 import { emitCommunicationChannelsEvent } from '../events'
+
+const logger = createLogger('communication_channels')
 
 const adminDeleteChannelSchema = z.object({
   channelId: z.string().uuid(),
@@ -111,11 +114,7 @@ const adminDeleteChannelCommand: CommandHandler<
           input: { channelId: channel.id },
         })
       } catch (err) {
-        console.warn(
-          `[admin-delete-channel] push unregister failed for ${channel.id}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        )
+        logger.warn('admin-delete-channel push unregister failed', { channelId: channel.id, err })
       }
     }
 

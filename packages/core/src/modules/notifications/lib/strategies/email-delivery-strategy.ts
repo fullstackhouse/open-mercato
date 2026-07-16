@@ -1,13 +1,16 @@
 import { sendEmail } from '@open-mercato/shared/lib/email/send'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import NotificationEmail from '../../emails/NotificationEmail'
 import type { NotificationDeliveryContext, NotificationDeliveryStrategy } from '../deliveryStrategies'
 
 export const EMAIL_CHANNEL = 'email'
 
+const logger = createLogger('notifications')
+
 const DEBUG = process.env.NOTIFICATIONS_DEBUG === 'true'
 
-function debug(...args: unknown[]): void {
-  if (DEBUG) console.log('[notifications]', ...args)
+function debug(msg: string, fields?: Record<string, unknown>): void {
+  if (DEBUG) logger.debug(msg, fields)
 }
 
 /**
@@ -54,7 +57,7 @@ export const emailDeliveryStrategy: NotificationDeliveryStrategy = {
         }),
       })
     } catch (error) {
-      console.error('[notifications] email delivery failed', error)
+      logger.error('email delivery failed', { error })
     }
   },
 }

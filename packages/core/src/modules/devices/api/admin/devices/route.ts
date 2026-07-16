@@ -8,6 +8,7 @@ import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { E } from '#generated/entities.ids.generated'
 import { UserDevice } from '../../../data/entities'
 import {
@@ -19,6 +20,8 @@ import { resolveDeviceActorUserId } from '../../auth'
 import { createDevicesCrudOpenApi, createPagedListResponseSchema } from '../../openapi'
 import { deviceListSchema, deviceListFields, deviceListSortFieldMap, deviceListItemSchema } from '../../deviceList'
 import { executeRegister, type DeviceMutationContext } from '../../deviceOps'
+
+const logger = createLogger('devices')
 
 // Admin device administration: cross-user listing + register-on-behalf-of-user. Gated by devices.admin.
 // Self-serve registration/listing stays on /api/devices (scoped to the acting user).
@@ -105,7 +108,7 @@ export async function POST(req: Request) {
     if (isCrudHttpError(err)) {
       return NextResponse.json(err.body, { status: err.status })
     }
-    console.error('[devices.admin.POST]', err)
+    logger.error('devices.admin.POST failed', { err })
     return NextResponse.json(
       { error: translate('devices.errors.register_failed', 'Failed to register device') },
       { status: 500 },

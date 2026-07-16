@@ -1,5 +1,8 @@
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
+import { createLogger } from '@open-mercato/shared/lib/logger'
 import { TYPE_REGISTRY_SYNC_EVENT } from './events'
+
+const logger = createLogger('notifications')
 
 export const setup: ModuleSetupConfig = {
   defaultRoleFeatures: {
@@ -22,7 +25,7 @@ export const setup: ModuleSetupConfig = {
         { tenantId, organizationId, persistent: true },
       )
     } catch (err) {
-      console.warn('[notifications] type_registry.sync emit skipped during seedDefaults:', err)
+      logger.warn('type_registry.sync emit skipped during seedDefaults', { err })
     }
   },
 }

@@ -1,5 +1,8 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createModuleQueue, type Queue } from '@open-mercato/queue'
+import { createLogger } from '@open-mercato/shared/lib/logger'
+
+const logger = createLogger('push_notifications')
 
 export interface PushDeliveryJob {
   deliveryId: string
@@ -56,7 +59,7 @@ async function ensureLocalPushQueueWorkerStarted(): Promise<void> {
     })
   })().catch((error) => {
     delete globalStore[LOCAL_WORKER_PROMISE_KEY]
-    console.error('[push_notifications] Failed to start local delivery worker:', error)
+    logger.error('Failed to start local delivery worker', { error })
     throw error
   })
 
