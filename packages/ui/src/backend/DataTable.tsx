@@ -25,7 +25,8 @@ import { FilteredEmptyResults } from './filters/FilteredEmptyResults'
 import { SearchEmptyResults } from './filters/SearchEmptyResults'
 import { useCustomFieldFilterDefs } from './utils/customFieldFilters'
 import { fetchCustomFieldDefinitionsPayload, type CustomFieldsetDto } from './utils/customFieldDefs'
-import { RowActions, type RowActionItem } from './RowActions'
+import { RowActions, RowActionsReadOnlyContext, type RowActionItem } from './RowActions'
+import { useUiReadOnlyPolicy } from './ui-read-only/context'
 import { subscribeOrganizationScopeChanged, type OrganizationScopeChangedDetail } from '@open-mercato/shared/lib/frontend/organizationEvents'
 import { InjectionSpot } from './injection/InjectionSpot'
 import { useAppEvent } from './injection/useAppEvent'
@@ -2371,6 +2372,16 @@ export function DataTable<T>({
     }
     return []
   }, [entityId, entityIds])
+
+  // RBAC-driven UI read-only: when the table's entity is whole-entity read-only,
+  // suppress mutating row actions (via context), mutating/destructive bulk
+  // actions, and the header create/"New" slot. Non-mutating actions (view,
+  // export) stay.
+  const uiReadOnlyPolicy = useUiReadOnlyPolicy()
+  const entityUiReadOnly = React.useMemo(
+    () => resolvedEntityIds.some((eid) => uiReadOnlyPolicy.isEntityReadOnly(eid)),
+    [resolvedEntityIds, uiReadOnlyPolicy],
+  )
   const entityKey = React.useMemo(() => (resolvedEntityIds.length ? resolvedEntityIds.join('|') : null), [resolvedEntityIds])
   const customFieldFilterExtrasSignature = React.useMemo(
     () => JSON.stringify(customFieldFilterKeyExtras ?? []),
@@ -2736,7 +2747,7 @@ export function DataTable<T>({
             {t('ui.dataTable.bulkAction.selectedCount', '{count} selected', { count: selectedRows.length })}
           </span>
         ) : null}
-        {injectedBulkActions.map((action) => {
+        {injectedBulkActions.filter(() => !entityUiReadOnly).map((action) => {
           const label = t(action.label, action.label)
           const iconNode = resolveInjectedIcon(action.icon, 'h-4 w-4 shrink-0')
           return (
@@ -2755,7 +2766,7 @@ export function DataTable<T>({
             </Button>
           )
         })}
-        {selectedRows.length > 0 ? (bulkActionsProp ?? []).map((action) => {
+        {selectedRows.length > 0 ? (bulkActionsProp ?? []).filter(() => !entityUiReadOnly).map((action) => {
           const ActionIcon = action.icon
           return (
             <Button
@@ -2828,7 +2839,9 @@ export function DataTable<T>({
   ])
 
   const hasTitle = title != null
-  const hasActions = actions !== undefined && actions !== null && actions !== false
+  // Suppress the header actions slot (create / "New" / manage buttons) for a
+  // whole-entity read-only table — a view-only surface has no add affordance.
+  const hasActions = !entityUiReadOnly && actions !== undefined && actions !== null && actions !== false
   const shouldReserveActionsSpace = actions === null || actions === false
   const exportConfig = exporter === false ? null : exporter || null
   const resolvedExportSections = React.useMemo(() => resolveExportSections(exportConfig), [exportConfig])
@@ -2893,6 +2906,7 @@ export function DataTable<T>({
   ) : <div className="min-h-[2.25rem]" />
 
   return (
+    <RowActionsReadOnlyContext.Provider value={entityUiReadOnly}>
     <TooltipProvider delayDuration={300}>
     <div ref={containerRef} className={containerClassName} data-component-handle={resolvedReplacementHandle}>
       {shouldRenderHeader && (
@@ -3291,5 +3305,6 @@ export function DataTable<T>({
       ) : null}
     </div>
     </TooltipProvider>
+    </RowActionsReadOnlyContext.Provider>
   )
 }
