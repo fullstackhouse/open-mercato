@@ -1,5 +1,6 @@
 {
   "auth.changePassword.title": "Security & MFA",
+  "notifications.categories.security": "Security",
   "security.admin.admin.sudo.actions.add": "Add rule",
   "security.admin.admin.sudo.challengeMethod.auto": "Auto",
   "security.admin.admin.sudo.challengeMethod.mfa": "MFA only",
