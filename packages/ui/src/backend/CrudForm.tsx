@@ -31,6 +31,7 @@ import {
 import { flash } from './FlashMessages'
 import { FormHeader } from './forms/FormHeader'
 import { FormFooter } from './forms/FormFooter'
+import { useUiReadOnlyPolicy } from './ui-read-only/context'
 import { Button } from '../primitives/button'
 import { IconButton } from '../primitives/icon-button'
 import {
@@ -770,7 +771,6 @@ export function CrudForm<TValues extends Record<string, unknown>>({
   const saveErrorMessage = t('ui.forms.flash.saveError')
   const internalFormId = React.useId()
   const formId = providedFormId ?? internalFormId
-  const formReadOnly = Boolean(readOnly)
   const [values, setValues] = React.useState<CrudFormValues<TValues>>(
     () => ({ ...(initialValues ?? {}) } as CrudFormValues<TValues>)
   )
@@ -810,6 +810,17 @@ export function CrudForm<TValues extends Record<string, unknown>>({
     [resolvedEntityIdsKey],
   )
   const primaryEntityId = resolvedEntityIds.length ? resolvedEntityIds[0] : null
+
+  // RBAC-driven whole-entity UI read-only: when the viewer lacks the entity's
+  // CRUD write feature, fold it into the form's existing read-only machinery
+  // (display-only overlay + hidden Save/Delete/footer + blocked submit) so the
+  // form reflects RBAC without a separate code path.
+  const uiReadOnlyPolicy = useUiReadOnlyPolicy()
+  const entityUiWholeReadOnly = React.useMemo(
+    () => resolvedEntityIds.some((eid) => uiReadOnlyPolicy.isEntityReadOnly(eid)),
+    [uiReadOnlyPolicy, resolvedEntityIds],
+  )
+  const formReadOnly = Boolean(readOnly) || entityUiWholeReadOnly
 
   // Injection spot events for widget lifecycle management
   const resolvedInjectionSpotId = React.useMemo(() => {
