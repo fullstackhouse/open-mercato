@@ -152,8 +152,13 @@ async function requireDocument(
 
 async function assertAddressEditable(
   em: EntityManager,
-  params: { organizationId: string; tenantId: string; status: string | null }
+  params: { organizationId: string; tenantId: string; status: string | null; systemActor?: boolean }
 ): Promise<void> {
+  // The address editable-status guard is a human-UI concern. A trusted server-side
+  // caller (`ctx.systemActor === true`, e.g. an ERP sync writing source-of-record
+  // truth) is not an operator, so it bypasses the guard. HTTP request paths never
+  // set `systemActor`, so interactive edits stay subject to it.
+  if (params.systemActor === true) return
   const settings = await loadSalesSettings(em, {
     tenantId: params.tenantId,
     organizationId: params.organizationId,
@@ -182,6 +187,7 @@ const createDocumentAddress: CommandHandler<DocumentAddressCreateInput, { id: st
         organizationId: input.organizationId,
         tenantId: input.tenantId,
         status: (document as SalesOrder).status ?? null,
+        systemActor: ctx.systemActor === true,
       })
     }
 
@@ -269,6 +275,7 @@ const updateDocumentAddress: CommandHandler<DocumentAddressUpdateInput, { id: st
         organizationId: input.organizationId,
         tenantId: input.tenantId,
         status: (document as SalesOrder).status ?? null,
+        systemActor: ctx.systemActor === true,
       })
     }
 
@@ -358,6 +365,7 @@ const deleteDocumentAddress: CommandHandler<
         organizationId: input.organizationId,
         tenantId: input.tenantId,
         status: (document as SalesOrder).status ?? null,
+        systemActor: ctx.systemActor === true,
       })
     }
     await em.remove(entity).flush()

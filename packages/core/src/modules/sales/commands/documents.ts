@@ -3,7 +3,10 @@
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { registerCommand } from "@open-mercato/shared/lib/commands";
-import type { CommandHandler } from "@open-mercato/shared/lib/commands";
+import type {
+  CommandHandler,
+  CommandRuntimeContext,
+} from "@open-mercato/shared/lib/commands";
 import { withAtomicFlush } from "@open-mercato/shared/lib/commands/flush";
 import {
   buildChanges,
@@ -939,11 +942,13 @@ async function applyDocumentUpdate({
   entity,
   input,
   em,
+  ctx,
 }: {
   kind: "order" | "quote";
   entity: SalesOrder | SalesQuote;
   input: DocumentUpdateInput;
   em: EntityManager;
+  ctx?: Pick<CommandRuntimeContext, "systemActor">;
 }): Promise<void> {
   const organizationId = (entity as any).organizationId as string;
   const tenantId = (entity as any).tenantId as string;
@@ -962,8 +967,21 @@ async function applyDocumentUpdate({
     input.shippingAddressSnapshot !== undefined ||
     input.billingAddressSnapshot !== undefined;
 
+  // The customer/address editable-status guards are a human-UI concern: they stop
+  // an operator from mutating fields the order's status has frozen. A trusted
+  // server-side caller (`ctx.systemActor === true`, e.g. an ERP sync writing the
+  // source-of-record truth) is not an operator, so it bypasses them — and skips
+  // even loading the settings, since they are only read to enforce the guards.
+  // HTTP request paths never set `systemActor`; they carry a real `auth` actor, so
+  // an interactive edit stays subject to the guards.
+  const systemWrite = ctx?.systemActor === true;
+
   let settings: SalesSettings | null = null;
-  if (kind === "order" && (wantsCustomerChange || wantsAddressChange)) {
+  if (
+    kind === "order" &&
+    !systemWrite &&
+    (wantsCustomerChange || wantsAddressChange)
+  ) {
     settings = await loadSalesSettings(em, { organizationId, tenantId });
   }
 
@@ -981,14 +999,14 @@ async function applyDocumentUpdate({
     }
   };
 
-  if (kind === "order" && wantsCustomerChange) {
+  if (kind === "order" && !systemWrite && wantsCustomerChange) {
     guardStatus(
       settings?.orderCustomerEditableStatuses ?? null,
       "sales.orders.edit_customer_blocked",
       "Editing the customer is blocked for this status.",
     );
   }
-  if (kind === "order" && wantsAddressChange) {
+  if (kind === "order" && !systemWrite && wantsAddressChange) {
     guardStatus(
       settings?.orderAddressEditableStatuses ?? null,
       "sales.orders.edit_addresses_blocked",
@@ -5013,6 +5031,7 @@ const updateQuoteCommand: CommandHandler<
             entity: quote,
             input: parsed,
             em,
+            ctx,
           });
           if (shouldInvalidateSentToken) {
             quote.status = "draft";
@@ -5242,6 +5261,7 @@ const updateOrderCommand: CommandHandler<
             entity: order,
             input: parsed,
             em,
+            ctx,
           });
         },
         // Scalar mutations above are persisted by withAtomicFlush's per-phase
