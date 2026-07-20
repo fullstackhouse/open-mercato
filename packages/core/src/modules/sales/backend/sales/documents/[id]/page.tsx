@@ -8,6 +8,7 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import {
   CustomDataSection,
   DetailFieldsSection,
+  DetailReadOnlyContext,
   ErrorMessage,
   InlineTextEditor,
   LoadingMessage,
@@ -16,6 +17,7 @@ import {
   TagsSection,
   type TagOption,
 } from '@open-mercato/ui/backend/detail'
+import { useUiReadOnly } from '@open-mercato/ui/backend/ui-read-only/context'
 import { LookupSelect, type LookupSelectItem } from '@open-mercato/ui/backend/inputs'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Badge } from '@open-mercato/ui/primitives/badge'
@@ -1905,6 +1907,11 @@ export default function SalesDocumentDetailPage({
   const [record, setRecord] = React.useState<DocumentRecord | null>(null)
   const [tags, setTags] = React.useState<TagOption[]>([])
   const [kind, setKind] = React.useState<'order' | 'quote'>('quote')
+  // RBAC-driven whole-entity UI read-only: when the viewer lacks the document's
+  // CRUD write feature (`sales.orders.manage` / `sales.quotes.manage`), the whole
+  // detail surface is display-only. `DetailReadOnlyContext` (below) locks every
+  // inline editor; the customer/address guards and the delete action fold it in.
+  const { entityReadOnly } = useUiReadOnly(kind === 'order' ? E.sales.sales_order : E.sales.sales_quote)
   const [error, setError] = React.useState<string | null>(null)
   const [reloadKey, setReloadKey] = React.useState(0)
   const [activeTab, setActiveTab] = React.useState<string>('items')
@@ -2929,9 +2936,9 @@ export default function SalesDocumentDetailPage({
     return list.includes(status)
   }
   const customerGuardBlocked =
-    kind === 'order' && !guardAllows(editingGuards?.customer ?? null, record?.status ?? null)
+    entityReadOnly || (kind === 'order' && !guardAllows(editingGuards?.customer ?? null, record?.status ?? null))
   const addressGuardBlocked =
-    kind === 'order' && !guardAllows(editingGuards?.addresses ?? null, record?.status ?? null)
+    entityReadOnly || (kind === 'order' && !guardAllows(editingGuards?.addresses ?? null, record?.status ?? null))
   const customerGuardMessage = customerGuardBlocked
     ? t('sales.documents.detail.customerBlocked', 'Customer cannot be changed for the current status.')
     : null
@@ -4567,6 +4574,7 @@ export default function SalesDocumentDetailPage({
   if (!record) return null
 
   return (
+    <DetailReadOnlyContext.Provider value={entityReadOnly}>
     <Page>
       <PageBody className="space-y-6">
         <FormHeader
@@ -4670,7 +4678,7 @@ export default function SalesDocumentDetailPage({
             { id: 'convert', label: t('sales.documents.detail.convertToOrder', 'Convert to order'), icon: ArrowRightLeft, onSelect: () => void handleConvert(), disabled: converting, loading: converting },
             { id: 'send', label: t('sales.quotes.send.action', 'Send to customer'), icon: Send, onSelect: () => setSendOpen(true), disabled: !contactEmail || sending, loading: sending },
           ] satisfies ActionItem[]) : undefined}
-          onDelete={() => void handleDelete()}
+          onDelete={entityReadOnly ? undefined : () => void handleDelete()}
           isDeleting={deleting}
           deleteLabel={t('sales.documents.detail.delete', 'Delete')}
         />
@@ -4966,5 +4974,6 @@ export default function SalesDocumentDetailPage({
       </Dialog>
       {ConfirmDialogElement}
     </Page>
+    </DetailReadOnlyContext.Provider>
   )
 }
