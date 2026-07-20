@@ -10,6 +10,8 @@ import { profilePathPrefixes } from '@open-mercato/core/modules/auth/lib/profile
 import { APP_VERSION } from '@open-mercato/shared/lib/version'
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
+import { UiReadOnlyPolicyProvider } from '@open-mercato/ui/backend/ui-read-only/context'
+import { resolveRbacReadOnlyMap } from '@open-mercato/shared/lib/ui-read-only/rbac'
 import { DemoFeedbackWidget } from '@/components/DemoFeedbackWidget'
 import { BackendHeaderChrome } from '@/components/BackendHeaderChrome'
 
@@ -89,6 +91,14 @@ export default async function BackendLayout({
     : []
   const canManageUpgradeActions =
     auth?.isSuperAdmin === true || hasAllFeatures(['configs.manage'], grantedFeatures)
+
+  // RBAC-driven UI read-only: mark whole-entity read-only wherever the viewer
+  // lacks the entity's CRUD write feature. `OM_UI_READ_ONLY_ENFORCE_SUPERADMIN`
+  // opts a superadmin into the map too (their feature bypass otherwise stands).
+  const uiReadOnlyMap = resolveRbacReadOnlyMap(
+    { features: grantedFeatures, isSuperAdmin: auth?.isSuperAdmin === true },
+    { enforceForSuperAdmin: parseBooleanWithDefault(process.env.OM_UI_READ_ONLY_ENFORCE_SUPERADMIN, false) },
+  )
   const baseProductName = translate('appShell.productName', 'Open Mercato')
   const productName = deployEnv && deployEnv !== 'local'
     ? `${baseProductName} (${deployEnv.charAt(0).toUpperCase() + deployEnv.slice(1)})`
@@ -131,9 +141,11 @@ export default async function BackendLayout({
         profileSectionTitle={translate('profile.page.title', 'Profile')}
         profilePathPrefixes={profilePathPrefixes}
       >
-        <PageInjectionBoundary path={path} context={injectionContext}>
-          {children}
-        </PageInjectionBoundary>
+        <UiReadOnlyPolicyProvider map={uiReadOnlyMap}>
+          <PageInjectionBoundary path={path} context={injectionContext}>
+            {children}
+          </PageInjectionBoundary>
+        </UiReadOnlyPolicyProvider>
         {demoModeEnabled ? <DemoFeedbackWidget demoModeEnabled={demoModeEnabled} /> : null}
       </AppShell>
     </I18nProvider>
