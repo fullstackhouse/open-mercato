@@ -19,6 +19,7 @@ import {
   type GeneratorResult,
   createGeneratorResult,
 } from '../utils'
+import { writeCrudWriteFeaturesManifest } from './ui-read-only'
 
 export interface GenerateOpenApiOptions {
   resolver: PackageResolver
@@ -52,6 +53,8 @@ interface OpenApiInputContext {
 interface OpenApiBundleResult {
   doc: Record<string, any> | null
   inputPaths: string[]
+  /** RBAC write-feature registry snapshot captured during the same route-execution pass. */
+  crudWriteFeatures: Record<string, string[]>
 }
 
 const OPENAPI_INPUT_MANIFEST_VERSION = 1
@@ -312,7 +315,7 @@ async function generateOpenApiViaBundle(
     esbuild = await import('esbuild')
   } catch {
     if (!quiet) console.log('[OpenAPI] esbuild not available, skipping bundle approach')
-    return { doc: null, inputPaths: [] }
+    return { doc: null, inputPaths: [], crudWriteFeatures: {} }
   }
 
   const { execFileSync } = await import('node:child_process')
@@ -333,7 +336,7 @@ async function generateOpenApiViaBundle(
     if (!quiet) {
       console.log(`[OpenAPI] Generator source not found at ${generatorPath}, skipping bundle approach`)
     }
-    return { doc: null, inputPaths: [] }
+    return { doc: null, inputPaths: [], crudWriteFeatures: {} }
   }
 
   const cacheDir = path.join(rootDir, 'node_modules', '.cache')
@@ -345,6 +348,11 @@ async function generateOpenApiViaBundle(
   // Build the entry script that imports all routes and calls buildOpenApiDocument
   const importLines: string[] = [
     `import { buildOpenApiDocument } from ${JSON.stringify(generatorPath)};`,
+    // Importing every route module runs each `makeCrudRoute` call, which
+    // populates the RBAC write-feature registry as a byproduct. We read that
+    // snapshot here so the same single route-execution pass also feeds the
+    // deterministic UI read-only manifest — no second route bundle needed.
+    `import { getCrudWriteFeatureRegistry } from '@open-mercato/shared/lib/ui-read-only/rbac';`,
   ]
   const routeMapLines: string[] = []
 
@@ -400,8 +408,9 @@ const deepClone = (v, ancestors = []) => {
   }
   return out;
 };
-process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
-  typeof v === 'bigint' ? Number(v) : v
+process.stdout.write(JSON.stringify(
+  { openapi: deepClone(doc), crudWriteFeatures: getCrudWriteFeatureRegistry() },
+  (_, v) => typeof v === 'bigint' ? Number(v) : v
 ));
 `
 
@@ -563,7 +572,9 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
     })
 
     const lastLine = stdout.trim().split('\n').pop()!
-    const doc = JSON.parse(lastLine) as Record<string, any>
+    const parsed = JSON.parse(lastLine) as { openapi: Record<string, any>; crudWriteFeatures?: Record<string, string[]> }
+    const doc = parsed.openapi
+    const crudWriteFeatures = parsed.crudWriteFeatures ?? {}
 
     if (!quiet) {
       const pathCount = Object.keys(doc.paths || {}).length
@@ -576,7 +587,7 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
       console.log(`[OpenAPI] Bundle approach: ${pathCount} paths, ${withBody} with requestBody schemas`)
     }
 
-    return { doc, inputPaths }
+    return { doc, inputPaths, crudWriteFeatures }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     const stderr = (err as any)?.stderr
@@ -600,7 +611,7 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
         }
       }
     }
-    return { doc: null, inputPaths }
+    return { doc: null, inputPaths, crudWriteFeatures: {} }
   } finally {
     // Shut down esbuild's persistent Go service so it does not deadlock at
     // process exit when a plugin request is still in flight.
@@ -705,6 +716,14 @@ export async function generateOpenApi(options: GenerateOpenApiOptions): Promise<
   // Try esbuild bundle approach first — produces full requestBody/response schemas
   const bundleResult = await generateOpenApiViaBundle(routes, resolver, quiet)
   let doc: Record<string, any> | null = bundleResult.doc
+
+  // The route-execution pass also captured the RBAC write-feature registry.
+  // Emit the deterministic manifest bootstrap seeds for UI read-only, so
+  // resolution is complete regardless of which routes have been imported at
+  // request time. An empty snapshot still writes an (empty) manifest so
+  // bootstrap can always import it; the lazy `makeCrudRoute` registrations
+  // remain the runtime backstop.
+  writeCrudWriteFeaturesManifest({ resolver, registry: bundleResult.crudWriteFeatures, quiet, result })
 
   // Fallback to static regex approach (extracts operationId/summary/tags but no schemas)
   if (!doc) {
