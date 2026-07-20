@@ -20,6 +20,7 @@ import { getAllSyncSubscribers } from './sync-subscriber-store'
 import { collectSyncSubscribers, runSyncBeforeEvent, runSyncAfterEvent } from './sync-event-runner'
 import type { SyncCrudEventPayload } from './sync-event-types'
 import type { RateLimitConfig } from '@open-mercato/shared/lib/ratelimit/types'
+import { registerCrudWriteFeatures } from '@open-mercato/shared/lib/ui-read-only/rbac'
 import type {
   CrudEventAction,
   CrudEventsConfig,
@@ -942,6 +943,22 @@ function extractRecordIds(items: any[], idField: string): string[] {
 
 export function makeCrudRoute<TCreate = any, TUpdate = any, TList = any>(opts: CrudFactoryOptions<TCreate, TUpdate, TList>) {
   const metadata = opts.metadata || {}
+
+  // RBAC-driven UI read-only source: record the write feature(s) this entity's
+  // mutations require (POST/PUT/DELETE), keyed by its canonical entity id. The
+  // admin UI resolves these against the viewer's grants to hide edit/create/
+  // delete affordances for entities the viewer cannot mutate — single source of
+  // truth with the server-side `requireFeatures`. No-op for read-only routes
+  // (no write features) or virtual routes (no resolvable entity id).
+  {
+    const writeFeatures = Array.from(new Set([
+      ...(metadata.POST?.requireFeatures ?? []),
+      ...(metadata.PUT?.requireFeatures ?? []),
+      ...(metadata.DELETE?.requireFeatures ?? []),
+    ]))
+    const rbacEntityId = opts.list?.entityId ?? opts.indexer?.entityType ?? opts.enrichers?.entityId
+    if (rbacEntityId != null) registerCrudWriteFeatures(String(rbacEntityId), writeFeatures)
+  }
   const ormCfg = {
     entity: opts.orm.entity,
     idField: opts.orm.idField ?? 'id',
