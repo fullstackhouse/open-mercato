@@ -7,6 +7,7 @@ import { getFrontendRouteManifests } from '@open-mercato/shared/modules/registry
 import { CustomerRbacService } from '@open-mercato/core/modules/customer_accounts/services/customerRbacService'
 import { findOrganizationInTenant } from '@open-mercato/core/modules/customer_accounts/lib/organizationLookup'
 import { buildPortalNav } from '@open-mercato/ui/portal/utils/nav'
+import { getRemovedAclFeatureIds } from '@open-mercato/shared/security/enabledModulesRegistry'
 
 export const metadata: { path?: string; requireAuth?: boolean } = { requireAuth: false }
 
@@ -52,11 +53,13 @@ export async function GET(req: Request) {
 
   const acl = await rbac.loadAcl(auth.sub, { tenantId: auth.tenantId, organizationId: auth.orgId })
   const grantedFeatures = acl.isPortalAdmin ? ['*'] : acl.features
+  const removedFeatures = [...getRemovedAclFeatureIds()]
 
   const groups = buildPortalNav({
     routes: getFrontendRouteManifests(),
     orgSlug,
     grantedFeatures,
+    removedFeatures,
     isPortalAdmin: acl.isPortalAdmin,
   })
 

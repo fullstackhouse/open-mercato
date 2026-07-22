@@ -54,6 +54,7 @@ export type BackendChromePayload = {
   profileSections: BackendChromeSectionGroup[]
   profilePathPrefixes: string[]
   grantedFeatures: string[]
+  removedFeatures?: string[]
   roles: string[]
   brand?: BackendChromeBrand | null
 }

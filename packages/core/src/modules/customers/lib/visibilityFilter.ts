@@ -1,5 +1,5 @@
 import type { FilterQuery } from '@mikro-orm/postgresql'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import { CustomerInteraction } from '../data/entities'
 
 /**
@@ -22,7 +22,7 @@ export const EMAIL_VIEW_PRIVATE_FEATURE = 'customers.email.view_private'
  */
 export function callerHasEmailViewPrivate(userFeatures: string[] | null | undefined): boolean {
   if (!Array.isArray(userFeatures) || userFeatures.length === 0) return false
-  return hasFeature(userFeatures, EMAIL_VIEW_PRIVATE_FEATURE)
+  return hasFeatureRespectingRemovals(userFeatures, EMAIL_VIEW_PRIVATE_FEATURE)
 }
 
 /**

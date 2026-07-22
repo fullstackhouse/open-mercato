@@ -1,5 +1,5 @@
 import type { Kysely } from 'kysely'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 
 interface AclRow {
   user_id: string
@@ -28,7 +28,7 @@ function collectUsersWithFeature(
     }
 
     const features = normalizeFeatures(row.features_json)
-    if (features && hasFeature(features, requiredFeature)) {
+    if (features && hasFeatureRespectingRemovals(features, requiredFeature)) {
       userIdsSet.add(row.user_id)
     }
   }

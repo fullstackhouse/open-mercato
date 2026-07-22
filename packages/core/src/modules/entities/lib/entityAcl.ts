@@ -1,5 +1,5 @@
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
-import { hasAllFeatures } from '@open-mercato/shared/security/features'
+import { hasAllFeaturesRespectingRemovals, isAclFeatureRemoved } from '@open-mercato/shared/security/enabledModulesRegistry'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 
 export type EntityAclRequirement = {
@@ -97,12 +97,16 @@ export async function assertEntityAclForRequest(args: AssertEntityAclArgs): Prom
     organizationId: args.auth.orgId ?? null,
   })
 
+  if (requirement && requirement[args.action].some((feature) => isAclFeatureRemoved(feature))) {
+    throw forbiddenEntityAccess()
+  }
+
   if (acl?.isSuperAdmin) return
 
   if (!requirement) throw forbiddenEntityAccess()
   if (requirement.platformOnly) throw forbiddenEntityAccess()
 
-  if (!hasAllFeatures(acl?.features, requirement[args.action])) {
+  if (!hasAllFeaturesRespectingRemovals(acl?.features, requirement[args.action])) {
     throw forbiddenEntityAccess()
   }
 }

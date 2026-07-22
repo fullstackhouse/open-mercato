@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import * as React from 'react'
 import { MoreHorizontal, PlugZap, Settings, Mail } from 'lucide-react'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureExcluding } from '@open-mercato/shared/security/features'
 import { AuthSessionGuard } from '@open-mercato/ui/backend/AuthSessionGuard'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Popover, PopoverContent, PopoverTrigger } from '@open-mercato/ui/primitives/popover'
@@ -112,26 +112,27 @@ export function BackendHeaderChrome({
 }: BackendHeaderChromeProps) {
   const t = useT()
   const { payload, isReady } = useBackendChrome()
-  const grantedFeatures = payload?.grantedFeatures ?? []
+  const grantedFeatures = React.useMemo(() => payload?.grantedFeatures ?? [], [payload?.grantedFeatures])
+  const removedFeatures = payload?.removedFeatures
   const showIntegrationsButton = React.useMemo(
     () => hasVisibleRoute(payload?.groups, '/backend/integrations'),
     [payload?.groups],
   )
   const showAiAssistant = React.useMemo(
-    () => hasFeature(grantedFeatures, 'ai_assistant.view'),
-    [grantedFeatures],
+    () => hasFeatureExcluding(grantedFeatures, 'ai_assistant.view', removedFeatures),
+    [grantedFeatures, removedFeatures],
   )
   const showSearch = React.useMemo(
-    () => hasFeature(grantedFeatures, 'search.global'),
-    [grantedFeatures],
+    () => hasFeatureExcluding(grantedFeatures, 'search.global', removedFeatures),
+    [grantedFeatures, removedFeatures],
   )
   const showMessages = React.useMemo(
     () => hasVisibleRoute(payload?.groups, '/backend/messages'),
     [payload?.groups],
   )
   const showNotifications = React.useMemo(
-    () => hasFeature(grantedFeatures, 'notifications.view'),
-    [grantedFeatures],
+    () => hasFeatureExcluding(grantedFeatures, 'notifications.view', removedFeatures),
+    [grantedFeatures, removedFeatures],
   )
 
   const mobileMoreItems = React.useMemo<MobileMoreItem[]>(() => {

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import type { InjectionMenuItem } from '@open-mercato/shared/modules/widgets/injection'
-import { hasAllFeatures } from '@open-mercato/shared/security/features'
+import { hasAllFeaturesExcluding } from '@open-mercato/shared/security/features'
 import { useInjectionDataWidgets } from './useInjectionDataWidgets'
 import { useBackendChrome } from '../BackendChromeProvider'
 
@@ -25,6 +25,10 @@ export function useInjectedMenuItems(surfaceId: MenuSurfaceId): {
   const grantedFeatureList = React.useMemo(
     () => payload?.grantedFeatures ?? [],
     [payload?.grantedFeatures],
+  )
+  const removedFeatureList = React.useMemo(
+    () => payload?.removedFeatures ?? [],
+    [payload?.removedFeatures],
   )
   const userRoles = React.useMemo(
     () => new Set(payload?.roles ?? []),
@@ -56,11 +60,11 @@ export function useInjectedMenuItems(surfaceId: MenuSurfaceId): {
       rawItems.filter((item) => {
         const features = item.features ?? []
         const roles = item.roles ?? []
-        const featuresOk = features.length === 0 || hasAllFeatures(grantedFeatureList, features)
+        const featuresOk = features.length === 0 || hasAllFeaturesExcluding(grantedFeatureList, features, removedFeatureList)
         const rolesOk = roles.length === 0 || roles.some((role) => userRoles.has(role))
         return featuresOk && rolesOk
       }),
-    [rawItems, grantedFeatureList, userRoles],
+    [rawItems, grantedFeatureList, removedFeatureList, userRoles],
   )
 
   return { items, isLoading: isLoading || !isReady }

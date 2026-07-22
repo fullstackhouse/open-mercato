@@ -1,6 +1,6 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { CrudHttpError, forbidden } from '@open-mercato/shared/lib/crud/errors'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { Role, RoleAcl, User, UserAcl, UserRole } from '@open-mercato/core/modules/auth/data/entities'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
@@ -344,12 +344,12 @@ function assertActorCanGrantAclSnapshot(
       throw forbidden('Only super administrators can grant global wildcard access.')
     }
     if (isWildcardFeature(feature)) {
-      if (!hasFeature(actorGrantableFeatures, feature)) {
+      if (!hasFeatureRespectingRemovals(actorGrantableFeatures, feature)) {
         throw forbidden(`Cannot grant feature wildcard ${feature}.`)
       }
       continue
     }
-    if (!hasFeature(actorGrantableFeatures, feature)) {
+    if (!hasFeatureRespectingRemovals(actorGrantableFeatures, feature)) {
       throw forbidden(`Cannot grant feature ${feature}.`)
     }
   }

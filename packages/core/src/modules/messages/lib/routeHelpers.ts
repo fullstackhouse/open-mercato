@@ -1,5 +1,5 @@
 import { resolveRequestContext } from '@open-mercato/shared/lib/api/context'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 
 export function hasOrganizationAccess(
   scopeOrganizationId: string | null,
@@ -61,5 +61,5 @@ export async function canUseMessageEmailFeature(
     organizationId: scope.organizationId,
   })
 
-  return Boolean(acl.isSuperAdmin) || hasFeature(acl.features, 'messages.email')
+  return hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, 'messages.email')
 }

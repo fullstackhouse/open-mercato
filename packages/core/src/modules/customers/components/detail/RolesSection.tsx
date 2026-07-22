@@ -10,7 +10,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { useBackendChrome } from '@open-mercato/ui/backend/BackendChromeProvider'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureExcluding } from '@open-mercato/shared/security/features'
 import type { DictionaryEntryOption } from '@open-mercato/core/modules/dictionaries/lib/clientEntries'
 import { RoleAssignmentRow, type RoleAssignment } from './RoleAssignmentRow'
 import { AssignRoleDialog } from './AssignRoleDialog'
@@ -33,8 +33,8 @@ export function RolesSection({ entityType, entityId, entityName }: RolesSectionP
   const t = useT()
   const { payload } = useBackendChrome()
   const canManageRoleTypes = React.useMemo(
-    () => hasFeature(payload?.grantedFeatures ?? [], 'customers.settings.manage'),
-    [payload?.grantedFeatures],
+    () => hasFeatureExcluding(payload?.grantedFeatures ?? [], 'customers.settings.manage', payload?.removedFeatures),
+    [payload?.grantedFeatures, payload?.removedFeatures],
   )
   const [roles, setRoles] = React.useState<RoleAssignment[]>([])
   const [roleTypes, setRoleTypes] = React.useState<DictionaryEntryOption[]>([])

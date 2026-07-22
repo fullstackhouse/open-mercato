@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useBackendChrome } from '@open-mercato/ui/backend/BackendChromeProvider'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureExcluding } from '@open-mercato/shared/security/features'
 
 export type DealsAccess = {
   canViewDeals: boolean
@@ -12,8 +12,8 @@ export type DealsAccess = {
 export function useDealsAccess(): DealsAccess {
   const { payload, isReady } = useBackendChrome()
   const canViewDeals = React.useMemo(
-    () => hasFeature(payload?.grantedFeatures ?? [], 'customers.deals.view'),
-    [payload?.grantedFeatures],
+    () => hasFeatureExcluding(payload?.grantedFeatures ?? [], 'customers.deals.view', payload?.removedFeatures),
+    [payload?.grantedFeatures, payload?.removedFeatures],
   )
   return { canViewDeals, isReady }
 }

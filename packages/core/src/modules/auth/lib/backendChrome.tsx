@@ -21,7 +21,7 @@ import {
 import { resolveRegisteredLucideIconNode } from '@open-mercato/ui/backend/icons/lucideRegistry'
 import { profilePathPrefixes, profileSections } from './profile-sections'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import { filterGrantsByEnabledModules } from '@open-mercato/shared/security/enabledModulesRegistry'
+import { filterGrantsByEnabledModules, getRemovedAclFeatureIds } from '@open-mercato/shared/security/enabledModulesRegistry'
 import {
   getSelectedOrganizationFromRequest,
   resolveFeatureCheckContext,
@@ -303,6 +303,7 @@ export async function resolveBackendChromePayload({
 
   const rawGrantedFeatures = acl.isSuperAdmin ? ['*'] : acl.features
   const grantedFeatures = filterGrantsByEnabledModules(rawGrantedFeatures)
+  const removedFeatures = [...getRemovedAclFeatureIds()]
   const featureChecker = async (features: string[]): Promise<string[]> => {
     if (!allowNavigation || !features.length) return []
     const context = {
@@ -440,6 +441,7 @@ export async function resolveBackendChromePayload({
     profileSections: await serializeSectionGroups(profileSections),
     profilePathPrefixes,
     grantedFeatures,
+    removedFeatures,
     roles: Array.isArray(auth.roles) ? auth.roles : [],
     brand,
   }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { loadAllWidgets } from '@open-mercato/core/modules/dashboards/lib/widgets'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import type { OpenApiMethodDoc, OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { dashboardsTag, dashboardsErrorSchema, dashboardWidgetCatalogSchema } from '../openapi'
 
@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   const { resolve } = await createRequestContainer()
   const rbac = resolve('rbacService') as any
   const acl = await rbac.loadAcl(auth.sub, { tenantId: auth.tenantId ?? null, organizationId: auth.orgId ?? null })
-  if (!acl.isSuperAdmin && !hasFeature(acl.features, 'dashboards.admin.assign-widgets')) {
+  if (!hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, 'dashboards.admin.assign-widgets')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

@@ -9,6 +9,8 @@ import {
   getEnabledModuleIds,
   getOwningModuleId,
   getRemovedAclFeatureIds,
+  hasAllFeaturesRespectingRemovals,
+  hasFeatureRespectingRemovals,
   isAclFeatureRemoved,
 } from '../enabledModulesRegistry'
 
@@ -170,6 +172,30 @@ describe('enabledModulesRegistry', () => {
       expect(
         filterGrantsByEnabledModules(['sales.documents.number.edit', 'sales.documents.view']),
       ).toEqual(['sales.documents.view'])
+    })
+
+    it('hasFeatureRespectingRemovals denies a removed feature despite wildcard or global grants', () => {
+      applyAclFeatureOverrides({ 'sales.documents.number.edit': null })
+
+      expect(hasFeatureRespectingRemovals(['sales.*'], 'sales.documents.number.edit')).toBe(false)
+      expect(hasFeatureRespectingRemovals(['*'], 'sales.documents.number.edit')).toBe(false)
+      expect(hasFeatureRespectingRemovals(['sales.documents.number.edit'], 'sales.documents.number.edit')).toBe(false)
+      expect(hasFeatureRespectingRemovals(['sales.*'], 'sales.documents.view')).toBe(true)
+    })
+
+    it('hasAllFeaturesRespectingRemovals denies when any required feature is removed', () => {
+      applyAclFeatureOverrides({ 'sales.documents.number.edit': null })
+
+      expect(hasAllFeaturesRespectingRemovals(['sales.*'], ['sales.documents.view', 'sales.documents.number.edit'])).toBe(false)
+      expect(hasAllFeaturesRespectingRemovals(['sales.*'], ['sales.documents.view'])).toBe(true)
+      expect(hasAllFeaturesRespectingRemovals([], [])).toBe(true)
+      expect(hasAllFeaturesRespectingRemovals(undefined, undefined)).toBe(true)
+    })
+
+    it('removal-aware helpers behave like the pure matchers when nothing is removed', () => {
+      expect(hasFeatureRespectingRemovals(['sales.*'], 'sales.documents.number.edit')).toBe(true)
+      expect(hasAllFeaturesRespectingRemovals(['sales.*'], ['sales.documents.number.edit'])).toBe(true)
+      expect(hasFeatureRespectingRemovals(undefined, 'sales.documents.view')).toBe(false)
     })
   })
 })

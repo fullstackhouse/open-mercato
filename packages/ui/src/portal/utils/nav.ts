@@ -24,6 +24,12 @@ export type BuildPortalNavOptions = {
   orgSlug: string
   /** Feature strings granted to the current customer (may include wildcards). */
   grantedFeatures: readonly string[]
+  /**
+   * Feature ids removed from the ACL contract via `null` overrides. Routes
+   * requiring a removed feature are dropped even for portal admins and even
+   * when a wildcard grant would match.
+   */
+  removedFeatures?: readonly string[]
   /** If true, bypass feature checks (portal admin). Defaults to false. */
   isPortalAdmin?: boolean
 }
@@ -75,6 +81,7 @@ export function buildPortalNav({
   routes,
   orgSlug,
   grantedFeatures,
+  removedFeatures,
   isPortalAdmin = false,
 }: BuildPortalNavOptions): PortalNavGroup[] {
   const mainItems: PortalNavItem[] = []
@@ -96,8 +103,10 @@ export function buildPortalNav({
     const nav = route.nav!
 
     const requireFeatures = route.requireCustomerFeatures ?? []
-    if (!isPortalAdmin && requireFeatures.length) {
-      if (!hasAllFeatures(grantedFeatures as string[], requireFeatures as string[])) continue
+    if (requireFeatures.length) {
+      const removedList = removedFeatures ?? []
+      if (removedList.length && requireFeatures.some((feature) => removedList.includes(feature))) continue
+      if (!isPortalAdmin && !hasAllFeatures(grantedFeatures as string[], requireFeatures as string[])) continue
     }
 
     const href = resolveHref(pattern, orgSlug)

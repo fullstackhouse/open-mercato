@@ -6,7 +6,7 @@ import { DashboardLayout } from '@open-mercato/core/modules/dashboards/data/enti
 import { dashboardLayoutSchema } from '@open-mercato/core/modules/dashboards/data/validators'
 import { loadAllWidgets } from '@open-mercato/core/modules/dashboards/lib/widgets'
 import { resolveAllowedWidgetIds } from '@open-mercato/core/modules/dashboards/lib/access'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import { User } from '@open-mercato/core/modules/auth/data/entities'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import {
@@ -147,7 +147,7 @@ export async function GET(req: Request) {
     await em.flush()
   }
 
-  const canConfigure = acl.isSuperAdmin || hasFeature(acl.features, 'dashboards.configure')
+  const canConfigure = hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, 'dashboards.configure')
 
   let userEmail: string | null = null
   let userName: string | null = null
@@ -223,7 +223,7 @@ export async function PUT(req: Request) {
   }
 
   const acl = await rbac.loadAcl(scope.userId, { tenantId: scope.tenantId, organizationId: scope.organizationId })
-  if (!acl.isSuperAdmin && !hasFeature(acl.features, 'dashboards.configure')) {
+  if (!hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, 'dashboards.configure')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

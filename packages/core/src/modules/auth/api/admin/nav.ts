@@ -89,6 +89,7 @@ const adminNavResponseSchema = z.object({
   profileSections: z.array(sectionGroupSchema),
   profilePathPrefixes: z.array(z.string()),
   grantedFeatures: z.array(z.string()),
+  removedFeatures: z.array(z.string()).optional(),
   roles: z.array(z.string()),
 })
 

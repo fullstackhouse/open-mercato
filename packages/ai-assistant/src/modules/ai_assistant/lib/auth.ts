@@ -3,6 +3,7 @@ import type { AwilixContainer } from 'awilix'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import { hasAllFeatures } from '@open-mercato/shared/lib/auth/featureMatch'
+import { getRemovedAclFeatureIds } from '@open-mercato/shared/security/enabledModulesRegistry'
 
 const logger = createLogger('ai_assistant')
 
@@ -137,8 +138,10 @@ export function hasRequiredFeatures(
   isSuperAdmin: boolean,
   rbacService?: RbacService
 ): boolean {
-  if (isSuperAdmin) return true
   if (!requiredFeatures?.length) return true
+  const removed = getRemovedAclFeatureIds()
+  if (removed.size && requiredFeatures.some((feature) => removed.has(feature))) return false
+  if (isSuperAdmin) return true
 
   // Delegate to RbacService if provided
   if (rbacService) {

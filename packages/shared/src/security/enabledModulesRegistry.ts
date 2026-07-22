@@ -25,6 +25,7 @@
 
 import { getModules } from '../lib/modules/registry'
 import { composeAclFeatureOverrides } from '../modules/overrides'
+import { hasFeature, hasAllFeatures } from './features'
 import type { Module } from '../modules/registry'
 
 type FeatureRegistry = {
@@ -119,6 +120,36 @@ export function getRemovedAclFeatureIds(): ReadonlySet<string> {
 
 export function isAclFeatureRemoved(featureId: string): boolean {
   return getRemovedAclFeatureIds().has(featureId)
+}
+
+/**
+ * Removal-aware variants of the pure grant matchers, for server-side
+ * AUTHORIZATION checks that compare a concrete required feature id against a
+ * raw granted array (in-handler fine-grained checks, AI tool gates, CLI).
+ * A removed feature is denied even when a wildcard grant would match it.
+ *
+ * Do NOT use these for ACTIVATION gating (interceptors, mutation guards,
+ * response enrichers, component overrides, notification handlers) — there,
+ * `features` selects which enforcement component applies to the user, and
+ * denying a removed id would silently deactivate the component, failing
+ * open instead of closed. Keep those on the pure matchers.
+ */
+export function hasFeatureRespectingRemovals(
+  granted: readonly string[] | undefined,
+  required: string,
+): boolean {
+  if (isAclFeatureRemoved(required)) return false
+  return hasFeature(granted, required)
+}
+
+export function hasAllFeaturesRespectingRemovals(
+  granted: readonly string[] | undefined,
+  required: readonly string[] | undefined,
+): boolean {
+  if (!required || required.length === 0) return true
+  const removed = getRemovedAclFeatureIds()
+  if (removed.size && required.some((feature) => removed.has(feature))) return false
+  return hasAllFeatures(granted, required)
 }
 
 /**

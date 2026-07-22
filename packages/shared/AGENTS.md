@@ -167,6 +167,8 @@ import { hasFeature, hasAllFeatures } from '@open-mercato/shared/security/featur
 - Use `hasFeature(granted, 'module.action')` for single-feature checks.
 - Use `hasAllFeatures(granted, required)` for arrays such as `features`, `requireFeatures`, or handler guard lists.
 - MUST NOT gate raw feature arrays with `includes(...)`, `Set.has(...)`, or ad hoc `every(...includes(...))` checks in shared registries or runners; wildcard grants like `module.*` and `*` are part of the RBAC contract.
+- **Server-side AUTHORIZATION checks** (a caller wants to perform the checked action against a concrete feature id) MUST use the removal-aware variants `hasFeatureRespectingRemovals` / `hasAllFeaturesRespectingRemovals` from `@open-mercato/shared/security/enabledModulesRegistry` so features nulled via ACL overrides are denied even under wildcard grants; fold super-admin bypasses in as `isSuperAdmin ? ['*'] : features`. **ACTIVATION gates** (interceptors, mutation guards, enrichers, component overrides — where `features` selects whether an enforcement component applies) MUST stay on the pure matchers; denying there would deactivate the component and fail open.
+- **Client code** holding `BackendChromePayload.grantedFeatures` MUST pass `payload.removedFeatures` to the pure `hasFeatureExcluding` / `hasAllFeaturesExcluding` variants (`@open-mercato/shared/security/features`) instead of the plain matchers. See `.ai/specs/2026-07-22-nulled-acl-feature-deny-list.md`.
 
 ### CRUD HTTP Errors — MUST use the shared helpers instead of hand-rolling `CrudHttpError`
 

@@ -60,48 +60,81 @@ super admins):
     portal-admin branch, mirroring the backend super-admin handling. (Portal
     RBAC still has no module-level grant filtering — that pre-existing gap is
     orthogonal to this spec.)
+- Removal-aware matcher variants:
+  - Server-side (registry-backed, `security/enabledModulesRegistry`):
+    `hasFeatureRespectingRemovals(granted, required)` /
+    `hasAllFeaturesRespectingRemovals(granted, required)` — for authorization
+    checks that compare a concrete required id against a raw grant array.
+  - Isomorphic pure (`security/features`): `hasFeatureExcluding` /
+    `hasAllFeaturesExcluding` take the removed ids as an explicit third
+    argument — for client code holding `BackendChromePayload.removedFeatures`.
+- Server-side in-handler sweep (all **authorization** checks migrated to the
+  removal-aware helpers; sites with an `isSuperAdmin` bypass fold it in as
+  `isSuperAdmin ? ['*'] : features` so super admins are denied removed
+  features here too): dashboards routes (`layout`, `layout/[itemId]`,
+  `widgets/catalog`, `roles/widgets`, `users/widgets`),
+  `messages/lib/routeHelpers`, `entities/lib/entityAcl` (removed-feature check
+  runs before the super-admin early return), `communication_channels/lib/access-control`,
+  `customers/lib/visibilityFilter`, `inbox_ops/ai-tools`, `search/ai-tools`,
+  `workflows/lib/activity-executor` (UPDATE_ENTITY command gate),
+  `ai-assistant/lib/auth` (`hasRequiredFeatures` MCP per-tool gate),
+  `staff/api/interceptors` (manage_all elevated-scope check),
+  `auth/lib/grantChecks` (actors can no longer grant a removed feature),
+  `notifications/lib/notificationRecipients` (removed-feature notifications
+  route to nobody), and the backend layout `configs.manage` capability flag
+  (`apps/mercato` + create-app template).
+- Client chrome: `BackendChromePayload` gains an additive
+  `removedFeatures: string[]` (built from `getRemovedAclFeatureIds()` in
+  `resolveBackendChromePayload`, declared in the admin-nav response schema).
+  Client call sites that match concrete ids against chrome grants use
+  `hasFeatureExcluding`/`hasAllFeaturesExcluding` with it: `ProgressTopBar`,
+  `UpgradeActionBanner`, `useInjectedMenuItems`, customers `RolesSection` /
+  `useDealsAccess`, and `BackendHeaderChrome` (app + template).
+- Portal nav: `buildPortalNav` accepts `removedFeatures` and drops routes
+  requiring a removed feature even for portal admins; the portal nav API
+  passes the set from the registry.
 
-### Residual gaps and why they are out of scope
+### Deliberately NOT deny-aware
 
-The deny-list lives at the RBAC chokepoints. Two classes of call sites match
-raw grant arrays directly and therefore still let a wildcard grant satisfy a
-removed feature. They were triaged deliberately:
+1. **The pure matchers (`hasFeature`/`hasAllFeatures`) stay removal-blind.**
+   They also gate **activation** of interceptors
+   (`command-interceptor-runner`, `interceptor-runner`), mutation guards
+   (`mutation-guard-registry`), response enrichers, and component overrides.
+   At those sites `features` means "this component applies when the user holds
+   the feature" — globally denying removed ids would silently *deactivate*
+   security-enforcing components, failing open instead of closed. The
+   removal-aware variants are opt-in per call site for authorization semantics
+   only.
+2. **`ai-api-operation-runner` tool-vs-route coverage check.** That
+   `hasAllFeatures(toolFeatures, routeFeatures)` compares a tool's static
+   feature contract against a route's requirements, not a live user's grants;
+   the live-user gate happens at route execution through `RbacService`.
+3. **Portal AI-assistant trigger widget.** It reads context-hydrated
+   `resolvedFeatures` (PortalContext/JWT), so a portal wildcard grant can
+   still show the trigger; the portal AI endpoints enforce through
+   `CustomerRbacService`, so it fails closed server-side. Threading
+   `removedFeatures` through the portal profile payload/JWT is possible
+   follow-up polish.
+4. **Client surfaces backed by `/api/auth/feature-check` or the portal
+   feature-check endpoint** (attachment library, component-override provider,
+   message detail widgets, portal menu/dashboard hooks) needed no change —
+   they were already server-authoritative and became deny-aware through
+   `userHasAllFeatures`.
 
-1. **Client-side UI affordances (cosmetic).** Client code matches concrete
-   feature ids against `BackendChromePayload.grantedFeatures` (e.g.
-   `useInjectedMenuItems`, header chrome buttons, per-component `hasFeature`
-   checks). A wildcard grant in the payload can still show an affordance for a
-   removed feature; a deny cannot be expressed in grant strings alone, and
-   `security/features.ts` must stay isomorphic/pure (the module registry and
-   override store are server-populated). Every mutating action behind such an
-   affordance hits a server guard that routes through `userHasAllFeatures`, so
-   these fail closed with a 403. Follow-up if the cosmetic gap matters: add an
-   additive `removedFeatures` field to `BackendChromePayload` and subtract it
-   in the client-side check helpers.
+### End-to-end verification (2026-07-22)
 
-2. **Server-side in-handler fine-grained checks (real but bounded).** Roughly
-   a dozen handlers perform secondary checks like
-   `hasFeature(acl.features, 'dashboards.configure')` against the raw ACL
-   (dashboards routes, `messages/lib/routeHelpers`, `entities/lib/entityAcl`,
-   `communication_channels/lib/access-control`,
-   `customers/lib/visibilityFilter`, `inbox_ops`/`search` AI tools,
-   `workflows/lib/activity-executor`, `ai-assistant/lib/auth`). The route-level
-   `requireFeatures` guard (which routes through `RbacService`) already denies
-   removed features, but when a route requires a broader feature and the
-   handler checks a removed one inline, a wildcard grant still passes.
-   Follow-up: a server-side `hasFeatureRespectingRemovals(granted, required)`
-   helper and a per-site migration of **authorization** checks only.
+Performed against a live app (`yarn dev:app`, fresh Postgres, tenant seeded
+via `mercato auth setup`) with `dashboards.configure` nulled through
+`entry.overrides.acl.features` in `apps/mercato/src/modules.ts`, exercised as
+a **super admin** whose role also carries the `dashboards.*` wildcard:
 
-3. **Why the shared matcher must NOT be made deny-aware globally.** The same
-   `hasFeature`/`hasAllFeatures` helpers also gate **activation** of
-   interceptors (`command-interceptor-runner`, `interceptor-runner`), mutation
-   guards (`mutation-guard-registry`), response enrichers, component
-   overrides, and notification recipients. At those sites `features` means
-   "this component applies when the user holds the feature" — globally denying
-   removed ids would silently *deactivate* security-enforcing components,
-   failing open instead of closed. The deny must therefore stay at
-   authorization chokepoints and be migrated per-site (gap 2), never baked
-   into the pure matcher.
+| Probe | Result |
+|-------|--------|
+| `POST /api/auth/feature-check {dashboards.configure}` | `{ok: false, granted: []}` — denied despite super admin + wildcard |
+| `POST /api/auth/feature-check {dashboards.view}` | `{ok: true}` — sibling unaffected |
+| `GET /api/dashboards/layout` | `canConfigure: false` — migrated in-handler capability flag |
+| `PUT /api/dashboards/layout` | HTTP 403 `requiredFeatures: [dashboards.configure]` — migrated in-handler write gate |
+| `GET /api/auth/admin/nav` | `removedFeatures: ['dashboards.configure']`, grants still `dashboards.*` — client chrome deny-list delivered |
 
 ## Migration & Backward Compatibility
 
@@ -142,3 +175,10 @@ through `userHasAllFeatures`).
   replaced the "Known limitation" note with a triage of the residual
   grant-side gaps (client cosmetic, in-handler fine-grained checks) and the
   fail-open rationale for keeping the shared matcher deny-unaware.
+- 2026-07-22: Closed the triaged gaps: added removal-aware matcher variants
+  (registry-backed server helpers + pure `*Excluding` client helpers), swept
+  all ~16 server in-handler authorization checks, shipped
+  `BackendChromePayload.removedFeatures` + client chrome updates, made
+  `buildPortalNav` removal-aware, and verified end-to-end against a live app
+  (super admin + wildcard grant denied at every layer). Activation-gating
+  call sites intentionally remain on the pure matchers.

@@ -10,7 +10,7 @@ import {
   resolveWidgetAssignmentReadScope,
   resolveWidgetAssignmentTargetAccess,
 } from '@open-mercato/core/modules/dashboards/lib/widgetAssignmentScope'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import {
   runCrudMutationGuardAfterSuccess,
   validateCrudMutationGuard,
@@ -61,7 +61,7 @@ export async function GET(req: Request) {
   const em = container.resolve('em') as any
   const rbac = container.resolve('rbacService') as any
   const acl = await rbac.loadAcl(auth.sub, { tenantId: auth.tenantId ?? null, organizationId: auth.orgId ?? null })
-  if (!acl.isSuperAdmin && !hasFeature(acl.features, FEATURE)) {
+  if (!hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, FEATURE)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
@@ -120,7 +120,7 @@ export async function PUT(req: Request) {
   const em = resolve('em') as any
   const rbac = resolve('rbacService') as any
   const acl = await rbac.loadAcl(auth.sub, { tenantId: auth.tenantId ?? null, organizationId: auth.orgId ?? null })
-  if (!acl.isSuperAdmin && !hasFeature(acl.features, FEATURE)) {
+  if (!hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, FEATURE)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

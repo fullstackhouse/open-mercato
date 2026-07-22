@@ -6,7 +6,7 @@ import { apiCall } from '../utils/apiCall'
 import { flash } from '../FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useBackendChrome } from '../BackendChromeProvider'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureExcluding } from '@open-mercato/shared/security/features'
 
 function upgradeActionsEnabled() {
   return (
@@ -41,7 +41,7 @@ const forbiddenRedirectOptOutHeader = { 'x-om-forbidden-redirect': '0' } as cons
 export function UpgradeActionBanner() {
   const t = useT()
   const { payload, isReady } = useBackendChrome()
-  const canManageConfigs = isReady && hasFeature(payload?.grantedFeatures, 'configs.manage')
+  const canManageConfigs = isReady && hasFeatureExcluding(payload?.grantedFeatures, 'configs.manage', payload?.removedFeatures)
   const [action, setAction] = React.useState<UpgradeActionPayload | null>(null)
   const [loading, setLoading] = React.useState(false)
   const cancelledRef = React.useRef(false)

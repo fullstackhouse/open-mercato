@@ -4,7 +4,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { DashboardLayout } from '@open-mercato/core/modules/dashboards/data/entities'
 import { dashboardLayoutItemPatchSchema } from '@open-mercato/core/modules/dashboards/data/validators'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import {
   runCrudMutationGuardAfterSuccess,
   validateCrudMutationGuard,
@@ -56,7 +56,7 @@ export async function PATCH(req: Request, ctx: { params?: { itemId?: string } })
   }
 
   const acl = await rbac.loadAcl(scope.userId, { tenantId: scope.tenantId, organizationId: scope.organizationId })
-  if (!acl.isSuperAdmin && !hasFeature(acl.features, 'dashboards.configure')) {
+  if (!hasFeatureRespectingRemovals(acl.isSuperAdmin ? ['*'] : acl.features, 'dashboards.configure')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

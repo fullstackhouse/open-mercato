@@ -22,7 +22,7 @@ import {
   type HostLookup,
 } from '@open-mercato/shared/lib/url-safety'
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
-import { hasAllFeatures } from '@open-mercato/shared/security/features'
+import { hasAllFeaturesRespectingRemovals } from '@open-mercato/shared/security/enabledModulesRegistry'
 import { callWebhookConfigSchema } from '../data/validators'
 import { WorkflowActivityJob, WORKFLOW_ACTIVITIES_QUEUE_NAME } from './activity-queue-types'
 import { logWorkflowEvent } from './event-logger'
@@ -652,7 +652,7 @@ export async function executeUpdateEntity(
     context.workflowInstance.tenantId,
     context.workflowInstance.organizationId
   )
-  if (!hasAllFeatures(userFeatures, workflowSafeCommand.requiredFeatures)) {
+  if (!hasAllFeaturesRespectingRemovals(userFeatures, workflowSafeCommand.requiredFeatures)) {
     throw new Error('UPDATE_ENTITY command is not authorized')
   }
 

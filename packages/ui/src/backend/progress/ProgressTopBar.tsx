@@ -10,7 +10,7 @@ import type { ProgressJobDto } from './useProgressPoll'
 import type { TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { apiCall } from '../utils/apiCall'
 import { useBackendChrome } from '../BackendChromeProvider'
-import { hasFeature } from '@open-mercato/shared/security/features'
+import { hasFeatureExcluding } from '@open-mercato/shared/security/features'
 
 export type ProgressTopBarProps = {
   className?: string
@@ -28,7 +28,7 @@ export function ProgressTopBar(props: ProgressTopBarProps) {
   // The progress read routes (`/api/progress/active`, `/api/progress/jobs`) are
   // gated on `progress.view`. Users without the feature would only get 403s, so
   // skip mounting the polling/SSE hooks entirely instead of firing doomed reads.
-  const canViewProgress = hasFeature(payload?.grantedFeatures, 'progress.view')
+  const canViewProgress = hasFeatureExcluding(payload?.grantedFeatures, 'progress.view', payload?.removedFeatures)
   if (!canViewProgress) return null
   return <ProgressTopBarContent {...props} />
 }
