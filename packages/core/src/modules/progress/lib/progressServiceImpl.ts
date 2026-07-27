@@ -37,8 +37,10 @@ function resolveBroadcastMinIntervalMs(): number {
 const TERMINAL_STATUSES: readonly ProgressJobStatus[] = ['completed', 'failed', 'cancelled']
 const PROGRESS_WRITABLE_STATUSES: readonly ProgressJobStatus[] = ['pending', 'running']
 // `failed` is restartable/completable so a job wrongly swept as stale (worker alive but
-// slow) or retried by an at-least-once queue converges to its true outcome.
-const START_FROM_STATUSES: readonly ProgressJobStatus[] = ['pending', 'running', 'failed']
+// slow) or retried by an at-least-once queue converges to its true outcome. `running` is
+// deliberately NOT startable: an already-running job is an idempotent no-op, so two
+// racers that both read `pending` produce exactly one JOB_STARTED event.
+const START_FROM_STATUSES: readonly ProgressJobStatus[] = ['pending', 'failed']
 const COMPLETE_FROM_STATUSES: readonly ProgressJobStatus[] = ['pending', 'running', 'failed']
 const FAIL_FROM_STATUSES: readonly ProgressJobStatus[] = ['pending', 'running']
 const CANCEL_FROM_STATUSES: readonly ProgressJobStatus[] = ['pending', 'running', 'failed']
@@ -111,15 +113,28 @@ export function createProgressService(em: EntityManager, eventBus: { emit: (even
     jobUpdateThrottle.delete(jobId)
   }
 
+  function usesDeltaWrite(entry: JobUpdateThrottleEntry): boolean {
+    return !entry.absoluteCountsPending && Number.isSafeInteger(entry.pendingDelta) && entry.pendingDelta !== 0
+  }
+
   function buildBufferedCountData(entry: JobUpdateThrottleEntry): EntityData<ProgressJob> {
-    if (entry.absoluteCountsPending || !Number.isSafeInteger(entry.pendingDelta)) {
-      return { processedCount: entry.job.processedCount }
-    }
-    if (entry.pendingDelta !== 0) {
+    if (usesDeltaWrite(entry)) {
       // Atomic SQL increment: concurrent writers on other instances never lose deltas.
       return { processedCount: raw(`processed_count + ${entry.pendingDelta}`) }
     }
+    if (entry.absoluteCountsPending || !Number.isSafeInteger(entry.pendingDelta)) {
+      return { processedCount: entry.job.processedCount }
+    }
     return {}
+  }
+
+  // After an atomic `processed_count + n` write, the local snapshot may undercount
+  // deltas contributed by other instances. Callers gate on the RETURNED count (e.g. the
+  // search reindex completion check), so the snapshot must adopt the database aggregate.
+  async function adoptPersistedCounts(snapshot: ProgressJob, ctx: ProgressServiceContext): Promise<void> {
+    const persisted = await loadFreshJob(snapshot.id, ctx)
+    if (!persisted) return
+    snapshot.processedCount = persisted.processedCount
   }
 
   async function persistAndMaybeBroadcast(entry: JobUpdateThrottleEntry, ctx: ProgressServiceContext): Promise<ProgressJob> {
@@ -129,10 +144,14 @@ export function createProgressService(em: EntityManager, eventBus: { emit: (even
       broadcastMinIntervalMs <= 0 ||
       now - entry.lastBroadcastAt >= broadcastMinIntervalMs ||
       Math.abs(job.progressPercent - entry.lastBroadcastPercent) >= 1
-    const shouldPersist = shouldBroadcast || now - entry.lastPersistedAt >= HEARTBEAT_INTERVAL_MS
+    // A locally-complete job must always persist: completion gates keyed on the
+    // returned count would otherwise miss the final buffered increment.
+    const reachedTotalLocally = Boolean(job.totalCount && job.processedCount >= job.totalCount)
+    const shouldPersist = shouldBroadcast || reachedTotalLocally || now - entry.lastPersistedAt >= HEARTBEAT_INTERVAL_MS
 
     if (!shouldPersist) return job
 
+    const deltaWrite = usesDeltaWrite(entry)
     const data: EntityData<ProgressJob> = {
       progressPercent: job.progressPercent,
       totalCount: job.totalCount ?? null,
@@ -152,6 +171,16 @@ export function createProgressService(em: EntityManager, eventBus: { emit: (even
       forgetJobThrottle(job.id)
       const fresh = await loadFreshJob(job.id, ctx)
       return fresh ?? job
+    }
+
+    if (deltaWrite) {
+      await adoptPersistedCounts(job, ctx)
+      if (job.totalCount) {
+        job.progressPercent = calculateProgressPercent(job.processedCount, job.totalCount)
+        if (job.startedAt) {
+          job.etaSeconds = calculateEta(job.processedCount, job.totalCount, job.startedAt)
+        }
+      }
     }
 
     entry.pendingDelta = 0
@@ -202,7 +231,7 @@ export function createProgressService(em: EntityManager, eventBus: { emit: (even
 
     async startJob(jobId, ctx) {
       const job = await em.findOneOrFail(ProgressJob, jobScopeFilter(jobId, ctx), { disableIdentityMap: true })
-      if (job.status === 'cancelled' || job.status === 'completed') {
+      if (job.status === 'running' || job.status === 'cancelled' || job.status === 'completed') {
         return job
       }
 
@@ -338,6 +367,9 @@ export function createProgressService(em: EntityManager, eventBus: { emit: (even
         return fresh ?? job
       }
 
+      if (entry && usesDeltaWrite(entry)) {
+        await adoptPersistedCounts(snapshot, ctx)
+      }
       snapshot.status = 'completed'
       snapshot.finishedAt = now
       snapshot.progressPercent = 100
@@ -393,6 +425,9 @@ export function createProgressService(em: EntityManager, eventBus: { emit: (even
         return fresh ?? job
       }
 
+      if (entry && usesDeltaWrite(entry)) {
+        await adoptPersistedCounts(snapshot, ctx)
+      }
       snapshot.status = 'failed'
       snapshot.finishedAt = now
       snapshot.errorMessage = input.errorMessage

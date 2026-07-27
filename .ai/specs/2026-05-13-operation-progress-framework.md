@@ -183,12 +183,37 @@ type ProgressUpdateDetail = {
 
 Optional display fields may include `description`, `meta`, `etaSeconds`, `startedAt`, `finishedAt`, `errorMessage`, and `cancellable`.
 
+### Multi-Instance Concurrency Semantics
+
+`progressService` is safe to run across any number of app and worker instances. All guarantees are enforced with status-guarded `nativeUpdate` writes (compare-and-swap): a write that matches zero rows lost the race, returns the fresh row, and emits no events.
+
+**Status transition matrix** (CAS source states → target):
+
+| Transition | Allowed from | Notes |
+|------------|--------------|-------|
+| `startJob` → `running` | `pending`, `failed` | An already-`running` job is an idempotent no-op (no event, no `startedAt` reset), so concurrent starters and queue redeliveries emit exactly one `progress.job.started`. `failed → running` intentionally allows queue retries and recovery from a wrong stale sweep. `completed`/`cancelled` are never resurrected. |
+| `completeJob` → `completed` | `pending`, `running`, `failed` | `failed → completed` lets a job wrongly swept as stale (worker alive but slow) converge to its true outcome. `cancelled` is never overwritten; already-`completed` is idempotent (no duplicate event). |
+| `failJob` → `failed` | `pending`, `running` | Terminal outcomes are never overwritten by a late failure. |
+| `cancelJob` / `markCancelled` → `cancelled` | `pending`, `running`, `failed` (`cancelJob`: `pending` cancels immediately, `running` only sets `cancelRequestedAt`) | Cancelling a job that just finished is a benign no-op, not an error. |
+| `updateProgress` / `incrementProgress` | `pending`, `running` | Once another process finishes/cancels a job, buffered updaters observe the zero-row CAS, drop their buffer, and stop writing. |
+
+**Atomic increments and return semantics.** `incrementProgress` deltas persist as SQL-side increments (`processed_count = processed_count + n`), so concurrent writers never lose counts. After a delta write the service re-reads the row and the **returned job and broadcast payload carry the database aggregate**, not the caller's local view — completion gates keyed on the returned count (e.g. the search reindex `processedCount >= totalCount` check) depend on this. A call whose local count reaches `totalCount` always persists immediately, bypassing the broadcast-coalescing window. `updateProgress` with an explicit `processedCount` is an absolute (last-writer-wins) set.
+
+**Cancellation observation.** `isCancellationRequested` and all lifecycle reads bypass the MikroORM identity map (`disableIdentityMap`), so a worker polling on its own `EntityManager` always sees a cancellation requested from another process.
+
+**Stale sweep policy.** `markStaleJobsFailed` re-checks the staleness condition per row inside the CAS, so concurrent sweepers (it runs in every `GET /api/progress/active` request) emit exactly one `progress.job.failed` per job, and events fire only after the database write commits. Besides heartbeat-stale `running` jobs (`STALE_JOB_TIMEOUT_SECONDS`, 60s), the sweep also fails `pending` jobs that never started within `STALE_PENDING_TIMEOUT_SECONDS` (15 min) — orphaned by a failed enqueue or a worker crash before `startJob`. A late queue delivery still recovers such a job via the `failed → running` start transition.
+
+**Heartbeat durability.** Broadcast coalescing (`OM_PROGRESS_BROADCAST_MIN_INTERVAL_MS`) throttles only event emission; heartbeats persist at least every `HEARTBEAT_INTERVAL_MS` (5s), so no knob value can starve the stale sweep.
+
 ## Testing Plan
 
 - Unit: `runBulkDelete` emits start, step, and terminal progress events.
 - Unit: future `runBulkOperation` handles success, partial failure, full failure, and empty input.
 - Unit: `ProgressTopBar` hooks retain `client:*` jobs while merging `/api/progress/active` results.
 - Unit: DataTable prop bulk action handles `{ progressJobId }` by clearing selection and showing the standard “started” flash.
+- Unit: CAS transition guards — lost races return the fresh row without emitting; terminal outcomes are never overwritten (`progressService.test.ts`).
+- Unit: stateful shared-row regressions with two service instances — the returned/broadcast increment count reaches the shared total (search completion gate), and concurrent `startJob` racers produce exactly one winner and one `progress.job.started` event.
+- Unit: stale sweep — per-row CAS emits once across concurrent sweepers; pending jobs that never started are failed after `STALE_PENDING_TIMEOUT_SECONDS`.
 - Integration: catalog products selected bulk delete returns `progressJobId` and appears in the top bar.
 - Integration: customers people/companies/deals selected bulk delete emits visible progress and preserves undo banner metadata.
 
@@ -218,3 +243,4 @@ Optional display fields may include `description`, `meta`, `etaSeconds`, `starte
 | Date | Change |
 |------|--------|
 | 2026-05-13 | Created framework spec to make progress mandatory for bulk and future long-running operations. |
+| 2026-07-27 | Documented multi-instance concurrency semantics: CAS status-transition matrix, atomic `processed_count + n` increments with database-aggregate return/broadcast counts, identity-map-free cancellation observation, per-row idempotent stale sweep plus stale-pending policy (`STALE_PENDING_TIMEOUT_SECONDS`), heartbeat persistence decoupled from broadcast coalescing, and the stateful shared-row regression coverage. |

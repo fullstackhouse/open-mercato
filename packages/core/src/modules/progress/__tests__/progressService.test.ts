@@ -84,13 +84,30 @@ describe('progress service', () => {
     expect(em.findOneOrFail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'job-1' }), detached)
     expect(em.nativeUpdate).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ id: 'job-1', status: { $in: ['pending', 'running', 'failed'] } }),
+      expect.objectContaining({ id: 'job-1', status: { $in: ['pending', 'failed'] } }),
       expect.objectContaining({ status: 'running' })
     )
     expect(eventBus.emit).toHaveBeenCalledWith(
       PROGRESS_EVENTS.JOB_STARTED,
       expect.objectContaining({ jobId: 'job-1', jobType: 'import', tenantId: baseCtx.tenantId })
     )
+  })
+
+  it('startJob — treats an already-running job as an idempotent no-op', async () => {
+    const em = buildEm()
+    const eventBus = { emit: jest.fn().mockResolvedValue(undefined) }
+
+    const startedAt = new Date(Date.now() - 5000)
+    const job = { id: 'job-1', status: 'running', jobType: 'import', startedAt } as unknown as ProgressJob
+    em.findOneOrFail.mockResolvedValue(job)
+
+    const service = createProgressService(em as never, eventBus)
+    const result = await service.startJob('job-1', baseCtx)
+
+    expect(result.status).toBe('running')
+    expect(result.startedAt).toBe(startedAt)
+    expect(em.nativeUpdate).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   it('startJob — does not resurrect a completed job (at-least-once queue redelivery)', async () => {
@@ -1181,6 +1198,172 @@ describe('progress service — broadcast coalescing (#2972)', () => {
       PROGRESS_EVENTS.JOB_COMPLETED,
       expect.objectContaining({ jobId: 'job-1', processedCount: 7, progressPercent: 100 })
     )
+  })
+})
+
+describe('progress service — multi-instance shared-row races (#4537 review)', () => {
+  const originalInterval = process.env.OM_PROGRESS_BROADCAST_MIN_INTERVAL_MS
+
+  afterEach(() => {
+    if (originalInterval === undefined) {
+      delete process.env.OM_PROGRESS_BROADCAST_MIN_INTERVAL_MS
+    } else {
+      process.env.OM_PROGRESS_BROADCAST_MIN_INTERVAL_MS = originalInterval
+    }
+  })
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockFindOneWithDecryption.mockReset()
+  })
+
+  // Simulates one database row shared by multiple service instances: reads return
+  // detached copies, and nativeUpdate evaluates the status guard against the CURRENT
+  // row state (not the caller's stale snapshot) and applies `processed_count + n`
+  // fragments as true SQL-side increments.
+  const buildSharedRowEm = (row: Record<string, unknown>) => {
+    const matchesGuard = (where: Record<string, unknown>) => {
+      if (where.id !== undefined && where.id !== row.id) return false
+      const statusCondition = where.status as string | { $in?: string[] } | undefined
+      if (typeof statusCondition === 'string' && row.status !== statusCondition) return false
+      if (
+        statusCondition &&
+        typeof statusCondition === 'object' &&
+        Array.isArray(statusCondition.$in) &&
+        !statusCondition.$in.includes(row.status as string)
+      ) {
+        return false
+      }
+      if (where.cancellable !== undefined && row.cancellable !== where.cancellable) return false
+      return true
+    }
+    return {
+      create: jest.fn(),
+      persist: jest.fn(() => ({ flush: jest.fn() })),
+      flush: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn(async () => ({ ...row })),
+      findOneOrFail: jest.fn(async () => ({ ...row })),
+      nativeUpdate: jest.fn(async (_entity: unknown, where: Record<string, unknown>, data: Record<string, unknown>) => {
+        if (!matchesGuard(where)) return 0
+        for (const [key, value] of Object.entries(data)) {
+          if (key === 'processedCount' && value != null && typeof value === 'object') {
+            const fragment = String((value as { sql?: unknown }).sql ?? '')
+            const deltaMatch = fragment.match(/processed_count \+ (-?\d+)/)
+            row.processedCount = Number(row.processedCount ?? 0) + Number(deltaMatch?.[1] ?? 0)
+          } else {
+            row[key] = value
+          }
+        }
+        return 1
+      }),
+    }
+  }
+
+  it('incrementProgress — returned/broadcast count reaches the shared total across two instances', async () => {
+    process.env.OM_PROGRESS_BROADCAST_MIN_INTERVAL_MS = '0'
+    const row: Record<string, unknown> = {
+      id: 'job-1',
+      tenantId: baseCtx.tenantId,
+      jobType: 'reindex',
+      status: 'running',
+      processedCount: 6,
+      totalCount: 10,
+      progressPercent: 60,
+      startedAt: new Date(Date.now() - 10_000),
+      meta: null,
+    }
+    const em = buildSharedRowEm(row)
+    const busA = { emit: jest.fn().mockResolvedValue(undefined) }
+    const busB = { emit: jest.fn().mockResolvedValue(undefined) }
+    const serviceA = createProgressService(em as never, busA)
+    const serviceB = createProgressService(em as never, busB)
+
+    const firstB = await serviceB.incrementProgress('job-1', 1, baseCtx)
+    expect(firstB.processedCount).toBe(7)
+
+    const firstA = await serviceA.incrementProgress('job-1', 2, baseCtx)
+    expect(firstA.processedCount).toBe(9)
+
+    // B's cached snapshot still says 7; its local estimate (8) undercounts the row (9).
+    // The returned count must be the database aggregate (10), or completion gates keyed
+    // on `processedCount >= totalCount` (search reindex) would never fire.
+    const finalB = await serviceB.incrementProgress('job-1', 1, baseCtx)
+    expect(row.processedCount).toBe(10)
+    expect(finalB.processedCount).toBe(10)
+    expect(finalB.progressPercent).toBe(100)
+    expect(busB.emit).toHaveBeenLastCalledWith(
+      PROGRESS_EVENTS.JOB_UPDATED,
+      expect.objectContaining({ jobId: 'job-1', processedCount: 10, progressPercent: 100 })
+    )
+  })
+
+  it('incrementProgress — a locally-complete increment persists even inside the coalescing window', async () => {
+    process.env.OM_PROGRESS_BROADCAST_MIN_INTERVAL_MS = '1000000'
+    const row: Record<string, unknown> = {
+      id: 'job-1',
+      tenantId: baseCtx.tenantId,
+      jobType: 'import',
+      status: 'running',
+      processedCount: 996,
+      totalCount: 1000,
+      progressPercent: 99,
+      startedAt: new Date(Date.now() - 10_000),
+      meta: null,
+    }
+    const em = buildSharedRowEm(row)
+    const eventBus = { emit: jest.fn().mockResolvedValue(undefined) }
+    const service = createProgressService(em as never, eventBus)
+
+    await service.incrementProgress('job-1', 2, baseCtx) // leading edge: persist + broadcast (percent 100)
+    expect(em.nativeUpdate).toHaveBeenCalledTimes(1)
+    expect(eventBus.emit).toHaveBeenCalledTimes(1)
+
+    // Same percent, inside the broadcast window, inside the heartbeat window — but the
+    // local count reached totalCount, so the final increment must not stay buffered.
+    const result = await service.incrementProgress('job-1', 2, baseCtx)
+    expect(em.nativeUpdate).toHaveBeenCalledTimes(2)
+    expect(row.processedCount).toBe(1000)
+    expect(result.processedCount).toBe(1000)
+  })
+
+  it('startJob — exactly one winner and one JOB_STARTED across two racing instances', async () => {
+    const row: Record<string, unknown> = {
+      id: 'job-1',
+      tenantId: baseCtx.tenantId,
+      jobType: 'import',
+      status: 'pending',
+      processedCount: 0,
+      totalCount: null,
+      progressPercent: 0,
+      startedAt: null,
+      meta: null,
+    }
+    const em = buildSharedRowEm(row)
+    const busA = { emit: jest.fn().mockResolvedValue(undefined) }
+    const busB = { emit: jest.fn().mockResolvedValue(undefined) }
+    const serviceA = createProgressService(em as never, busA)
+    const serviceB = createProgressService(em as never, busB)
+
+    // B reads the job while it is still pending (racing read), then A wins the start.
+    const staleReadForB = { ...row } as ProgressJob
+    const resultA = await serviceA.startJob('job-1', baseCtx)
+    expect(resultA.status).toBe('running')
+    const startedAtByA = row.startedAt
+
+    em.findOneOrFail.mockResolvedValueOnce(staleReadForB as never)
+    const resultB = await serviceB.startJob('job-1', baseCtx)
+
+    expect(resultB.status).toBe('running')
+    expect(row.startedAt).toBe(startedAtByA)
+    expect(busA.emit).toHaveBeenCalledTimes(1)
+    expect(busA.emit).toHaveBeenCalledWith(PROGRESS_EVENTS.JOB_STARTED, expect.objectContaining({ jobId: 'job-1' }))
+    expect(busB.emit).not.toHaveBeenCalled()
+
+    // A redelivered start against the now-running job is a no-op, not a third event.
+    const redelivered = await serviceB.startJob('job-1', baseCtx)
+    expect(redelivered.status).toBe('running')
+    expect(busB.emit).not.toHaveBeenCalled()
   })
 })
 
