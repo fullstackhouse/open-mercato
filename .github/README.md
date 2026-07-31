@@ -1,9 +1,13 @@
-# FSH delivery branch
+# Open Mercato — FSH delivery branch
 
-This branch (`fsh`) is [Full Stack House](https://fullstack.house)'s delivery branch for
-Open Mercato. It carries **only patches that are already open as pull requests upstream**,
-so that client deployments don't have to wait for an upstream release to pick up a fix we
-have already written.
+> You are looking at the `fsh` branch of [Full Stack House](https://fullstack.house)'s fork
+> of Open Mercato. The project itself lives at
+> [`open-mercato/open-mercato`](https://github.com/open-mercato/open-mercato) — go there for
+> the real README, issues and pull requests.
+
+This branch carries **only patches that are already open as pull requests upstream**, so
+that client deployments don't have to wait for an upstream release to pick up a fix we have
+already written.
 
 It is **not** a fork of the project in any other sense: no FSH-only features, no divergent
 roadmap, no renamed packages beyond the publishing scope below. Every commit here is meant
