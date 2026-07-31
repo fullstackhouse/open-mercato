@@ -1,140 +1,214 @@
-# SPEC-072: Recipient-locale seam for system emails and notification delivery
+# SPEC-072: Recipient-locale rendering for system emails and notifications
+
+## TLDR
+
+Open Mercato core renders system emails and notification mail in the
+**initiator's request locale** (or a global default), never the **recipient's
+stored language**. Give core a stored per-user locale and a backward-compatible
+recipient-locale seam so mail renders in the recipient's language out of the box,
+with an optional override. **Phase 1 (auth emails) is implemented now; Phase 2
+(notification delivery) is deferred until after the upstream notification-pipeline
+rewrite `open-mercato/open-mercato#4326`.**
 
 ## Problem
 
-Open Mercato core renders three classes of system message keyed on the
-**initiator's request locale** (or a single global default), never on the
-**recipient's stored language**. Any OM app whose users have a per-user language
-preference therefore sends wrong-language mail on background sends and cross-user
-sends — most visibly, an invitation renders in the *inviting admin's* interface
-language rather than the *invitee's* preference.
+Core renders three classes of system message keyed on the **initiator's request
+locale** (or a single global default), never on the **recipient's stored
+language**. Any OM app whose users have a per-user language preference sends
+wrong-language mail on background sends and cross-user sends — most visibly, an
+invitation renders in the *inviting admin's* interface language rather than the
+*invitee's* preference.
 
 This is a platform-level gap, not an app concern: core owns the render, so no
 downstream app can fix it without a seam. It affects every multi-locale OM
-deployment. (Tournee — EN/PL, fallback PL — is the concrete example that surfaced
-it; see § Example consumer.)
+deployment. Two independent apps hit it — **Tournee** (EN/PL) and **Covo**; the
+latter worked around it by abandoning the notification channel and sending mail
+inline via `sendEmail`. (See § Example consumers.)
 
-The three affected send paths in `@open-mercato/core`:
+Root cause, confirmed in core:
 
-1. **Password reset** — `modules/auth/api/reset.ts` renders and sends inline via
-   `resolveTranslations()` (request locale); no pre-send event, no
-   recipient-locale parameter.
-2. **Brand-new invitee** — `modules/auth/commands/users.ts` (`auth.users.create`
-   with `sendInviteEmail: true`) sends inline via `resolveTranslations()`. Its
-   validator requires `password || sendInviteEmail`, so a password-less invite
-   cannot pass `sendInviteEmail: false` to suppress the core send.
-3. **Notification delivery** —
-   `modules/notifications/subscribers/deliver-notification` renders through a
-   private, non-exported `resolveNotificationCopy` that calls
-   `loadDictionary(defaultLocale)` once, with no recipient input and no
-   DI/callback seam. NOTE: this path is being restructured by
-   `open-mercato/open-mercato#4326` — see § Sequencing & interaction with #4326.
+- **No stored per-user locale.** `User` has no locale/language field; locale is
+  resolved purely per request (`i18n/server.ts` `detectLocale`: cookie →
+  `Accept-Language` → `defaultLocale`). `/api/auth/locale` only sets a cookie.
+- **The three send paths inherit the wrong locale:**
+  1. **Password reset** — `auth/api/reset.ts` uses `resolveTranslations()`
+     (request locale of whoever hit the endpoint).
+  2. **Brand-new invitee** — `auth/commands/users.ts` (`sendInviteToUser`) uses
+     `resolveTranslations()` (the inviting admin's request locale).
+  3. **Notification delivery** — `notifications/subscribers/deliver-notification`
+     hardcodes `loadDictionary(defaultLocale)`; the recipient row is loaded but
+     locale is never read.
+- **No seam.** There is no DI/callback hook for an app to feed a recipient locale
+  into the render; an app would have to override the whole subscriber/route.
 
-## Goal
+## Proposed solution
 
-Add a **backward-compatible recipient-locale seam** across the three paths so a
-downstream app can resolve each recipient's stored locale before the mail is
-rendered. When no host resolver is registered, behavior is byte-for-byte today's
-(request-locale / default). Purely additive across every contract surface.
+### Built-in default + optional override
 
-## Seam design (per path)
+Per maintainer direction (this should work out of the box, not be per-app
+config), core ships both layers:
 
-One consistent shape — an **optional host-registered resolver**, consumed before
-dictionary load, defaulting to existing behavior when unregistered.
+1. **Stored locale** — a core `user_preferences` module: one row per
+   `(user, tenant)` holding `preferred_locale`, set explicitly by the user via
+   `GET`/`PUT /api/user_preferences/me`. Mirrors 1:1 the shape Tournee already
+   built (SPEC-059/P27) so Tournee can drop its app-level satellite and consume
+   core's.
+2. **Recipient-locale resolver seam** — `registerRecipientLocaleResolver(fn)` in
+   `@open-mercato/shared/lib/i18n`, with `fn: (em, userId, tenantId) => Locale |
+   undefined`. The `user_preferences` module registers a default reader over the
+   stored preference; a downstream app may re-register to override (last wins).
+   Signature matches Tournee's `resolveUserLocale(em, userId, tenantId)` exactly,
+   so Tournee registers its resolver verbatim (no adapter) — this also resolves
+   the review note that the hook must expose `em` + `tenantId`.
 
-### Notification delivery
+### Resolution precedence
+
+`resolveTranslationsForRecipient(em, userId, tenantId)` picks the locale as:
+
+1. `OM_FORCE_LOCALE` — ops-level override (same as `detectLocale`).
+2. host-registered resolver result — the recipient's **stored** locale.
+3. `detectLocale()` — request cookie / `Accept-Language` (today's behavior).
+4. `defaultLocale`.
+
+The default resolver returns `undefined` when the user has **no** stored row, so
+paths 3–4 preserve current behavior for users who never set a preference. This is
+what keeps the change non-regressive and upstream-mergeable.
+
+Core's stored default is the platform `defaultLocale` (`en`) — not Tournee's
+historical `pl`. Apps needing a different fallback override the resolver rather
+than changing this default.
+
+## Phasing
+
+- **Phase 1 — auth emails (implemented now).** Password reset + new-invitee.
+  Independent of the notification-pipeline rewrite.
+- **Phase 2 — notification delivery (deferred, after #4326).**
+  `open-mercato/open-mercato#4326` (devices + end-to-end push) rewrites the
+  delivery pipeline this path hooks into — adds a `shouldDeliver` gate, a
+  module-registered channel catalogue, per-`(user, type, channel)` preferences, a
+  `NotificationDeliveryContext` split, **and a per-device locale concept**, and
+  rewrites the `resolveNotificationCopy` path directly. Building path 3 now
+  guarantees a rebase conflict. Phase 2 lands after #4326 merges, reuses the same
+  resolver on the new pipeline, and reconciles with per-device locale (device
+  locale likely wins for push; stored locale drives email / in-app).
+
+## Architecture
+
+Modules stay decoupled: `auth` never imports `user_preferences`. The link is the
+shared registry — `user_preferences` registers the resolver as a load-time side
+effect; `auth` consumes it via `resolveTranslationsForRecipient`. `shared` keeps
+zero domain dependencies (`em` is passed opaquely as `unknown`; the registered
+resolver casts it back).
+
+## Data models
+
+`user_preferences` (new table):
+
+| column | type | notes |
+|---|---|---|
+| `id` | uuid pk | `gen_random_uuid()` |
+| `user_id` | uuid | core auth user id (no FK across modules) |
+| `tenant_id` | uuid | indexed |
+| `preferred_locale` | text | one of the platform `locales` |
+| `created_at` / `updated_at` | timestamptz | |
+
+Unique `(user_id, tenant_id)`. The frozen `User` entity is untouched.
+
+## API contracts
+
+- `GET /api/user_preferences/me` → `{ preferredLocale }` (defaults to platform
+  default when unset). `requireAuth`.
+- `PUT /api/user_preferences/me` `{ preferredLocale }` → `{ preferredLocale }`;
+  `422` on an unsupported locale. `requireAuth`. Routes through the
+  `user_preferences.preference.set` command (undoable).
+
+## Usage (app-side)
+
+**Out of the box** — no wiring. With `user_preferences` enabled (default), a user
+who set their locale receives system mail in that language automatically:
 
 ```
-resolveNotificationLocale(recipientUserId, ctx) => locale | Promise<locale> | undefined
+PUT /api/user_preferences/me   { "preferredLocale": "en" }
 ```
 
-Consumed in the `notifications:deliver` subscriber before the copy is rendered;
-unregistered ⇒ `defaultLocale` (current behavior). Then the selected dictionary
-loads once per delivered notification.
+**Override** — an app that stores locale elsewhere registers its own resolver:
 
-**`ctx` must carry what the resolver needs to look up a stored preference —
-concretely a DI container / `EntityManager` handle and `tenantId`** (the
-subscriber already resolves both). Resolving a recipient's stored locale is a
-tenant-scoped DB lookup, not a pure function of the user id; a hook shaped as
-`(recipientUserId) => locale` alone cannot drive a real preference store without
-new plumbing. The seam must therefore expose `em` + `tenantId` on `ctx` (or take
-`tenantId` as an explicit parameter).
+```ts
+import { registerRecipientLocaleResolver } from '@open-mercato/shared/lib/i18n/server'
 
-### Password reset
+registerRecipientLocaleResolver(async (em, userId, tenantId) => {
+  return myStore.getLocale(em, userId, tenantId) // Locale | undefined
+})
+```
 
-`auth/api/reset.ts` — same resolver-hook shape (resolve recipient locale by user
-id before rendering `ResetPasswordEmail`). Same input constraint: `em` +
-`tenantId` must be reachable (both available once the route looks up the user by
-email). Acceptable alternatives if maintainers prefer: a recipient-locale render
-parameter, or a DI-overridable reset-mailer service.
+## Implementation (Phase 1)
 
-### New invitee
+Branch `feat/recipient-locale-auth-emails`:
 
-`auth/commands/users.ts` — either the same recipient-locale seam on the inline
-send, or a "mint invite token but do not send" option (relax the
-`password || sendInviteEmail` validator so a password-less invite can pass
-`sendInviteEmail: false`) so the app owns and localizes the send. Maintainers
-pick the least invasive.
+- `packages/shared/src/lib/i18n/recipient-locale.ts` — registry +
+  `resolveRecipientLocale` (ORM-agnostic, fail-closed).
+- `packages/shared/src/lib/i18n/server.ts` — `resolveTranslationsForRecipient`,
+  re-export of `registerRecipientLocaleResolver`.
+- `packages/core/src/modules/user_preferences/` — `UserPreference` entity +
+  migration/snapshot, `preference.set` command, `GET`/`PUT
+  /api/user_preferences/me`, `resolveUserLocale(s)`, default resolver
+  registration.
+- `packages/core/src/modules/auth/api/reset.ts` and `auth/commands/users.ts` —
+  render via `resolveTranslationsForRecipient`.
+- `apps/mercato/src/modules.ts` — `user_preferences` enabled by default.
 
-## Sequencing & interaction with #4326
+Validated: `build:packages`, `generate`, `typecheck`, `lint` (0 errors).
 
-`open-mercato/open-mercato#4326` (devices + end-to-end push) rewrites the
-notification delivery pipeline this seam hooks into: it adds a `shouldDeliver`
-gate on every channel, a module-registered channel catalogue, per-`(user, type,
-channel)` preferences, a `NotificationDeliveryContext` split, **and a per-device
-locale concept**. It rewrites the `resolveNotificationCopy` path directly.
+## Risks & impact review
 
-Therefore:
-
-- **Paths 1 and 2 (auth emails) are independent of #4326** and can be
-  contributed at any time.
-- **Path 3 (notification delivery) should land after #4326 merges** and be
-  designed on top of the restructured pipeline: resolve recipient locale once per
-  delivery, before the per-channel render, reconciled with #4326's per-device
-  locale (device locale, when present, likely takes precedence for push;
-  recipient stored locale drives email / in-app). Building path 3 against today's
-  `resolveNotificationCopy` guarantees a rebase conflict and risks the wrong seam
-  location.
-- Open a coordinating note/issue on #4326 so the maintainers place the locale
-  hook inside the new gate rather than the old copy function.
-
-## Non-goals
-
-- No change to stored in-app notification records — they stay language-neutral
-  keys + variables, localized only at render time.
-- No new locale storage mechanism — the seam only *resolves* a locale the host
-  already stores.
+- **Behavior change for users with a stored preference** (intended): mail now
+  follows the recipient, not the initiator. Users without a stored preference are
+  unaffected (fall back to request locale). Severity low; mitigation is the
+  `undefined`-on-absence default.
+- **Contract surface** — additive only: new module, new optional resolver, new
+  table. Frozen `User` untouched. Residual risk low.
+- **Phase 2 sequencing** — building the notification path before #4326 merges
+  risks conflicts; mitigated by deferring Phase 2.
 
 ## Backward compatibility
 
-Additive across all 13 contract surfaces (per `BACKWARD_COMPATIBILITY.md`). New
-optional resolver registration; unregistered ⇒ unchanged behavior. No signature
-break: any new `ctx` field is additive, any validator relaxation widens (never
-narrows) accepted input.
+Additive across all 13 contract surfaces (`BACKWARD_COMPATIBILITY.md`).
+Unregistered resolver + no stored preference ⇒ byte-for-byte today's behavior.
 
 ## Tests and acceptance
 
-- Default path unchanged when no resolver is registered (all three paths).
-- A registered resolver selects the recipient's locale for each path.
-- Notification path: two recipients with different stored locales each render in
-  their own locale.
+- Reset: user with stored `pl` → PL mail regardless of request locale.
+- Invite: invitee with stored `en`, admin on PL → EN invite (language follows the
+  recipient, not the initiator).
+- No stored preference + no resolver → today's behavior (request locale).
+- Registered override takes precedence over the stored preference.
+- Phase 2: two recipients with different stored locales each render in their own.
 
-## Example consumer (Tournee)
+## Example consumers
 
-Tournee already built the recipient-locale rendering (SPEC-059 P28/P29) but has
-no core seam to hook it in:
+- **Tournee** (SPEC-059/P27–P29) already stores per-user locale in an app-level
+  `user_preferences` satellite and has localized send services, wired only into
+  the one path it owns (org re-invite). The three core-owned paths still fall back
+  to request/default because core had no seam. Post-release: bump
+  `@open-mercato/core`, drop the satellite (or keep a PL-fallback override),
+  remove workarounds.
+- **Covo** hit the same gap and bypassed the notification channel with inline
+  `sendEmail` — evidence this is a platform problem, not a single-app quirk.
 
-- `user_preferences/lib/localized-auth-mail.ts` (`sendLocalizedAuthEmail`)
-- `user_preferences/lib/localized-notification-delivery.ts`
-  (`resolveNotificationLocale(em, recipientUserId, tenantId)` — the tenant-scoped
-  lookup that dictates the `ctx` requirement above)
+## Delivery workflow
 
-Once this seam ships, Tournee registers a thin adapter that reads `em` +
-`tenantId` off `ctx` and calls its existing implementation; the wrong-language
-behavior disappears with no further app-side logic. Tournee's own migration spec
-(SPEC-063) tracks the dependency bump, wiring, and interim English-only fallback
-— that scheduling is a Tournee concern and stays out of this spec.
+Contribution fork (`fullstackhouse/open-mercato`) → internal FSH review →
+upstream PR to `open-mercato/open-mercato` → on release, downstream apps bump the
+dependency. Not an eject: the change lands back upstream.
+
+## Changelog
+
+- 2026-07-31 — Reframed as an OM-platform spec (Tournee/Covo as example
+  consumers); added built-in stored locale + resolver design, resolution
+  precedence, phasing (emails now / notifications after #4326), and usage
+  examples. Phase 1 implemented on `feat/recipient-locale-auth-emails`.
+- 2026-07-30 — Initial draft (recipient-locale seam across three paths).
 
 ## Status
 
-Draft
+Phase 1 implemented; Phase 2 deferred pending #4326. Draft for review.
