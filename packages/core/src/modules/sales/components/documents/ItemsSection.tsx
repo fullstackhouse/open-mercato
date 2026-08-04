@@ -238,6 +238,10 @@ export function SalesDocumentItemsSection({
                     typeof (item.catalog_snapshot as Record<string, unknown>).name === "string"
                   ? (item.catalog_snapshot as Record<string, unknown>).name as string
                   : null;
+            const description =
+              typeof item.description === "string" && item.description.trim()
+                ? item.description
+                : null;
             const quantity = normalizeNumber(item.quantity, 0);
             const uomFields = getUomFields(item);
             const quantityUnit = canonicalizeUnitCode(uomFields.quantityUnit);
@@ -302,6 +306,7 @@ export function SalesDocumentItemsSection({
             const record: SalesLineRecord = {
               id,
               name,
+              description,
               productId:
                 typeof item.product_id === "string" ? item.product_id : null,
               productVariantId:
@@ -722,6 +727,14 @@ export function SalesDocumentItemsSection({
                           {showProductSku ? (
                             <div className="text-xs text-muted-foreground truncate">
                               {showProductSku}
+                            </div>
+                          ) : null}
+                          {item.description ? (
+                            <div
+                              className="text-xs text-muted-foreground line-clamp-2"
+                              title={item.description}
+                            >
+                              {item.description}
                             </div>
                           ) : null}
                         </div>
