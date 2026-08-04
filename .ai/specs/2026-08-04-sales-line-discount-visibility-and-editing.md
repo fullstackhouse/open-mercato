@@ -93,12 +93,14 @@ This ordering is what makes the round trip stable: the stored amount is an *outp
 
 Clamping is unchanged: the resolved discount is bounded to `[0, unit_price_net × quantity]`.
 
-**Request-time basis for absolute amounts.** Today's API semantics for the `discountAmount` request field are per-unit (undocumented, code-only). Rather than silently reinterpret it for existing callers, add one optional, defaulted field to the line create/update schema:
+**Request-time basis for absolute amounts.** Today's API semantics for the `discountAmount` request field are per-unit (undocumented, code-only). Rather than silently reinterpret it for existing callers, add one field to the line create/update schema, optional on the wire and defaulted in the schema itself so the generated OpenAPI advertises the fallback:
 
 ```ts
 // data/validators.ts — linePricingSchema (additive)
-discountAmountBasis: z.enum(['unit', 'line']).optional(),   // default: 'unit'
+discountAmountBasis: z.enum(['unit', 'line']).default('unit'),
 ```
+
+`.default(...)` rather than `.optional()` is deliberate: the field stays omittable for callers, and every downstream consumer reads a defined value, so no code path has to re-apply the fallback during request→snapshot mapping. `z.infer` therefore types the parsed field as `'unit' | 'line'`, not `… | undefined`.
 
 - `'unit'` (default) — today's behavior: the submitted amount is multiplied by quantity. Existing API clients and the Subiekt GT importer are unaffected.
 - `'line'` — the submitted amount **is** the line-total discount. The admin UI always sends `'line'`.
@@ -107,7 +109,7 @@ The basis is a request-time concept only; nothing persists it. Recalculation fro
 
 ### 2. Calculation changes (`lib/calculations.ts`, `commands/documents.ts`)
 
-- `SalesLineSnapshot` gains `discountAmountBasis?: 'unit' | 'line' | null`. Snapshots built from entities (`mapOrderLineEntityToSnapshot`, `mapQuoteLineEntityToSnapshot`) set `'line'`; snapshots built from request input pass the parsed value through, defaulting to `'unit'`.
+- `SalesLineSnapshot` gains `discountAmountBasis?: 'unit' | 'line' | null`, optional here because the type is also constructed by third-party calculators; an absent value reads as `'unit'` inside `buildBaseLineResult`. Snapshots built from entities (`mapOrderLineEntityToSnapshot`, `mapQuoteLineEntityToSnapshot`) set `'line'`; snapshots built from request input carry the schema-defaulted value straight through.
 - `buildBaseLineResult` resolves the discount by the precedence above instead of `discountAmount ?? percent`, treating a `0` amount as "no absolute discount" rather than as an explicit zero.
 - `convertLineCalculationToEntityInput` keeps writing the resolved line total to `discount_amount` and now also writes back the **resolved** `discount_percent` unchanged (`commands/documents.ts:3052-3053` stays semantically as-is).
 - The line-upsert merge (`commands/documents.ts:6834-6837`) stops coalescing an omitted `discountAmount` to `0` — it must fall through to the existing snapshot and then to *absent*, so an omitted amount cannot mask a percent.
@@ -146,7 +148,7 @@ Additive type/schema changes only:
 
 | Surface | Change | Classification |
 |---|---|---|
-| `data/validators.ts` → `linePricingSchema` | `+ discountAmountBasis?: 'unit' \| 'line'` (default `'unit'`) | ADDITIVE |
+| `data/validators.ts` → `linePricingSchema` | `+ discountAmountBasis: z.enum(['unit','line']).default('unit')` — omittable on the wire, always defined after parse | ADDITIVE |
 | `lib/types.ts` → `SalesLineSnapshot` | `+ discountAmountBasis?: 'unit' \| 'line' \| null` | ADDITIVE |
 | `components/documents/lineItemTypes.ts` → `SalesLineRecord` | `+ discountPercent`, `discountAmount`, `promotionCode`, `promotionSnapshot` | ADDITIVE (UI-internal type) |
 | `lib/calculations.ts` → discount resolution | precedence and basis change | **BEHAVIOR CHANGE** — see Risks |
@@ -155,23 +157,34 @@ Additive type/schema changes only:
 
 `POST` / `PUT /api/sales/order-lines` and `/api/sales/quote-lines` (`lib/makeSalesLineRoute.ts`):
 
+Percent-driven (preferred — re-derives correctly after quantity or price changes):
+
 ```jsonc
 {
   "orderId": "…",
   "quantity": 3,
   "unitPriceNet": 10.0,
   "taxRate": 23,
-  // percent-driven (preferred)
   "discountPercent": 10,
-  "discountAmount": 0,
-  // or amount-driven, whole line
-  "discountPercent": 0,
-  "discountAmount": 15.0,
-  "discountAmountBasis": "line"   // optional; omitted ⇒ "unit" (legacy per-unit reading)
+  "discountAmount": 0
 }
 ```
 
-Responses are unchanged in shape: `discount_amount` and `discount_percent` are already projected by the list route (`:186-187`) and already typed in the OpenAPI line schema (`:305-306`). `discount_amount` continues to mean the resolved line-total discount — the same reading integrations get today — it simply stops drifting. The OpenAPI request schema picks up `discountAmountBasis` automatically from the validator.
+Amount-driven, whole line:
+
+```jsonc
+{
+  "orderId": "…",
+  "quantity": 3,
+  "unitPriceNet": 10.0,
+  "taxRate": 23,
+  "discountPercent": 0,
+  "discountAmount": 15.0,
+  "discountAmountBasis": "line"   // omit ⇒ "unit": 15.0 is read per unit (legacy behavior)
+}
+```
+
+Responses are unchanged in shape: `discount_amount` and `discount_percent` are already projected by the list route (`:186-187`) and already typed in the OpenAPI line schema (`:305-306`). `discount_amount` continues to mean the resolved line-total discount — the same reading integrations get today — it simply stops drifting. The OpenAPI request schema picks up `discountAmountBasis` automatically from the validator, including its `'unit'` default, so the fallback is documented rather than implied.
 
 ## Phasing
 
@@ -254,3 +267,4 @@ Checklist for the implementing change:
 ## Changelog
 
 - **2026-08-04** — Initial draft. Documented the four existing layers of discount support and the five gaps; verified defects 4 (per-unit input vs line-total storage ⇒ non-idempotent recalculation) and 5 (`discountPercent` suppressed by a `0` `discount_amount`) by executing the calculation logic; proposed the percent-first precedence, the additive `discountAmountBasis` request field, the self-hiding Discount column, and the percent-or-amount dialog control. No implementation.
+- **2026-08-04** — Review follow-up: `discountAmountBasis` now carries its `'unit'` fallback via `z.enum(...).default('unit')` (was `.optional()` with the default described only in prose, which would not have reached the generated OpenAPI); split the single request example into separate percent-driven and amount-driven objects instead of repeating keys in one invalid JSONC block.
