@@ -13,6 +13,26 @@ export type AddressValue = {
   postalCode?: string | null
   country?: string | null
   companyName?: string | null
+  /**
+   * Contact details that belong to the ADDRESS rather than to the customer: who to call about this
+   * delivery, and the tax id this invoice address was billed under. They are deliberately NOT part
+   * of the postal lines — see `formatAddressLines` — and render only through `AddressView`, and only
+   * when the caller supplies labels for them.
+   *
+   * Optional and unmodelled by `CustomerAddress` / `SalesDocumentAddress` today: an address snapshot
+   * is stored as a free-form JSON record, so integrations already carry these keys and simply had no
+   * way to show them.
+   */
+  phone?: string | null
+  email?: string | null
+  taxId?: string | null
+}
+
+/** Labels for the contact block. A key that is absent hides its field, so this is opt-in per field. */
+export type AddressContactLabels = {
+  phone?: string
+  email?: string
+  taxId?: string
 }
 
 export type AddressJsonShape = {
@@ -100,21 +120,69 @@ export function formatAddressString(address: AddressValue, format: AddressFormat
   return formatAddressLines(address, format).filter(Boolean).join(separator)
 }
 
+/**
+ * The address's own contact details, as `[label, value]` pairs — only the fields the caller labelled
+ * AND the address actually carries. Exported so a caller can ask "is there anything to show?" without
+ * rendering.
+ *
+ * Kept out of `formatAddressLines` on purpose: those lines are the POSTAL address, and
+ * `formatAddressString` joins them with ", " into one-line summaries used in pickers and table cells.
+ * A tax id or phone number spliced into that string would be wrong in every one of those places.
+ */
+export function formatAddressContactPairs(
+  address: AddressValue,
+  labels: AddressContactLabels | undefined,
+): Array<[string, string]> {
+  if (!labels) return []
+  const pairs: Array<[string, string]> = []
+  const push = (label: string | undefined, value: string | null | undefined) => {
+    if (!label) return
+    const normalized = normalize(value)
+    if (normalized) pairs.push([label, normalized])
+  }
+  push(labels.taxId, address.taxId)
+  push(labels.phone, address.phone)
+  push(labels.email, address.email)
+  return pairs
+}
+
 type AddressViewProps = {
   address: AddressValue
   format: AddressFormatStrategy
   className?: string
   lineClassName?: string
+  /**
+   * Opt in to the contact block by supplying labels. Omitted (the default) renders exactly what this
+   * component always rendered — no extra element, no wrapper, no class changes.
+   *
+   * Labels rather than hardcoded strings because this module is i18n-free by design; the calling
+   * component already has `useT()`.
+   */
+  contactLabels?: AddressContactLabels
+  contactClassName?: string
 }
 
-export function AddressView({ address, format, className, lineClassName }: AddressViewProps): React.ReactElement | null {
+export function AddressView({
+  address,
+  format,
+  className,
+  lineClassName,
+  contactLabels,
+  contactClassName,
+}: AddressViewProps): React.ReactElement | null {
   const lines = formatAddressLines(address, format)
-  if (!lines.length) return null
+  const contact = formatAddressContactPairs(address, contactLabels)
+  if (!lines.length && !contact.length) return null
   return (
     <div className={className}>
       {lines.map((line, index) => (
         <div key={`${index}-${line}`} className={lineClassName}>
           {line}
+        </div>
+      ))}
+      {contact.map(([label, value]) => (
+        <div key={`contact-${label}`} className={contactClassName ?? lineClassName}>
+          {label}: {value}
         </div>
       ))}
     </div>

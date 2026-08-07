@@ -1305,6 +1305,14 @@ export function SalesDocumentAddressesSection({
                       format={addressFormat}
                       className="space-y-1 text-sm"
                       lineClassName="text-sm text-foreground"
+                      // Rendered only for addresses that actually carry them; an address with no
+                      // contact details looks exactly as it did before.
+                      contactLabels={{
+                        taxId: t('sales.documents.detail.addresses.taxId', 'Tax ID'),
+                        phone: t('sales.documents.detail.addresses.phone', 'Phone'),
+                        email: t('sales.documents.detail.addresses.email', 'Email'),
+                      }}
+                      contactClassName="text-sm text-muted-foreground"
                     />
                   </>
                 )}
