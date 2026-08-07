@@ -1,0 +1,310 @@
+# Sales line `discount_amount` — a single, idempotent contract
+
+Status: draft — design decision requested
+Scope: `packages/core/src/modules/sales/{lib/calculations.ts,lib/types.ts,commands/documents.ts,commands/returns.ts,data/validators.ts}`
+Upstream: [open-mercato#5019](https://github.com/open-mercato/open-mercato/issues/5019) (open, no maintainer reply since 2026-08-05), related display-only PR [#5006](https://github.com/open-mercato/open-mercato/pull/5006)
+
+## TLDR
+
+`discount_amount` on sales order/quote lines is **read as a per-unit amount and written as a
+line-total amount, through the same column**. Every recalculation round trip therefore multiplies
+the discount by the line quantity again, and a second defect (`?? 0` coalescing at the two line
+upsert sites) silently kills the percentage path so the discount is dropped entirely.
+
+This spec fixes the meaning of the column, adds the idempotency property that pins it, and specifies
+the code changes needed on **both** the order and quote paths. It is spec-only: no implementation
+lands until the contract below is approved.
+
+## Problem
+
+### The defect in one sentence
+
+`discountAmount` is consumed as **per-unit** and produced as **line-total** by the same calculation
+function, so `calculate(calculate(x)) ≠ calculate(x)` for any line with `quantity ≠ 1`.
+
+### Verified source sites
+
+All line numbers verified on this branch (fork `main` @ `bdf361155`, 2026-08-07).
+
+`packages/core/src/modules/sales/lib/calculations.ts`
+
+| line | what |
+|---|---|
+| 80 | `buildBaseLineResult` — the whole defect lives here |
+| 88–92 | `discountPerUnit = line.discountAmount ?? (discountPercent/100 × unitNet)` — amount wins over percent, and `0` counts as a supplied amount |
+| 94–96 | `discountTotal = clamp(discountPerUnit × quantity, 0, netSubtotalBeforeDiscount)`; `netSubtotal = before − discountTotal` |
+| 101–104 | `grossSubtotal` — a **supplied** `totalGrossAmount` wins verbatim, unlike net, so gross and net can disagree on the same row |
+| 120 | `discountAmount: round(discountTotal)` — the **line total** leaves the function through the same field name that entered it as per-unit |
+| 153 | document rollup: `discountTotal += toNumber(line.discountAmount, 0)` over the *results*, i.e. line totals |
+
+`packages/core/src/modules/sales/commands/documents.ts`
+
+| line | what |
+|---|---|
+| 2834 / 2865 | `mapOrderLineEntityToSnapshot` / `mapQuoteLineEntityToSnapshot` — feed the stored line total straight back in, where it is read as per-unit |
+| 2934 | `createLineSnapshotFromInput` |
+| **2964** | create path: `discountAmount: line.discountAmount ?? null` — coalesces to **`null`** |
+| 3052 | persist: `discountAmount: toNumericString(lineResult.discountAmount) ?? "0"` — writes the **line total** |
+| **6835** | `sales.orders.lines.upsert`: `parsed.discountAmount ?? existingSnapshot?.discountAmount ?? 0` |
+| **7321** | `sales.quotes.lines.upsert`: identical — **any fix must cover both** |
+| 8664 | invoice line creation copies `discountAmount` verbatim from its source line — wrong values propagate downstream into invoices |
+
+Read path: `packages/core/src/modules/sales/api/documents/factory.ts:523-551` →
+`recalculateOrderTotalsForDisplay` (`packages/core/src/modules/sales/commands/returns.ts:204-238`).
+It fires on every **single-order GET** (`items.length === 1`, i.e. `GET /api/sales/orders?id=…`);
+multi-item list responses do not trigger it. It runs on a forked `EntityManager`, so it never
+persists — the wrong number is display-only *on that path*, but the same snapshot mappers feed the
+persisting upsert path.
+
+### Why it stayed invisible: the create/upsert asymmetry
+
+One column produces three different behaviours depending on which command touched the line last.
+
+- **Create** (`:2964`) coalesces a missing amount to **`null`** → `null ?? percent` → the percentage
+  path runs → **the initial write is correct**. Every create-path test passes.
+- **Upsert on a new line** (`:6835`, `:7321`) coalesces to **`0`** → `0 ?? percent` → the percentage
+  is dead → **the discount is dropped entirely**, and `total_net_amount` is stored as the full
+  undiscounted subtotal.
+- **Upsert on an existing line** picks up `existingSnapshot.discountAmount` — the stored **line
+  total** — and feeds it back as per-unit → **re-inflation** by a further factor of `quantity`.
+
+That asymmetry is why the defect survived: it is unreachable from the code path the test suite
+exercises most.
+
+### Field evidence
+
+Measured on a production-scale deployment that imports orders from an ERP — ~4.0M order lines,
+39,269 of them carrying a line discount. (Figures are derived from a client's scrubbed full-scale
+copy; the anonymised framing below is what may be shared outside this repository.)
+
+| bucket | lines | net×(1+VAT) ≠ gross | rate |
+|---|---:|---:|---:|
+| no discount | 3,977,967 | 25,301 | 0.64% ← baseline |
+| discounted, amount consistent | 28,190 | 820 | 2.91% |
+| **discount dropped (`discount_amount = 0`)** | **9,361** | **8,875** | **94.81%** |
+| **re-inflated (amount > qty-correct value)** | **1,718** | 138 | 8.03% |
+
+11,079 lines — **28% of all discounted lines** — store a wrong `total_net_amount`. The
+dropped-discount bucket diverges at **148× the baseline rate**.
+
+Sample rows (net stored as the *undiscounted* subtotal):
+
+| qty | unit net | discount % | stored `discount_amount` | stored net | correct net |
+|---:|---:|---:|---:|---:|---:|
+| 60 | 49.99 | 10% | 0.00 | 2999.40 | 2699.46 |
+| 30 | 26.02 | 25% | 0.00 | 780.60 | 585.45 |
+
+The importer's own gross (kept verbatim by core, `calculations.ts:101-104`) confirms the correct
+net: `2699.46 × 1.08 = 2915.42 ≈` the stored gross of `2915.40`.
+
+**Trigger.** The damage appeared when that deployment switched its sync from delete-and-reappend to
+in-place line reconciliation — i.e. when lines started flowing through `lines.upsert` instead of
+order create. Before the switch: ~2% of touched discounted lines affected and zero re-inflation.
+After: 42% and 1,718 re-inflated. **Any consumer that edits lines rather than recreating orders
+hits this**, which is the severity argument.
+
+## Design
+
+### 1. The column contract (normative)
+
+> `sales_order_lines.discount_amount`, `sales_quote_lines.discount_amount` and
+> `sales_invoice_lines.discount_amount` store the **discount for the whole line** — net, in the
+> line's `currency_code`, quantity-inclusive. It is a **derived cache** of
+> `discount_percent` when a percentage is set, and an authoritative override when it is not.
+>
+> `SalesLineCalculationResult.discountAmount` carries the same meaning: a line total.
+
+This is the meaning the write path (`:3052`) and the document rollup (`:153`) already assume, the
+meaning every existing correct row already holds, and the meaning the API/UI/export surfaces already
+present. Redefining the column as per-unit instead would require rewriting every stored row and
+every downstream consumer; that alternative is rejected in § Alternatives.
+
+Storage is unambiguous. **Input** stays flexible — see the basis flag below.
+
+### 2. Read precedence: percentage first
+
+`buildBaseLineResult` derives the discount as:
+
+```
+if discountPercent is set and ≠ 0:
+    discountTotal = clamp(discountPercent/100 × unitNet × quantity)
+else if discountAmount is set and ≠ 0:
+    discountTotal = clamp(discountAmount interpreted per its basis)
+else:
+    discountTotal = 0
+```
+
+Rationale for percentage-first, and for treating `0` as absent: the column is
+`numeric NOT NULL DEFAULT '0'` (`data/entities.ts:634, 1071, 1521`). A stored `0` cannot be
+distinguished from "no discount supplied", so `discountAmount` can never be a reliable *presence*
+signal on the read-back path. The percentage is the operator's intent; the amount is its cached
+result. Making intent win is the only rule that is stable across a round trip.
+
+**Consequence, deliberate:** this self-heals the 9,361 dropped-discount rows without a data
+migration — they still carry the correct `discount_percent`, and the next recalculation restores the
+discount. See § Row reconciliation for the rows it does *not* heal.
+
+**Cost, deliberate:** a caller who sends both a percent and a deliberately different amount (an ERP
+rounding its own figure) loses the amount. That caller must send `discountPercent: 0` alongside the
+explicit amount. This is the behaviour change that most needs maintainer sign-off.
+
+### 3. `discountAmountBasis` — input compatibility without storage ambiguity
+
+```ts
+// packages/core/src/modules/sales/lib/types.ts
+export type SalesLineDiscountBasis = 'unit' | 'line'
+
+export type SalesLineSnapshot = {
+  // …
+  discountAmount?: number | null
+  /** How to interpret a supplied `discountAmount`. Defaults to 'unit' for API input. */
+  discountAmountBasis?: SalesLineDiscountBasis | null
+}
+```
+
+| producer | basis | why |
+|---|---|---|
+| `createLineSnapshotFromInput` (`:2934`) and the two `lines.upsert` paths, from `parsed.*` | `'unit'` (default) | today's documented API input meaning; existing callers unaffected |
+| `mapOrderLineEntityToSnapshot` / `mapQuoteLineEntityToSnapshot` (`:2834`, `:2865`) | **`'line'`** | reconstructing from a persisted row, which by § 1 holds a line total |
+| `existingSnapshot?.discountAmount` fallback inside the upsert paths | **`'line'`** | same origin as above |
+
+This is the single change that closes re-inflation: the value only ever gets multiplied by
+`quantity` on the path where it genuinely arrived per-unit.
+
+Additive optional field on a public type → ADDITIVE-ONLY under `BACKWARD_COMPATIBILITY.md`; no
+deprecation bridge required.
+
+### 4. Fix the `?? 0` coalescing at both upsert sites
+
+`:6835` and `:7321` become `?? null`, mirroring the create path (`:2964`), so "not supplied" stays
+distinguishable from "explicitly zero" for as long as the value is in flight. With § 2 in place this
+is belt-and-braces rather than load-bearing, but leaving `?? 0` in the tree preserves a live trap for
+the next reader.
+
+### 5. Row reconciliation
+
+The issue's "no migration" claim is true for schema and true for code. It is **not** true for data.
+
+| bucket | heals automatically? | how |
+|---|---|---|
+| dropped (`discount_amount = 0`, `discount_percent > 0`) | **yes** | § 2 percentage-first; the next recalculation of the document restores it |
+| re-inflated (`discount_amount > qty-correct value`, `discount_percent > 0`) | **yes** | § 2 ignores the stored amount entirely and re-derives from the percent |
+| amount-only, no percent, re-inflated | **no** | the new reading cannot distinguish an inflated line total from a legitimate one; nothing in the row records how many times it was multiplied |
+
+The third bucket needs an explicit, opt-in operator tool — proposed as
+`yarn mercato sales recompute-line-discounts --dry-run [--tenant <id>]`, which reports lines whose
+stored `total_net_amount` is inconsistent with `unit_price_net × quantity − discount_amount` and,
+without `--dry-run`, rewrites the totals from the stored inputs. It must not run automatically and
+must not touch rows it cannot prove wrong.
+
+**Open question for the maintainer:** whether that CLI belongs in this change, in a follow-up, or not
+in core at all. It is the one piece of scope that is arguably a deployment concern rather than a
+platform one.
+
+### 6. Adjacent: `totalNetAmount` is accepted, validated, then ignored
+
+`SalesLineSnapshot.totalNetAmount` (`lib/types.ts:56`) and the line schemas
+(`data/validators.ts:342, 887`) accept and validate `totalNetAmount`, but `buildBaseLineResult` never
+reads it — only `totalGrossAmount` is honoured (`:101-104`). A caller supplying a correct net watches
+it be silently discarded and recomputed from the defective discount.
+
+Same root-cause family; a schema that rejected unused fields would have surfaced #5019 as a failing
+test years earlier. **No upstream issue exists for it yet.** Out of scope here, worth filing
+separately.
+
+## Alternatives considered
+
+| option | effect | verdict |
+|---|---|---|
+| **A. Column = line total** (this spec) | read path stops multiplying by quantity on the entity→snapshot path; write path unchanged; existing correct rows stay correct | **chosen** |
+| B. Column = per-unit | read path unchanged; write path must persist `discountTotal / quantity`; every existing row's meaning flips; UI, exports, invoice copy (`:8664`) and the document rollup all need updating | rejected — maximal blast radius for no gain |
+| C. Add a second column (`discount_unit_amount`) | unambiguous, but a schema migration, a new contract surface, and two columns that can disagree | rejected — the ambiguity is a reading bug, not a missing field |
+| D. Amount-first precedence with a nullable column | keeps an explicit amount authoritative, but requires migrating `discount_amount` to `NULL`-able and backfilling `0 → NULL`, which is exactly the migration the issue wants to avoid | rejected — revisit only if § 2's cost is judged unacceptable |
+
+## Acceptance criteria
+
+1. **Idempotency (the property that pins the contract).** For any document, recalculating N times
+   equals recalculating once:
+   `calculateDocumentTotals(map(entities)) === calculateDocumentTotals(map(persist(calculateDocumentTotals(map(entities)))))`.
+   This is the criterion #5019 is missing.
+2. A percentage-only line keeps its discount across **create → upsert → display recalc**, with
+   `quantity > 1`.
+3. An amount-only line (`discountPercent` absent or `0`) keeps its amount across the same three
+   steps, at both bases.
+4. All three paths covered: write, read (`recalculateOrderTotalsForDisplay`), precedence.
+5. **Order and quote** (`:6835` **and** `:7321`), not one of them.
+6. `net × (1 + taxRate)` reconciles with the stored gross for every line the calculation writes.
+7. No new migration, no new column.
+
+## Test coverage (must ship with the implementation)
+
+Unit — `packages/core/src/modules/sales/lib/__tests__/calculations.test.ts`:
+
+- idempotency property over a table of `(quantity, unitNet, discountPercent, discountAmount, basis)`
+  cases, including `quantity = 1` (where the bug is invisible) and `quantity > 1`
+- percentage-first precedence, including `discountAmount: 0` with `discountPercent: 10`
+- `basis: 'line'` does not multiply by quantity; `basis: 'unit'` (and omitted basis) does
+- `clamp` still bounds the discount at the undiscounted subtotal
+
+Command — `packages/core/src/modules/sales/commands/__tests__/`:
+
+- `sales.orders.lines.upsert` and `sales.quotes.lines.upsert`: create-then-upsert a percentage-only
+  line with `quantity > 1`, assert `discount_amount` and `total_net_amount` are unchanged by the
+  upsert
+- upsert with neither `discountAmount` nor `discountPercent` in the payload preserves the existing
+  line's discount
+
+Integration — `packages/core/src/modules/sales/__integration__/TC-SALES-5019-line-discount-idempotency.spec.ts`
+(self-contained fixtures created via API, cleaned up in teardown, per `.ai/qa/AGENTS.md`):
+
+| path | assertion |
+|---|---|
+| `POST /api/sales/order-lines` | percentage-only line, `quantity = 60` → stored `discount_amount` is the line total, net is discounted |
+| `PUT /api/sales/order-lines` | re-upserting the same line changes neither `discount_amount` nor `total_net_amount` |
+| `PUT /api/sales/quote-lines` | same, on the quote path |
+| `GET /api/sales/orders?id=…` | display recalc returns the same `discountTotalAmount` as the persisted state, twice in a row |
+| order detail page | line discount and order totals match the API response |
+
+## Risks & impact review
+
+| risk | severity | affected | mitigation | residual |
+|---|---|---|---|---|
+| A caller that deliberately sends both `discountPercent` and an overriding `discountAmount` loses the amount (§ 2) | **high** | any integration mirroring an external system's rounded discount | document in `UPGRADE_NOTES.md`; the documented escape is `discountPercent: 0`; option D if rejected | behaviour change on a path with no test coverage today — this is the decision needing sign-off |
+| Recalculation now *changes* totals on documents whose rows are currently wrong | medium | deployments carrying dropped/re-inflated rows | intended (that is the fix), but it lands on the next write to each document, not at deploy time | totals move under operators without an explicit trigger; call it out in the release note |
+| Amount-only re-inflated rows stay wrong | medium | ERP importers that send amounts, not percentages | the opt-in CLI in § 5 | needs the scope decision above |
+| Invoices already issued from affected orders keep the wrong figures (`:8664` copies verbatim) | medium | finance/reporting | out of scope — issued invoices are immutable by design | must be stated in the release note, not silently fixed |
+| A third party reading `discount_amount` as per-unit today (matching the *read* path, not the docs) breaks | low | third-party modules | § 1 documents the meaning the persisted data already had; the read path was the outlier | low |
+
+Contract surfaces touched, per `BACKWARD_COMPATIBILITY.md`: `SalesLineSnapshot` (public type,
+**additive**), line create/update validators (**additive optional field**), no API URL change, no DB
+schema change, no event id / DI key / ACL feature change.
+
+## Compliance
+
+- No cross-tenant exposure: every touched path already carries `{ tenantId, organizationId }`;
+  `recalculateOrderTotalsForDisplay` keeps its scoped `findWithDecryption` calls.
+- No direct cross-module ORM relations introduced.
+- Document math stays inside `salesCalculationService` (`packages/core/src/modules/sales/AGENTS.md`
+  rule 1) — no inline recomputation is added at any call site.
+- No user-facing strings added; the CLI in § 5 is operator-facing and its output is `[internal]`.
+- No migration, no generated-file change, therefore no `yarn db:generate` / `yarn generate` run.
+
+## Status of the upstream decision
+
+`open-mercato#5019` ends with *"Suggested direction (for maintainer input before any work starts)"*
+and that input has not arrived as of 2026-08-07. This spec exists to make the decision concrete
+enough to answer. **No implementation PR should be opened upstream until § 1 and § 2 are approved**,
+because both change observable behaviour on an unversioned contract.
+
+Fork-CI caveat for whoever carries this upstream: `build:app` cannot be made green from a fork
+without a maintainer approving the workflow run (this is why #5006 has never run CI). State local
+verification; do not promise CI results.
+
+Not upstream work: the reporting deployment's own mitigation — sending an explicit per-unit
+`discountAmount` derived from the ERP's line net, and teaching its line-diff comparator about the
+column — is independent of this spec and does not wait on it.
+
+## Changelog
+
+- 2026-08-07 — Initial draft. Source sites verified against fork `main` @ `bdf361155`. No
+  implementation.
