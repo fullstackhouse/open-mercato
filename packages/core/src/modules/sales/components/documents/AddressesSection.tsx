@@ -24,6 +24,7 @@ import { AddressEditor, type AddressEditorDraft } from '@open-mercato/core/modul
 import {
   AddressView,
   formatAddressString,
+  type AddressContactLabels,
   type AddressFormatStrategy,
   type AddressValue,
 } from '@open-mercato/core/modules/customers/utils/addressFormat'
@@ -75,7 +76,37 @@ const emptyDraft: AddressEditorDraft = {
   isPrimary: false,
 }
 
-function normalizeAddressDraft(draft?: AddressEditorDraft | null): Record<string, unknown> | null {
+/**
+ * Every snapshot key the editor round-trips. A key outside this set is one the editor cannot show
+ * and therefore must not decide the fate of — see `normalizeAddressDraft`.
+ */
+const EDITABLE_SNAPSHOT_KEYS = new Set([
+  'name',
+  'purpose',
+  'companyName',
+  'addressLine1',
+  'addressLine2',
+  'buildingNumber',
+  'flatNumber',
+  'city',
+  'region',
+  'postalCode',
+  'country',
+  'isPrimary',
+])
+
+/**
+ * An address snapshot is a free-form JSON record, so an integration can put keys on it that this
+ * editor has no field for — a tax id or a phone number frozen onto the document by the ERP. Rebuilding
+ * the snapshot from the draft alone silently dropped those on the first save, so `previous` is merged
+ * back for exactly the keys the editor does not own.
+ *
+ * A cleared address still normalizes to `null` rather than to a snapshot of leftovers only.
+ */
+function normalizeAddressDraft(
+  draft?: AddressEditorDraft | null,
+  previous?: Record<string, unknown> | null,
+): Record<string, unknown> | null {
   if (!draft) return null
   const normalized: Record<string, unknown> = {}
   const assign = (key: keyof AddressEditorDraft, target: string) => {
@@ -95,7 +126,33 @@ function normalizeAddressDraft(draft?: AddressEditorDraft | null): Record<string
   assign('postalCode', 'postalCode')
   assign('country', 'country')
   assign('isPrimary', 'isPrimary')
-  return Object.keys(normalized).length ? normalized : null
+  if (!Object.keys(normalized).length) return null
+  if (previous) {
+    for (const [key, value] of Object.entries(previous)) {
+      if (EDITABLE_SNAPSHOT_KEYS.has(key)) continue
+      if (value === undefined) continue
+      normalized[key] = value
+    }
+  }
+  return normalized
+}
+
+/**
+ * The contact details an address snapshot carries, as an `AddressValue` with no postal fields — so
+ * `AddressView` renders the contact block alone, next to the editor that already shows the street.
+ */
+function contactOnlyFromSnapshot(snapshot?: Record<string, unknown> | null): AddressValue {
+  const record = snapshot ?? {}
+  const read = (key: string) => {
+    const value = record[key]
+    return typeof value === 'string' ? value : null
+  }
+  return {
+    addressLine1: null,
+    phone: read('phone'),
+    email: read('email'),
+    taxId: read('taxId'),
+  }
 }
 
 function draftFromSnapshot(snapshot?: Record<string, unknown> | null): AddressEditorDraft {
@@ -840,8 +897,12 @@ export function SalesDocumentAddressesSection({
     if (guardLocked()) return
     setSaving(true)
     try {
-      const shippingSnapshot = useCustomShipping ? normalizeAddressDraft(shippingDraft) : null
-      let billingSnapshot = useCustomBilling ? normalizeAddressDraft(billingDraft) : null
+      const shippingSnapshot = useCustomShipping
+        ? normalizeAddressDraft(shippingDraft, shippingAddressSnapshot)
+        : null
+      let billingSnapshot = useCustomBilling
+        ? normalizeAddressDraft(billingDraft, billingAddressSnapshot)
+        : null
       const same = sameAsShipping
       const payload: Record<string, unknown> = { id: documentId }
 
@@ -948,6 +1009,7 @@ export function SalesDocumentAddressesSection({
     }
   }, [
     billingAddressIdState,
+    billingAddressSnapshot,
     billingDraft,
     customerId,
     documentId,
@@ -956,6 +1018,7 @@ export function SalesDocumentAddressesSection({
     saveBillingAddress,
     saveShippingAddress,
     shippingAddressIdState,
+    shippingAddressSnapshot,
     shippingDraft,
     t,
     loadAddresses,
@@ -963,6 +1026,22 @@ export function SalesDocumentAddressesSection({
     useCustomBilling,
     useCustomShipping,
   ])
+
+  const contactLabels: AddressContactLabels = {
+    taxId: t('sales.documents.detail.addresses.taxId', 'Tax ID'),
+    phone: t('sales.documents.detail.addresses.phone', 'Phone'),
+    email: t('sales.documents.detail.addresses.email', 'Email'),
+  }
+
+  const renderSnapshotContact = (snapshot?: Record<string, unknown> | null) => (
+    <AddressView
+      address={contactOnlyFromSnapshot(snapshot)}
+      format={addressFormat}
+      className="space-y-1"
+      contactLabels={contactLabels}
+      contactClassName="text-xs text-muted-foreground"
+    />
+  )
 
   const renderAddressSelect = (
     value: string,
@@ -1083,6 +1162,7 @@ export function SalesDocumentAddressesSection({
               />
             </div>
           ) : null}
+          {renderSnapshotContact(shippingAddressSnapshot)}
         </div>
 
         <div className="space-y-3 rounded border bg-card p-4">
@@ -1152,6 +1232,9 @@ export function SalesDocumentAddressesSection({
               ) : null}
             </>
           ) : null}
+          {renderSnapshotContact(
+            sameAsShipping ? shippingAddressSnapshot : billingAddressSnapshot,
+          )}
         </div>
         </div>
 
@@ -1305,14 +1388,6 @@ export function SalesDocumentAddressesSection({
                       format={addressFormat}
                       className="space-y-1 text-sm"
                       lineClassName="text-sm text-foreground"
-                      // Rendered only for addresses that actually carry them; an address with no
-                      // contact details looks exactly as it did before.
-                      contactLabels={{
-                        taxId: t('sales.documents.detail.addresses.taxId', 'Tax ID'),
-                        phone: t('sales.documents.detail.addresses.phone', 'Phone'),
-                        email: t('sales.documents.detail.addresses.email', 'Email'),
-                      }}
-                      contactClassName="text-sm text-muted-foreground"
                     />
                   </>
                 )}

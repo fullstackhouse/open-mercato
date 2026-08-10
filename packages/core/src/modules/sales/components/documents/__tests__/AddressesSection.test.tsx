@@ -87,11 +87,8 @@ jest.mock('@open-mercato/core/modules/customers/components/AddressEditor', () =>
   AddressEditor: () => null,
 }))
 
-jest.mock('@open-mercato/core/modules/customers/utils/addressFormat', () => ({
-  AddressView: () => null,
-  formatAddressString: (value: Record<string, unknown>) =>
-    [value.addressLine1, value.city].filter(Boolean).join(', '),
-}))
+// Deliberately NOT mocked: stubbing AddressView to () => null is what let a contact block wired to
+// an address path that cannot carry contact details look like a working feature.
 
 jest.mock('@open-mercato/shared/lib/i18n/context', () => ({
   useT: () => mockTranslate,
@@ -232,5 +229,80 @@ describe('SalesDocumentAddressesSection', () => {
     expect(payload.billingAddressId).not.toBeNull()
     expect(payload).not.toHaveProperty('shippingAddressSnapshot')
     expect(payload).not.toHaveProperty('billingAddressSnapshot')
+  })
+
+  it('renders the contact details an address snapshot carries', async () => {
+    render(
+      <SalesDocumentAddressesSection
+        documentId="order-1"
+        kind="order"
+        customerId="customer-1"
+        billingAddressSnapshot={{
+          addressLine1: '12 Market Street',
+          city: 'London',
+          postalCode: 'SW1A 1AA',
+          country: 'GB',
+          taxId: 'PL1234567890',
+          phone: '+48 600 100 200',
+        }}
+      />,
+    )
+
+    await screen.findByRole('combobox')
+    expect(screen.getByText('Tax ID: PL1234567890')).toBeTruthy()
+    expect(screen.getByText('Phone: +48 600 100 200')).toBeTruthy()
+  })
+
+  it('renders nothing extra for a snapshot with no contact details', async () => {
+    render(
+      <SalesDocumentAddressesSection
+        documentId="order-1"
+        kind="order"
+        customerId="customer-1"
+        billingAddressSnapshot={{
+          addressLine1: '12 Market Street',
+          city: 'London',
+          postalCode: 'SW1A 1AA',
+          country: 'GB',
+        }}
+      />,
+    )
+
+    await screen.findByRole('combobox')
+    expect(screen.queryByText(/^Tax ID:/)).toBeNull()
+    expect(screen.queryByText(/^Phone:/)).toBeNull()
+    expect(screen.queryByText(/^Email:/)).toBeNull()
+  })
+
+  it('keeps snapshot keys the editor has no field for when the address is saved', async () => {
+    mockApiCallOrThrow.mockResolvedValue({ ok: true, result: {} })
+
+    render(
+      <SalesDocumentAddressesSection
+        documentId="order-1"
+        kind="order"
+        customerId="customer-1"
+        shippingAddressSnapshot={{
+          addressLine1: '12 Market Street',
+          city: 'London',
+          postalCode: 'SW1A 1AA',
+          country: 'GB',
+          taxId: 'PL1234567890',
+          phone: '+48 600 100 200',
+        }}
+      />,
+    )
+
+    await screen.findByRole('button', { name: 'Update addresses' })
+    fireEvent.click(screen.getByRole('button', { name: 'Update addresses' }))
+
+    await waitFor(() => expect(mockApiCallOrThrow).toHaveBeenCalledTimes(1))
+    const [, request] = mockApiCallOrThrow.mock.calls[0]
+    const payload = JSON.parse(request.body)
+    expect(payload.shippingAddressSnapshot).toMatchObject({
+      addressLine1: '12 Market Street',
+      taxId: 'PL1234567890',
+      phone: '+48 600 100 200',
+    })
   })
 })
