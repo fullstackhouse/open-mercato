@@ -14,17 +14,22 @@ by fetching the **first 50** channels from `/api/sales/channels` and joining cli
 tenant with more than 50 channels the column silently degrades to raw uuids, and on any role that
 holds `sales.orders.view` without `sales.channels.manage` the fetch 403s and the filter is empty.
 
-This spec closes three gaps, all additive:
+Three changes close the four defects enumerated below:
 
 1. **Server-side name resolution** — `channelName` / `channelCode` on every list item, batched in one
-   query per page via the existing `afterList` hook (the `enrichShipmentListResponse` pattern).
+   query per page, composed into the documents factory's existing `afterList` hook alongside
+   `attachTags` (closes defects 1–3).
 2. **Multi-value filtering** — a `channelIds` comma-separated parameter (`$in`), plus `channelIdsEmpty`
-   for unassigned documents. `channelId` keeps working unchanged.
+   for unassigned documents. `channelId` keeps working unchanged (closes defect 4).
 3. **ACL correction** — `GET /api/sales/channels` requires `sales.channels.manage`, which no role
    needs in order to *read* a channel name. It drops to `sales.channels.view`, the feature
-   `sales.orders.view` already depends on.
+   `sales.orders.view` already depends on (independently closes defect 3 for direct callers of that
+   endpoint).
 
-No database change, no new UI primitive, no behaviour change for callers that don't opt in.
+No database change and no new UI primitive. Every API change is additive: existing fields and
+parameters keep their shape and meaning, and the one permission change is a widening — callers that
+succeed today still succeed, and callers that got a 403 without `sales.channels.manage` now get a
+response.
 
 ## Overview
 
@@ -67,7 +72,7 @@ a user actually wants to compare.
 dependency of both `sales.orders.view` (`:7`) and `sales.quotes.view` (`:43`), but **guards nothing**:
 no route or page references it. `sales.channels.manage` `dependsOn: ['sales.channels.view']` (`:105–108`).
 
-### The three defects
+### The four defects
 
 **1. The list can't render what it returns.** `channelId` is emitted with nothing to resolve it
 from. Every consumer of the orders list has to solve this again — a second request and a client-side
@@ -98,42 +103,71 @@ defeats the point of the filter being upstream.
 Add `channelName: string | null` and `channelCode: string | null` to each list item, resolved in one
 batched query per page.
 
-The mechanism already exists and has a precedent in the same module:
-`packages/core/src/modules/sales/api/shipments/route.ts:56` (`enrichShipmentListResponse`, wired at
-`:311`) resolves `shipping_method_name` and `status_label` exactly this way, with unit coverage at
-`api/__tests__/shipments.afterList.test.ts`.
+The mechanism already exists, and the closest precedent is in this very file: `attachTags`
+(`factory.ts:214–260`) is a batched post-list resolution with exactly this shape — collect ids from
+the page, one scoped `em.find`, group, assign back onto the items. `enrichShipmentListResponse`
+(`api/shipments/route.ts:56`, wired at `:311`, unit coverage at
+`api/__tests__/shipments.afterList.test.ts`) does the same for `shipping_method_name` and
+`status_label` and is the model for the test.
 
 ```ts
 // packages/core/src/modules/sales/api/documents/factory.ts
-export async function resolveDocumentChannelNames(
-  payload: { items?: unknown[] },
-  ctx: CrudCtx,
-): Promise<void> {
-  const items = Array.isArray(payload.items) ? payload.items : []
+const attachChannelNames = async (payload: any, ctx: any) => {
+  const items = Array.isArray(payload?.items) ? (payload.items as Array<Record<string, any>>) : []
   if (!items.length) return
   const channelIds = Array.from(new Set(
     items
-      .map((item) => (item && typeof item === 'object' ? (item as any).channelId : null))
-      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      .map((item) => (item && typeof item.channelId === 'string' ? item.channelId : null))
+      .filter((value): value is string => !!value)
   ))
   if (!channelIds.length) return
-  const em = ctx.container.resolve('em') as EntityManager
-  const channels = await em.find(SalesChannel, {
-    id: { $in: channelIds },
-    tenantId: ctx.auth?.tenantId ?? null,
-  })
-  const byId = new Map(channels.map((channel) => [channel.id, channel]))
+  const em = ctx?.container?.resolve ? (ctx.container.resolve('em') as EntityManager) : null
+  if (!em) return
+
+  // Same scoping predicate as attachTags (factory.ts:224-234): tenant, plus the
+  // request's organization scope — the SET of orgs, not ctx.auth.orgId, so a
+  // multi-org scope selection does not blank the names of documents outside the
+  // primary org.
+  const where: Record<string, unknown> = { id: { $in: channelIds } }
+  if (ctx?.auth?.tenantId) where.tenantId = ctx.auth.tenantId
+  const orgIds =
+    Array.isArray(ctx?.organizationIds) && ctx.organizationIds.length
+      ? ctx.organizationIds.filter((val: string | null) => !!val)
+      : ctx?.selectedOrganizationId
+        ? [ctx.selectedOrganizationId]
+        : []
+  if (orgIds.length) where.organizationId = { $in: orgIds }
+
+  const byId = new Map((await em.find(SalesChannel, where)).map((channel) => [channel.id, channel]))
   items.forEach((item) => {
-    if (!item || typeof item !== 'object') return
-    const channel = byId.get((item as any).channelId as string)
-    ;(item as any).channelName = channel?.name ?? null
-    ;(item as any).channelCode = channel?.code ?? null
+    if (!item || typeof item.channelId !== 'string') return
+    const channel = byId.get(item.channelId)
+    item.channelName = channel?.name ?? null
+    item.channelCode = channel?.code ?? null
   })
 }
 ```
 
-Wired once in `buildDocumentCrudOptions` — `hooks: { afterList: resolveDocumentChannelNames }` —
-which covers orders and quotes together, since both routes are built from that config.
+**Composition, not replacement.** `buildDocumentCrudOptions` **already declares** `hooks.afterList`
+(`factory.ts:513–556`): it runs `attachTags` on every list response, and on a single-item order
+response it runs `recalculateOrderTotalsForDisplay` on a forked `EntityManager`. Assigning a new
+`afterList` would silently drop both — tags would vanish from the list and single-order totals would
+stop being recalculated. The new step is appended inside the existing hook:
+
+```ts
+hooks: {
+  afterList: async (payload: any, ctx: CrudCtx) => {
+    await attachTags(payload, { ...ctx, bindingKind: binding.kind })
+    await attachChannelNames(payload, ctx)
+    if (binding.kind === 'order' && …) { /* unchanged display-totals recalculation */ }
+  },
+},
+```
+
+`attachTags` and `attachChannelNames` touch disjoint fields and share no state, so they may run
+concurrently under `Promise.all` if the second query is ever worth overlapping; the sequential form
+above is the default because both are single indexed lookups. One hook covers orders and quotes
+together, since both routes are built from this config.
 
 Four properties make `afterList` the right seam rather than `transformItem`:
 
@@ -151,9 +185,13 @@ Four properties make `afterList` the right seam rather than `transformItem`:
 - **Zero cost when unused.** No channel ids on the page → no query. Documents with a null
   `channel_id` are untouched.
 
-The tenant predicate is defence in depth: the ids already come from tenant-scoped documents, but the
-lookup states its own scope rather than inheriting one. `SalesChannel.name` is not encrypted, so a
-plain `em.find` is correct here; `findWithDecryption` is not needed.
+The tenant + organization predicate is defence in depth: the ids already arrive on tenant- and
+org-scoped documents, but the lookup states its own scope rather than inheriting one, and
+`SalesChannel` is org-scoped in its own right (`organizationId` is non-nullable; the channels CRUD
+route declares `orgField: 'organizationId'`). A channel outside the request's scope resolves to
+`channelName: null` rather than leaking a name — the same failure mode as a deleted channel, which
+the UI already handles. `SalesChannel.name` is not encrypted, so a plain `em.find` is correct here;
+`findWithDecryption` is not needed.
 
 **Rejected alternative — a `channels` lookup map beside `items`.** It avoids repeating a name across
 rows, but it breaks the flat-item contract that `DataTable`, the export path, and the OpenAPI item
@@ -279,7 +317,12 @@ modelled on `shipments.afterList.test.ts`)
 - **one** `em.find` for a page containing repeated and distinct channel ids (the N+1 guard)
 - no query at all when every item has a null `channelId`
 - a `channelId` with no surviving channel row → `channelName: null`, `channelId` preserved
-- the lookup is tenant-scoped
+- a channel outside the request's organization scope → `channelName: null`, no name leaked
+- the lookup predicate carries both the tenant and the request's organization scope, and uses the
+  full `organizationIds` set when the request selects more than one org
+- **composition guard:** after the change, a list response still carries `tags` (`attachTags` ran),
+  and a single-item order response still carries recalculated totals — the regression test for the
+  hook being appended to rather than replaced
 
 **Unit — `packages/core/src/modules/sales/api/__tests__/documents.factory.test.ts`** (extend)
 
@@ -323,3 +366,4 @@ modelled on `shipments.afterList.test.ts`)
 | date | change |
 |---|---|
 | 2026-08-10 | Initial draft. Verified against fork `main` @ `bdf361155`. |
+| 2026-08-10 | Review round 1 (Copilot): compose into the existing `hooks.afterList` instead of replacing it (`attachTags` + display-totals recalculation would have been dropped); scope the channel lookup by organization as well as tenant; defect count and the "no behaviour change" claim corrected. |
