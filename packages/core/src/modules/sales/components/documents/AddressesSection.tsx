@@ -75,7 +75,37 @@ const emptyDraft: AddressEditorDraft = {
   isPrimary: false,
 }
 
-function normalizeAddressDraft(draft?: AddressEditorDraft | null): Record<string, unknown> | null {
+/**
+ * Every snapshot key the editor round-trips. A key outside this set is one the editor cannot show
+ * and therefore must not decide the fate of — see `normalizeAddressDraft`.
+ */
+const EDITABLE_SNAPSHOT_KEYS = new Set([
+  'name',
+  'purpose',
+  'companyName',
+  'addressLine1',
+  'addressLine2',
+  'buildingNumber',
+  'flatNumber',
+  'city',
+  'region',
+  'postalCode',
+  'country',
+  'isPrimary',
+])
+
+/**
+ * An address snapshot is a free-form JSON record, so an integration can put keys on it that this
+ * editor has no field for — a tax id or a phone number frozen onto the document by an ERP. Rebuilding
+ * the snapshot from the draft alone silently dropped those on the first save, so `previous` is merged
+ * back for exactly the keys the editor does not own.
+ *
+ * A cleared address still normalizes to `null` rather than to a snapshot of leftovers only.
+ */
+function normalizeAddressDraft(
+  draft?: AddressEditorDraft | null,
+  previous?: Record<string, unknown> | null,
+): Record<string, unknown> | null {
   if (!draft) return null
   const normalized: Record<string, unknown> = {}
   const assign = (key: keyof AddressEditorDraft, target: string) => {
@@ -95,7 +125,15 @@ function normalizeAddressDraft(draft?: AddressEditorDraft | null): Record<string
   assign('postalCode', 'postalCode')
   assign('country', 'country')
   assign('isPrimary', 'isPrimary')
-  return Object.keys(normalized).length ? normalized : null
+  if (!Object.keys(normalized).length) return null
+  if (previous) {
+    for (const [key, value] of Object.entries(previous)) {
+      if (EDITABLE_SNAPSHOT_KEYS.has(key)) continue
+      if (value === undefined) continue
+      normalized[key] = value
+    }
+  }
+  return normalized
 }
 
 function draftFromSnapshot(snapshot?: Record<string, unknown> | null): AddressEditorDraft {
@@ -840,8 +878,12 @@ export function SalesDocumentAddressesSection({
     if (guardLocked()) return
     setSaving(true)
     try {
-      const shippingSnapshot = useCustomShipping ? normalizeAddressDraft(shippingDraft) : null
-      let billingSnapshot = useCustomBilling ? normalizeAddressDraft(billingDraft) : null
+      const shippingSnapshot = useCustomShipping
+        ? normalizeAddressDraft(shippingDraft, shippingAddressSnapshot)
+        : null
+      let billingSnapshot = useCustomBilling
+        ? normalizeAddressDraft(billingDraft, billingAddressSnapshot)
+        : null
       const same = sameAsShipping
       const payload: Record<string, unknown> = { id: documentId }
 
@@ -948,6 +990,7 @@ export function SalesDocumentAddressesSection({
     }
   }, [
     billingAddressIdState,
+    billingAddressSnapshot,
     billingDraft,
     customerId,
     documentId,
@@ -956,6 +999,7 @@ export function SalesDocumentAddressesSection({
     saveBillingAddress,
     saveShippingAddress,
     shippingAddressIdState,
+    shippingAddressSnapshot,
     shippingDraft,
     t,
     loadAddresses,
