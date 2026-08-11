@@ -2,9 +2,11 @@
 
 Status: draft
 Scope: `packages/core/src/modules/sales/{api/documents/factory.ts,api/channels/route.ts,components/documents/SalesDocumentsTable.tsx,i18n/*.json}`
-Upstream: no issue or PR found (searched `open-mercato/open-mercato` open + closed for a channel column/filter on the orders list on 2026-08-10; every open `channel` issue belongs to `communication_channels`/`channel-discord`). Related, not overlapping: [#668](https://github.com/open-mercato/open-mercato/issues/668) channel-specific product projections.
+Upstream: **§2 of this spec is in flight as [open-mercato#5198](https://github.com/open-mercato/open-mercato/pull/5198)** (open, targets `develop`) — see § Relationship to #5198. No other issue or PR found (searched open + closed for a channel column/filter on the orders list on 2026-08-10; every open `channel` issue belongs to `communication_channels`/`channel-discord`). Related, not overlapping: [#668](https://github.com/open-mercato/open-mercato/issues/668) channel-specific product projections.
 
-All line numbers verified on fork `main` @ `bdf361155` (2026-08-10).
+All line numbers verified on fork `main` @ `bdf361155` (2026-08-10), i.e. **before** #5198. That PR
+adds 2 lines to `listSchema` and 8 to `buildFilters`, so citations below `factory.ts:90` shift by
+roughly +10 once it merges.
 
 ## TLDR
 
@@ -20,7 +22,9 @@ Three changes close the four defects enumerated below:
    query per page, composed into the documents factory's existing `afterList` hook alongside
    `attachTags` (closes defects 1–3).
 2. **Multi-value filtering** — a `channelIds` comma-separated parameter (`$in`), plus `channelIdsEmpty`
-   for unassigned documents. `channelId` keeps working unchanged (closes defect 4).
+   for unassigned documents. `channelId` keeps working unchanged (closes defect 4). **Carved out and
+   shipped separately as upstream #5198**; this spec keeps the design rationale and defers the
+   implementation to that PR.
 3. **ACL correction** — `GET /api/sales/channels` requires `sales.channels.manage`, which no role
    needs in order to *read* a channel name. It drops to `sales.channels.view`, the feature
    `sales.orders.view` already depends on (independently closes defect 3 for direct callers of that
@@ -198,42 +202,37 @@ rows, but it breaks the flat-item contract that `DataTable`, the export path, an
 schema all assume, and it forces every consumer to implement the join the flat field removes. The
 per-page duplication it saves is a few hundred bytes.
 
-### 2. `channelIds` — multi-value filtering
+### 2. `channelIds` — multi-value filtering → upstream #5198
 
-```ts
-// listSchema, alongside the existing channelId
-channelIds: z.string().optional(),        // "uuid1,uuid2,uuid3"
-channelIdsEmpty: z.string().optional(),   // boolean token — documents with no channel
-```
+**Implemented in [open-mercato#5198](https://github.com/open-mercato/open-mercato/pull/5198)**, which
+carves this section out and ships it on its own: two optional params on `listSchema`, eight lines in
+`buildFilters`, and 11 unit cases in `documents.factory.test.ts`. This spec keeps the rationale; the
+code lives there.
 
-```ts
-// buildFilters
-if (query.channelId) {
-  filters.channel_id = { $eq: query.channelId }
-} else if (parseBooleanToken(query.channelIdsEmpty) === true) {
-  filters.channel_id = { $exists: false }
-} else {
-  const channelIds = parseIdList(query.channelIds)
-  if (channelIds.length) filters.channel_id = { $in: channelIds }
-}
-```
-
-Decisions, each following an existing in-repo convention:
+The semantics it implements are the ones specified here:
 
 - **Comma-separated `channelIds`, not repeated params.** Matches `catalog/products`
-  (`api/products/route.ts:70`, `:190`) and the platform-wide `ids` parameter from SPEC-042
-  (`packages/shared/src/lib/crud/ids.ts`), which exists because `makeCrudRoute` parses the query with
-  `Object.fromEntries(searchParams.entries())`.
+  (`api/products/route.ts:70`, `:190`) and the platform-wide `ids` parameter from SPEC-042, which
+  exists because `makeCrudRoute` parses the query with `Object.fromEntries(searchParams.entries())`.
 - **Singular wins over plural.** `api/channels/route.ts:76–81` already resolves `id` before `ids` the
   same way. Documented, not incidental.
-- **Non-uuid entries are dropped, not rejected.** `parseIdList` (the same helper shape as
-  `api/channels/route.ts:66`) filters by uuid regex, so a malformed value narrows the filter rather
-  than 400-ing a list page.
+- **Non-uuid entries are dropped, not rejected** — a malformed value narrows the filter rather than
+  400-ing a list page, and an all-malformed list narrows to *no* channel filter rather than an
+  empty-set filter, so a typo returns the unfiltered page instead of silently returning zero rows.
 - **`$exists: false` for unassigned.** That is the operator the advanced-filter builder emits for
   `is_empty` (`packages/shared/src/lib/query/advanced-filter-tree.ts:122`) and it is in `WhereOps`
   (`packages/shared/src/lib/query/types.ts:36`). Deliberately *not* modelled on the sibling
   `tagIdsEmpty` (`factory.ts:148–149`), which forces a sentinel uuid to return an empty result set —
   a different, narrower meaning.
+
+**One improvement over what this spec originally proposed.** The draft called for a local
+`parseIdList` in the shape of `api/channels/route.ts:66` — a fourth copy of the same uuid regex.
+#5198 uses the shared `parseIdsParam` from `@open-mercato/shared/lib/crud/ids` instead, which
+validates, trims, dedupes, and caps at `MAX_IDS_PER_REQUEST` (200). That is the better call and this
+spec adopts it. The cap is worth knowing about: `parseIdsParam` **silently truncates** past 200 ids
+(`ids.ts:49`, `.slice(0, safeMax)`). Irrelevant for a channel picker — no operator selects 200
+channels — but it is a silent narrowing, not an error, and any future caller generating channel id
+lists programmatically should know the ceiling exists.
 
 `channelId` is untouched; per `BACKWARD_COMPATIBILITY.md` this is an additive API-route change.
 
@@ -264,7 +263,8 @@ Channel column to be meaningful.
   dependency list.
 - **Filter** (`:305–311`) becomes `type: 'tags'` with `formatValue`, mirroring the neighbouring
   `tagIds` and `customerId` filters (`FilterDef` supports it — `packages/ui/src/backend/FilterOverlay.tsx:23–35`).
-- **Query building** (`:380–381`) emits `channelIds` from the selected array.
+- **Query building** (`:380–381`) emits `channelIds` from the selected array. **Depends on #5198** —
+  see § Relationship to #5198; shipping this ahead of it produces a filter that silently does nothing.
 - **Persisted-perspective compatibility.** `DataTable` persists `filterValues` into the perspective
   snapshot (`packages/ui/src/backend/DataTable.tsx:1739–1746`). A snapshot saved before this change
   holds `channelId: "<uuid>"` as a **string**; the new reader must normalise `string → [string]` so a
@@ -290,8 +290,8 @@ new mechanism needed, and no change to what an existing user sees.
 | parameter | type | behaviour |
 |---|---|---|
 | `channelId` | uuid | unchanged — `$eq`. Wins over `channelIds`/`channelIdsEmpty` when both are sent |
-| `channelIds` | comma-separated uuids | **new** — `$in`. Non-uuid entries dropped; empty result → no filter |
-| `channelIdsEmpty` | boolean token | **new** — documents with no channel |
+| `channelIds` | comma-separated uuids | `$in`. Non-uuid entries dropped; all-malformed or empty → no filter; capped at 200 — **#5198** |
+| `channelIdsEmpty` | boolean token | documents with no channel; non-truthy token ignored — **#5198** |
 
 Item shape, additive:
 
@@ -324,13 +324,11 @@ modelled on `shipments.afterList.test.ts`)
   and a single-item order response still carries recalculated totals — the regression test for the
   hook being appended to rather than replaced
 
-**Unit — `packages/core/src/modules/sales/api/__tests__/documents.factory.test.ts`** (extend)
-
-- `channelIds=a,b` → `channel_id: { $in: [a, b] }`
-- `channelId` present alongside `channelIds` → `$eq` wins
-- `channelIdsEmpty=true` → `channel_id: { $exists: false }`
-- malformed entries dropped; all-malformed → no channel filter (not an empty-set filter)
-- `channelId` alone still produces `$eq` — the regression guard on the old contract
+**Unit — `packages/core/src/modules/sales/api/__tests__/documents.factory.test.ts`** — **already
+covered by #5198**, which lands 11 cases: `$in`, trim/dedupe, singular-beats-plural for both new
+params, `$exists: false`, non-truthy token ignored, malformed dropped, all-malformed → no filter,
+empty string → no filter, `channelId` alone still `$eq`, and quotes matching orders. Nothing to add
+here; if #5198 is rejected, these cases come back into this spec's scope.
 
 **Unit — `packages/core/src/modules/sales/api/__tests__/channels.route.test.ts`** (extend)
 
@@ -348,6 +346,32 @@ modelled on `shipments.afterList.test.ts`)
   names on first paint; filter by both channels → two rows; filter unassigned → one row
 - a role holding `sales.orders.view` without `sales.channels.manage` sees a populated Channel filter
   (the ACL regression guard for defect 3)
+
+The first case is the one #5198 offered to add and left out (its checklist says integration coverage
+was omitted because a Playwright spec needs a running stack to validate). It belongs here either way:
+the assertion that matters — *the column shows names on first paint* — is this spec's behaviour, not
+#5198's, and cannot be written before § 1 exists. If a maintainer asks #5198 to carry the filter half
+of it, this plan reduces to the column and ACL assertions.
+
+## Relationship to #5198
+
+[open-mercato#5198](https://github.com/open-mercato/open-mercato/pull/5198) (open, targets `develop`)
+is § 2 of this spec, extracted and shipped on its own. The split is the right shape — the filter
+params are a self-contained API addition with unit-testable semantics, while the rest of this spec
+needs a hook change, an ACL change, and UI work — but it creates one ordering constraint and one
+overlap worth stating.
+
+**Ordering.** § 4's UI change emits `channelIds`. It cannot merge before #5198, or the multi-select
+sends a parameter the API ignores — which fails *silently*, returning an unfiltered page that looks
+like a working filter. Anyone implementing § 4 must confirm #5198 has landed on the target branch
+first. This is the only hard dependency between the two.
+
+**No code overlap.** #5198 touches `listSchema` and `buildFilters`; § 1 touches `hooks.afterList`.
+Different regions of `factory.ts`, no conflict beyond line drift. §§ 3 and 4 touch different files
+entirely.
+
+**If #5198 is rejected or reshaped**, § 2 and its unit cases return to this spec's scope unchanged —
+nothing here depends on *where* the params land, only that they exist with these semantics.
 
 ## Out of Scope / Follow-ups
 
@@ -367,3 +391,4 @@ modelled on `shipments.afterList.test.ts`)
 |---|---|
 | 2026-08-10 | Initial draft. Verified against fork `main` @ `bdf361155`. |
 | 2026-08-10 | Review round 1 (Copilot): compose into the existing `hooks.afterList` instead of replacing it (`attachTags` + display-totals recalculation would have been dropped); scope the channel lookup by organization as well as tenant; defect count and the "no behaviour change" claim corrected. |
+| 2026-08-11 | § 2 carved out and shipped as upstream #5198. Section now defers to that PR, adopts its shared `parseIdsParam` over the locally-copied `parseIdList` this spec had proposed (and documents its silent 200-id cap), and drops the `documents.factory.test.ts` cases it already covers. Added § Relationship to #5198 recording the one hard ordering constraint: § 4's multi-select must not ship before those params exist. |
