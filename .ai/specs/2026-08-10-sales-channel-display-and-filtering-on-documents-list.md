@@ -219,8 +219,10 @@ The semantics it implements are the ones specified here:
 - **Non-uuid entries are dropped, not rejected** — a malformed value narrows the filter rather than
   400-ing a list page, and an all-malformed list narrows to *no* channel filter rather than an
   empty-set filter, so a typo returns the unfiltered page instead of silently returning zero rows.
-- **`$exists: false` for unassigned.** That is the operator the advanced-filter builder emits for
-  `is_empty` (`packages/shared/src/lib/query/advanced-filter-tree.ts:122`) and it is in `WhereOps`
+- **`$exists: false` for unassigned.** Confirmed to reach SQL as `WHERE channel_id IS NULL`:
+  `engine.ts:1086–1089` and `:1107` both translate `exists` to `is null` / `is not null` on the
+  falsy/truthy branch. It is also the operator the advanced-filter builder emits for `is_empty`
+  (`advanced-filter-tree.ts:122`) and is declared in `WhereOps`
   (`packages/shared/src/lib/query/types.ts:36`). Deliberately *not* modelled on the sibling
   `tagIdsEmpty` (`factory.ts:148–149`), which forces a sentinel uuid to return an empty result set —
   a different, narrower meaning.
