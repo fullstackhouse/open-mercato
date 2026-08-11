@@ -82,37 +82,35 @@ One column produces three different behaviours depending on which command touche
 That asymmetry is why the defect survived: it is unreachable from the code path the test suite
 exercises most.
 
-### Field evidence
+### Worked example
 
-Measured on a production-scale deployment that imports orders from an ERP — ~4.0M order lines,
-39,269 of them carrying a line discount. (Figures are derived from a client's scrubbed full-scale
-copy; the anonymised framing below is what may be shared outside this repository.)
+Deterministic from the code paths above. One line: `quantity: 60`, `unitPriceNet: 50.00`,
+`discountPercent: 10`, VAT 8%. Correct figures are `discountAmount: 300.00`, `totalNetAmount: 2700.00`,
+`totalGrossAmount: 2916.00`.
 
-| bucket | lines | net×(1+VAT) ≠ gross | rate |
-|---|---:|---:|---:|
-| no discount | 3,977,967 | 25,301 | 0.64% ← baseline |
-| discounted, amount consistent | 28,190 | 820 | 2.91% |
-| **discount dropped (`discount_amount = 0`)** | **9,361** | **8,875** | **94.81%** |
-| **re-inflated (amount > qty-correct value)** | **1,718** | 138 | 8.03% |
+| path | stored `discount_amount` | stored `total_net_amount` | |
+|---|---:|---:|---|
+| `orders.create` | 300.00 | 2700.00 | correct — `?? null` lets the percentage run |
+| `lines.upsert`, new line | 0.00 | 3000.00 | **discount dropped** — `0 ?? percent` kills the percentage path |
+| `lines.upsert`, existing line | 3000.00 | 0.00 | **re-inflated** — the stored 300.00 line total re-enters as per-unit, `300 × 60 = 18000` clamps to the 3000.00 subtotal, and the line's net collapses to zero |
 
-11,079 lines — **28% of all discounted lines** — store a wrong `total_net_amount`. The
-dropped-discount bucket diverges at **148× the baseline rate**.
+The third row is the idempotency violation stated concretely: one further round trip through a
+command that was supposed to change nothing zeroes the line's net.
 
-Sample rows (net stored as the *undiscounted* subtotal):
+### Detecting affected rows
 
-| qty | unit net | discount % | stored `discount_amount` | stored net | correct net |
-|---:|---:|---:|---:|---:|---:|
-| 60 | 49.99 | 10% | 0.00 | 2999.40 | 2699.46 |
-| 30 | 26.02 | 25% | 0.00 | 780.60 | 585.45 |
+The defect is self-detecting without instrumentation, because a supplied `totalGrossAmount` is kept
+verbatim (`calculations.ts:101-104`) while net is recomputed from the defective discount. Any line
+where `total_net_amount × (1 + taxRate)` diverges materially from `total_gross_amount` is a
+candidate; the divergence rate among discounted lines, compared against undiscounted lines as a
+baseline, is the measurement any operator can run against their own data.
 
-The importer's own gross (kept verbatim by core, `calculations.ts:101-104`) confirms the correct
-net: `2699.46 × 1.08 = 2915.42 ≈` the stored gross of `2915.40`.
-
-**Trigger.** The damage appeared when that deployment switched its sync from delete-and-reappend to
-in-place line reconciliation — i.e. when lines started flowing through `lines.upsert` instead of
-order create. Before the switch: ~2% of touched discounted lines affected and zero re-inflation.
-After: 42% and 1,718 re-inflated. **Any consumer that edits lines rather than recreating orders
-hits this**, which is the severity argument.
+**Who is exposed.** Consumers that recreate orders wholesale never reach the defective path — every
+line goes through create, which is the correct branch, which is also why the test suite is green.
+Consumers whose integration reconciles lines **in place** — the normal shape for an order importer
+once it grows past re-appending everything — write through `lines.upsert` and are exposed on every
+line carrying a percentage discount. That asymmetry, not any particular deployment's numbers, is the
+severity argument.
 
 ## Proposed Solution
 
@@ -356,11 +354,12 @@ Invoice lines created from an affected order line (`commands/documents.ts:8664`)
 figures and are not retro-fixed. Issued invoices are immutable by design; correcting them is a
 finance-process decision, not a platform one. It belongs in the release note, not in this change.
 
-### The reporting deployment's own mitigation
+### Consumer-side mitigation
 
-Sending an explicit per-unit `discountAmount` derived from the ERP's line net, and teaching that
-deployment's line-diff comparator about the column, is independent of this spec and does not wait
-on it.
+An affected consumer can work around the defect today by sending an explicit per-unit
+`discountAmount` computed from its own line net, and by teaching its line-diff comparator that
+`discount_amount` is a field whose stored value will not match what it sent. That mitigation is
+independent of this spec and does not wait on it.
 
 ## Alternatives Considered
 
@@ -452,3 +451,6 @@ verification; do not promise CI results.
 
 - 2026-08-07 — Initial draft. Source sites verified against fork `main` @ `bdf361155`. No
   implementation.
+- 2026-08-11 — Replaced the deployment-derived measurement with a deterministic worked example and a
+  detection recipe operators can run against their own data. The severity argument now rests on the
+  create-vs-upsert asymmetry in the code rather than on any one deployment's figures.
