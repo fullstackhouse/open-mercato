@@ -91,10 +91,10 @@ grants order viewing without channel administration gets a 403, `fetchChannelOpt
 The seeded `admin` and `employee` roles both hold `manage` (`setup.ts:53–54`), so this is invisible
 in a default install and hits exactly the custom roles a real deployment builds.
 
-**4. The filter can't express the question people ask.** `$eq` answers "orders from Allegro". It
-cannot answer "orders from Allegro **and** Magento EU", which is the normal comparison when a
-merchant runs several storefronts. Every consumer wanting it keeps a private override — which
-defeats the point of the filter being upstream.
+**4. The filter can't express the question people ask.** `$eq` answers "orders from the web shop".
+It cannot answer "orders from the web shop **and** the marketplace listing", which is the normal
+comparison when a merchant runs several storefronts. Any consumer that needs it has to keep a
+private override — which defeats the point of the filter being upstream at all.
 
 ## Proposed Solution
 
@@ -298,8 +298,8 @@ Item shape, additive:
 ```jsonc
 {
   "channelId":   "…uuid…",       // unchanged
-  "channelName": "Allegro",      // new — null when unassigned or channel missing
-  "channelCode": "allegro"       // new — null when unassigned, missing, or the channel has no code
+  "channelName": "Web shop",     // new — null when unassigned or channel missing
+  "channelCode": "web-shop"      // new — null when unassigned, missing, or the channel has no code
 }
 ```
 
