@@ -149,9 +149,9 @@ distinguished from "no discount supplied", so `discountAmount` can never be a re
 signal on the read-back path. The percentage is the operator's intent; the amount is its cached
 result. Making intent win is the only rule that is stable across a round trip.
 
-**Consequence, deliberate:** this self-heals the 9,361 dropped-discount rows without a data
-migration — they still carry the correct `discount_percent`, and the next recalculation restores the
-discount. See § Migration & Backward Compatibility → Row reconciliation for the rows it does *not* heal.
+**Consequence, deliberate:** this self-heals every dropped-discount row — a row with
+`discount_amount = 0` and a non-zero `discount_percent` — without a data migration, because it still
+carries the percentage the discount is derived from, and the next recalculation restores it. See § Migration & Backward Compatibility → Row reconciliation for the rows it does *not* heal.
 
 **Cost, deliberate:** a caller who sends both a percent and a deliberately different amount (an ERP
 rounding its own figure) loses the amount. That caller must send `discountPercent: 0` alongside the
@@ -451,6 +451,5 @@ verification; do not promise CI results.
 
 - 2026-08-07 — Initial draft. Source sites verified against fork `main` @ `bdf361155`. No
   implementation.
-- 2026-08-11 — Replaced the deployment-derived measurement with a deterministic worked example and a
-  detection recipe operators can run against their own data. The severity argument now rests on the
-  create-vs-upsert asymmetry in the code rather than on any one deployment's figures.
+- 2026-08-11 — Grounded the severity argument in the create-vs-upsert asymmetry in the code, stated
+  as a deterministic worked example plus a detection recipe operators can run against their own data.
