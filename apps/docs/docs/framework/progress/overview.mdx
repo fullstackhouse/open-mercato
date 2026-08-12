@@ -144,6 +144,7 @@ await progressService.completeJob(job.id, {
 | `getRecentlyCompletedJobs(ctx, sinceSeconds?)` | List completed/failed jobs finished within `sinceSeconds` (default 30) |
 | `getJob(jobId, ctx)` | Fetch a single job by ID |
 | `markStaleJobsFailed(tenantId, timeoutSeconds?)` | Mark running jobs with no heartbeat as failed (default timeout: 60s) |
+| `touchJobHeartbeat?(jobId, ctx)` | Optional. Bump only `heartbeatAt`/`updatedAt` from a keepalive while one long unit of work is in flight. Runs on a forked entity manager, so it is safe to call while the caller's own manager is mid-transaction. Optional-chain it — third-party implementations may not provide it. |
 
 ### Progress Calculation
 
@@ -348,6 +349,8 @@ await progressService.markStaleJobsFailed(tenantId, 60) // 60 second timeout
 ```
 
 This finds all `running` jobs for the given tenant where `heartbeatAt` is older than the timeout, marks them as `failed` with the message `"Job stale: no heartbeat for 60 seconds"`, and emits a `progress.job.failed` event with `stale: true` for each.
+
+**A sweep is not final.** One unit of work can legitimately outlast the timeout — a single sync batch against a slow upstream API, for example — and get swept while its producer is alive and healthy. When that producer's next progress write or `touchJobHeartbeat` arrives, the service revives the job through the same `failed → running` transition a queue retry uses, keeping the original `startedAt` so the ETA stays truthful. The revival only matches rows carrying the sweep's own `"Job stale: …"` marker, so a job that failed for a real reason keeps its status and its error message, and a producer that is genuinely dead never writes again — real sweeps stick. Prevention still beats recovery: wrap long-running units in a keepalive that calls `touchJobHeartbeat` (see `withHeartbeat` in `data_sync/lib/sync-engine.ts`).
 
 :::tip Integrate with the Scheduler
 Register a scheduled job to call `markStaleJobsFailed` periodically:

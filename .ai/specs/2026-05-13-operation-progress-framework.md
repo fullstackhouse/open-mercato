@@ -83,10 +83,10 @@ Progress lifecycle and count updates must remain correct when app and worker pro
 1. Status changes use conditional database updates whose source-status filter describes a real transition. Starting an already-running job is an idempotent no-op; `failed → running` remains available for queue retries and recovery after an incorrect stale sweep.
 2. A conditional update that affects zero rows lost the race and must reload the winner without emitting a duplicate lifecycle event.
 3. `incrementProgress` applies deltas to the database column atomically. After the write, it reloads the database winner before returning or emitting so callers that compare `processedCount` with `totalCount` observe the shared aggregate rather than a detached local snapshot.
-4. Intermediate progress writes are accepted only while the row is `pending` or `running`; terminal states reject late buffered updates.
+4. Intermediate progress writes are accepted only while the row is `pending` or `running`; `completed` and `cancelled` reject late buffered updates. A row the stale sweep failed is the single exception: a write arriving from a live producer proves that sweep was wrong, so the write path attempts one bounded revival through the `failed → running` start transition and then applies the update. The revival is narrowed to rows carrying the sweep's own error marker, so a job failed for a real reason keeps both its status and its recorded error, and a producer that is genuinely dead never writes again.
 5. Cancellation checks bypass the entity-manager identity map so workers observe requests written by another process.
-6. Stale-job sweeps re-check status and timestamps in each conditional update. Running jobs use the configured heartbeat timeout; pending jobs that never start fail after 15 minutes. A later queue delivery may recover the latter through `failed → running`.
-7. Heartbeat persistence is independent of progress-event broadcast coalescing and occurs at least every five seconds while updates continue.
+6. Stale-job sweeps re-check status and timestamps in each conditional update. Running jobs use the configured heartbeat timeout; pending jobs that never start fail after 15 minutes. A later queue delivery may recover the latter through `failed → running`, and a live producer's next progress write or heartbeat recovers a wrongly swept running job through the same transition. Recovery preserves the original `startedAt` so elapsed-time and ETA readings stay truthful across the revival.
+7. Heartbeat persistence is independent of progress-event broadcast coalescing and occurs at least every five seconds while updates continue. A single unit of work that can outlast the stale timeout (one slow adapter batch) must keep the job alive on its own with `touchJobHeartbeat`, which writes only the heartbeat columns on a forked entity manager.
 
 ### Client-Local Progress Rules
 
@@ -233,5 +233,6 @@ Optional display fields may include `description`, `meta`, `etaSeconds`, `starte
 
 | Date | Change |
 |------|--------|
+| 2026-08-12 | Relaxed invariant 4 for stale-swept rows: added `touchJobHeartbeat` for long single units of work, plus a marker-narrowed `failed → running` revival that preserves `startedAt` and a genuine failure's diagnostics. |
 | 2026-07-27 | Documented multi-instance CAS transitions, post-increment winner reloads, stale-pending recovery, and concurrency regression coverage. |
 | 2026-05-13 | Created framework spec to make progress mandatory for bulk and future long-running operations. |

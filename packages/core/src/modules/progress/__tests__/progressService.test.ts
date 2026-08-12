@@ -1337,6 +1337,7 @@ describe('progress service — stale-sweep recovery (GSM-314)', () => {
       id: 'job-1',
       jobType: 'data_sync:import',
       status: 'failed',
+      errorMessage: 'Job stale: no heartbeat for 60 seconds',
       processedCount: 200,
       progressPercent: 0,
       organizationId: null,
@@ -1350,7 +1351,11 @@ describe('progress service — stale-sweep recovery (GSM-314)', () => {
     expect(forkEm.nativeUpdate).toHaveBeenNthCalledWith(
       2,
       expect.anything(),
-      expect.objectContaining({ status: { $in: ['pending', 'failed'] } }),
+      // Narrowed to the sweep's own marker so a genuine failure is never revived.
+      expect.objectContaining({
+        status: { $in: ['pending', 'failed'] },
+        errorMessage: { $like: 'Job stale:%' },
+      }),
       expect.objectContaining({ status: 'running', finishedAt: null, errorMessage: null }),
     )
     expect(eventBus.emit).toHaveBeenCalledWith(
@@ -1387,6 +1392,7 @@ describe('progress service — stale-sweep recovery (GSM-314)', () => {
       id: 'job-1',
       jobType: 'data_sync:import',
       status: 'failed',
+      errorMessage: 'Job stale: no heartbeat for 60 seconds',
       processedCount: 200,
       totalCount: null,
       progressPercent: 0,
@@ -1448,6 +1454,7 @@ describe('progress service — stale-sweep recovery (GSM-314)', () => {
       id: 'job-1',
       jobType: 'import',
       status: 'failed',
+      errorMessage: 'Job stale: no heartbeat for 60 seconds',
       processedCount: 40,
       totalCount: 100,
       progressPercent: 40,
@@ -1464,6 +1471,100 @@ describe('progress service — stale-sweep recovery (GSM-314)', () => {
     expect(em.nativeUpdate).toHaveBeenCalledTimes(2)
     const [, , persistData] = em.nativeUpdate.mock.calls[1]
     expect(typeof persistData.processedCount).not.toBe('number')
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      PROGRESS_EVENTS.JOB_STARTED,
+      expect.objectContaining({ jobId: 'job-1' }),
+    )
+  })
+
+  it('revival preserves the original startedAt, while a first start still stamps it', async () => {
+    const em = buildEm()
+    const eventBus = { emit: jest.fn().mockResolvedValue(undefined) }
+
+    // A four-hour backfill: resetting startedAt would make the elapsed window ~0, so
+    // calculateEta would advertise "1 second remaining" for the rest of the run.
+    const startedAt = new Date(Date.now() - 4 * 60 * 60 * 1000)
+    const job = {
+      id: 'job-1',
+      jobType: 'data_sync:import',
+      status: 'failed',
+      errorMessage: 'Job stale: no heartbeat for 60 seconds',
+      processedCount: 60_000,
+      totalCount: 100_000,
+      progressPercent: 60,
+      startedAt,
+      meta: null,
+      organizationId: null,
+    } as unknown as ProgressJob
+    em.findOneOrFail.mockResolvedValue(job)
+
+    const service = createProgressService(em as never, eventBus)
+    const result = await service.updateProgress('job-1', { processedCount: 60_100 }, baseCtx)
+
+    expect(result.startedAt).toBe(startedAt)
+    const [, , reviveData] = em.nativeUpdate.mock.calls[0]
+    expect(reviveData.startedAt).toBe(startedAt)
+    expect(result.etaSeconds).toBeGreaterThan(60)
+
+    const pendingEm = buildEm()
+    const pendingJob = { id: 'job-2', status: 'pending', jobType: 'import', startedAt: null } as unknown as ProgressJob
+    pendingEm.findOneOrFail.mockResolvedValue(pendingJob)
+    const pendingService = createProgressService(pendingEm as never, eventBus)
+    const started = await pendingService.startJob('job-2', baseCtx)
+
+    expect(started.startedAt).toBeInstanceOf(Date)
+    const [, , startData] = pendingEm.nativeUpdate.mock.calls[0]
+    expect(startData.startedAt).toBeInstanceOf(Date)
+  })
+
+  it('never revives a genuinely failed job and keeps its error diagnostics', async () => {
+    const em = buildEm()
+    const forkEm = buildForkEm()
+    em.fork.mockReturnValue(forkEm)
+    const eventBus = { emit: jest.fn().mockResolvedValue(undefined) }
+
+    // Worker A failed this run for a real reason; worker B is an older delivery still
+    // heartbeating and writing progress. Neither of B's paths may resurrect the row or
+    // erase the recorded cause.
+    const row = {
+      id: 'job-1',
+      jobType: 'data_sync:import',
+      status: 'failed',
+      errorMessage: 'Upstream connection reset by peer',
+      errorStack: 'Error: Upstream connection reset by peer\n    at import',
+      processedCount: 200,
+      totalCount: null,
+      progressPercent: 0,
+      startedAt: new Date(Date.now() - 10_000),
+      meta: null,
+      organizationId: null,
+    } as unknown as ProgressJob
+    const matchesCas = (where: Record<string, unknown>) => {
+      const statuses = (where.status as { $in?: string[] } | undefined)?.$in ?? []
+      if (!statuses.includes(row.status)) return 0
+      const like = (where.errorMessage as { $like?: string } | undefined)?.$like
+      if (!like) return 1
+      return row.errorMessage?.startsWith(like.replace(/%$/, '')) ? 1 : 0
+    }
+    em.nativeUpdate.mockImplementation(async (_entity: unknown, where: Record<string, unknown>) => matchesCas(where))
+    forkEm.nativeUpdate.mockImplementation(async (_entity: unknown, where: Record<string, unknown>) => matchesCas(where))
+    em.findOneOrFail.mockResolvedValue({ ...row } as ProgressJob)
+    em.findOne.mockResolvedValue({ ...row } as ProgressJob)
+    forkEm.findOne.mockResolvedValue({ ...row } as ProgressJob)
+
+    const service = createProgressService(em as never, eventBus)
+    await service.touchJobHeartbeat!('job-1', baseCtx)
+    const result = await service.updateProgress('job-1', { processedCount: 300 }, baseCtx)
+
+    expect(result.status).toBe('failed')
+    expect(result.errorMessage).toBe('Upstream connection reset by peer')
+    expect(result.errorStack).toBe('Error: Upstream connection reset by peer\n    at import')
+    expect(eventBus.emit).not.toHaveBeenCalled()
+
+    // A legitimate queue retry still restarts a genuinely failed job — only the
+    // write-path revival is narrowed.
+    const retried = await service.startJob('job-1', baseCtx)
+    expect(retried.status).toBe('running')
     expect(eventBus.emit).toHaveBeenCalledWith(
       PROGRESS_EVENTS.JOB_STARTED,
       expect.objectContaining({ jobId: 'job-1' }),
@@ -1490,7 +1591,7 @@ describe('progress service — stale-sweep recovery (GSM-314)', () => {
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(1)
     em.findOne
-      .mockResolvedValueOnce({ ...job, status: 'failed' } as ProgressJob)
+      .mockResolvedValueOnce({ ...job, status: 'failed', errorMessage: 'Job stale: no heartbeat for 60 seconds' } as ProgressJob)
       .mockResolvedValueOnce({ ...job, status: 'running', processedCount: 50, progressPercent: 50 } as ProgressJob)
 
     const service = createProgressService(em as never, eventBus)

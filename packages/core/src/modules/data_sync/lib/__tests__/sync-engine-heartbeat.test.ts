@@ -45,8 +45,13 @@ function createProgressService(overrides: Record<string, unknown> = {}): Progres
     failJob: jest.fn(async () => undefined),
     markCancelled: jest.fn(async () => undefined),
     touchJobHeartbeat: jest.fn(async () => undefined),
+    getJob: jest.fn(async () => null),
     ...overrides,
   } as unknown as ProgressService
+}
+
+function progressJobWithCount(processedCount: number) {
+  return jest.fn(async () => ({ processedCount }))
 }
 
 function createSyncRunService(run: Record<string, unknown>): SyncRunService {
@@ -190,7 +195,40 @@ describe('data sync engine heartbeats and resumed progress counts (GSM-314)', ()
     expect(progressService.markCancelled).toHaveBeenCalledWith('job-hb-1', expect.objectContaining({ tenantId: 'tenant-1' }))
   })
 
-  it('seeds the import progress counter from the run counters on redelivery', async () => {
+  it('keeps heartbeating across a batch boundary while per-batch bookkeeping runs', async () => {
+    jest.useFakeTimers()
+    const streamImport = jest.fn(async function* () {
+      yield importBatch(1, 0)
+      yield importBatch(1, 1)
+    })
+    // Slow post-batch work (coverage refresh on a large index, operational logging) runs
+    // between adapter yields and must not open an unheartbeated window either.
+    const syncRunService = createSyncRunService(baseImportRun)
+    ;(syncRunService.commitBatchProgress as jest.Mock).mockImplementation(
+      async () => new Promise((resolve) => setTimeout(resolve, 30_000)),
+    )
+    const progressService = createProgressService()
+    const engine = buildEngine({
+      run: baseImportRun,
+      adapter: importAdapter(streamImport),
+      progressService,
+      syncRunService,
+    })
+
+    const runPromise = engine.runImport('run-hb-1', 100, createScope())
+    await jest.advanceTimersByTimeAsync(60_000)
+    await runPromise
+
+    const touch = progressService.touchJobHeartbeat as jest.Mock
+    expect(touch.mock.calls.length).toBeGreaterThanOrEqual(3)
+
+    await jest.advanceTimersByTimeAsync(120_000)
+    const afterStream = touch.mock.calls.length
+    await jest.advanceTimersByTimeAsync(120_000)
+    expect(touch.mock.calls.length).toBe(afterStream)
+  })
+
+  it('seeds the import progress counter from the progress job on redelivery', async () => {
     const resumedRun = {
       ...baseImportRun,
       status: 'running',
@@ -203,11 +241,12 @@ describe('data sync engine heartbeats and resumed progress counts (GSM-314)', ()
     const streamImport = jest.fn(async function* () {
       yield importBatch(10)
     })
-    const progressService = createProgressService()
+    const progressService = createProgressService({ getJob: progressJobWithCount(50) })
     const engine = buildEngine({ run: resumedRun, adapter: importAdapter(streamImport), progressService })
 
     await engine.runImport('run-hb-1', 100, createScope())
 
+    expect(progressService.getJob).toHaveBeenCalledWith('job-hb-1', expect.objectContaining({ tenantId: 'tenant-1' }))
     expect(progressService.updateProgress).toHaveBeenCalledWith(
       'job-hb-1',
       expect.objectContaining({ processedCount: 60 }),
@@ -215,7 +254,61 @@ describe('data sync engine heartbeats and resumed progress counts (GSM-314)', ()
     )
   })
 
-  it('seeds the export progress counter from the run counters on redelivery', async () => {
+  it('resumes in source records for an adapter that emits several items per source record', async () => {
+    // Akeneo-shaped: one source product expands into a product item plus one item per
+    // variant, so the run's item counters run far ahead of the source-record count the
+    // engine reports. Seeding from those counters would pin the bar at 100% and produce
+    // a negative ETA for the rest of the run.
+    const resumedRun = {
+      ...baseImportRun,
+      status: 'running',
+      createdCount: 1800,
+      updatedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      batchesCompleted: 12,
+    }
+    const streamImport = jest.fn(async function* () {
+      yield {
+        ...importBatch(15),
+        processedCount: 10,
+        totalEstimate: 1330,
+      }
+    })
+    const progressService = createProgressService({ getJob: progressJobWithCount(1320) })
+    const engine = buildEngine({ run: resumedRun, adapter: importAdapter(streamImport), progressService })
+
+    await engine.runImport('run-hb-1', 100, createScope())
+
+    expect(progressService.updateProgress).toHaveBeenCalledWith(
+      'job-hb-1',
+      expect.objectContaining({ processedCount: 1330, totalCount: 1330 }),
+      expect.objectContaining({ tenantId: 'tenant-1' }),
+    )
+    const [, update] = (progressService.updateProgress as jest.Mock).mock.calls[0] as [
+      string,
+      { processedCount: number; totalCount: number },
+    ]
+    expect(update.processedCount).toBeLessThanOrEqual(update.totalCount)
+  })
+
+  it('starts the import progress counter at zero for a fresh run', async () => {
+    const streamImport = jest.fn(async function* () {
+      yield importBatch(10)
+    })
+    const progressService = createProgressService({ getJob: progressJobWithCount(0) })
+    const engine = buildEngine({ run: baseImportRun, adapter: importAdapter(streamImport), progressService })
+
+    await engine.runImport('run-hb-1', 100, createScope())
+
+    expect(progressService.updateProgress).toHaveBeenCalledWith(
+      'job-hb-1',
+      expect.objectContaining({ processedCount: 10 }),
+      expect.objectContaining({ tenantId: 'tenant-1' }),
+    )
+  })
+
+  it('seeds the export progress counter from the progress job on redelivery', async () => {
     const resumedRun = {
       ...baseImportRun,
       id: 'run-hb-2',
@@ -250,7 +343,7 @@ describe('data sync engine heartbeats and resumed progress counts (GSM-314)', ()
       })),
       streamExport,
     }
-    const progressService = createProgressService()
+    const progressService = createProgressService({ getJob: progressJobWithCount(50) })
     const engine = buildEngine({ run: resumedRun, adapter, progressService })
 
     await engine.runExport('run-hb-2', 100, createScope())

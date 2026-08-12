@@ -81,42 +81,24 @@ function applyExportCounters(batch: ExportBatch): SyncCounterDelta {
 // APIs), so the engine must heartbeat while a batch is still being produced.
 const HEARTBEAT_TICK_MS = (STALE_JOB_TIMEOUT_SECONDS * 1000) / 4
 
-// Runs `tick` on an interval only while the source iterator is pending, so heartbeats
-// stop the moment the producer dies and genuinely stale jobs still get swept. The outer
-// finally closes the adapter generator on early exits (cancellation, ownership conflict).
+// Runs `tick` on an interval for as long as the loop is consuming this stream, so the
+// job stays alive across both a slow adapter batch and slow per-batch bookkeeping. The
+// interval is cleared and the adapter generator closed in the same finally, which runs
+// whenever the loop exits — normal completion, producer error, cancellation or ownership
+// conflict — so heartbeats stop the moment the consumer stops and real sweeps still land.
 async function* withHeartbeat<T>(source: AsyncIterable<T>, tick: () => void, intervalMs: number): AsyncGenerator<T, void, undefined> {
   const iterator = source[Symbol.asyncIterator]()
+  const timer = setInterval(tick, intervalMs)
   try {
     while (true) {
-      const timer = setInterval(tick, intervalMs)
-      let result: IteratorResult<T>
-      try {
-        result = await iterator.next()
-      } finally {
-        clearInterval(timer)
-      }
+      const result = await iterator.next()
       if (result.done) return
       yield result.value
     }
   } finally {
+    clearInterval(timer)
     await iterator.return?.()
   }
-}
-
-type RunCounters = {
-  createdCount?: number | null
-  updatedCount?: number | null
-  skippedCount?: number | null
-  failedCount?: number | null
-}
-
-// On redelivery the progress counter must resume from the run's persisted counters the
-// same way committedBatches does — updateProgress writes absolute counts, so starting at
-// zero would regress the visible count. The sum can slightly undercount when an adapter
-// reports batch.processedCount above the per-item action total; it is monotone and
-// self-corrects as absolute writes resume.
-function seedProcessedCount(run: RunCounters): number {
-  return (run.createdCount ?? 0) + (run.updatedCount ?? 0) + (run.skippedCount ?? 0) + (run.failedCount ?? 0)
 }
 
 export function createSyncEngine(deps: EngineDeps) {
@@ -144,6 +126,23 @@ export function createSyncEngine(deps: EngineDeps) {
         userId: scope.userId,
       },
     )
+  }
+
+  // On redelivery the progress counter must resume where the run left off the same way
+  // committedBatches does — updateProgress writes absolute counts, so starting at zero
+  // would regress the visible counter. The job's own processedCount is the only value
+  // already expressed in the unit the engine writes (source records, `batch.processedCount`
+  // when the adapter reports it); the run's created/updated/skipped/failed counters count
+  // emitted items instead and overshoot for adapters that expand one source record into
+  // several, which would pin the bar at 100% for the rest of the run.
+  async function seedProcessedCount(progressJobId: string | null | undefined, scope: SyncScope): Promise<number> {
+    if (!progressJobId) return 0
+    const job = await progressService.getJob(progressJobId, {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      userId: scope.userId,
+    })
+    return job?.processedCount ?? 0
   }
 
   function makeHeartbeatTick(progressJobId: string | null | undefined, scope: SyncScope): () => void {
@@ -538,7 +537,7 @@ export function createSyncEngine(deps: EngineDeps) {
       }
 
       const mapping = await resolveMapping(adapter, run.entityType, scope)
-      let processedCount = seedProcessedCount(activeRun)
+      let processedCount = await seedProcessedCount(run.progressJobId, scope)
       let totalCount: number | null = null
       let committedBatches = activeRun.batchesCompleted ?? 0
 
@@ -702,7 +701,7 @@ export function createSyncEngine(deps: EngineDeps) {
       }
 
       const mapping = await resolveMapping(adapter, run.entityType, scope)
-      let processedCount = seedProcessedCount(activeRun)
+      let processedCount = await seedProcessedCount(run.progressJobId, scope)
       let committedBatches = activeRun.batchesCompleted ?? 0
 
       try {
