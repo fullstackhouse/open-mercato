@@ -311,6 +311,62 @@ The column stays visible by default when channels are enabled, as today. Users w
 it through the existing `DataTable` column-visibility control, which persists into perspectives — no
 new mechanism needed, and no change to what an existing user sees.
 
+## Architecture
+
+The only structural decision here is *where in the list request the name gets attached*. The CRUD
+factory's GET pipeline, with this spec's addition marked:
+
+```
+GET /api/sales/orders
+  │
+  ├─ beforeList hook, interceptors (query rewrite)
+  ├─ cache lookup ─────────────────────── HIT ──┐
+  │                                             │
+  ├─ query engine → rows                        │
+  ├─ transformItem  → camelCase items           │   (channelId, no name)
+  ├─ cache store  ← payload cached here         │
+  │                                             │
+  └─ afterList ◄────────────────────────────────┘   ← runs on BOTH paths
+       ├─ attachTags                    (existing)
+       ├─ attachChannelNames            ← § 1, one batched query
+       └─ display-totals recalculation  (existing, single-order only)
+  │
+  └─ after-interceptors → response
+```
+
+Two properties follow from that position, and both are the reason for it:
+
+- **Post-cache.** The cached payload holds ids only. The CRUD list cache tags entries from the
+  document entity (`packages/shared/src/lib/crud/factory.ts:1489–1512`), so renaming a channel does
+  not invalidate a cached orders page — embedding the name before the store would serve stale names
+  until the next document write. Resolving after means every response carries live names, and the
+  shared cache entry never holds cross-entity data.
+- **Batch, not per-item.** `transformItem` is per-row and synchronous; `afterList` sees the whole
+  page, so the distinct channel ids collapse to one `IN` lookup regardless of page size.
+
+The same hook serves both list routes because orders and quotes are both built from
+`buildDocumentCrudOptions`. No new module boundary is crossed: `sales` reads its own `SalesChannel`
+entity.
+
+## Data Models
+
+**No schema change.** No migration, no new column, no new index.
+
+Read-only use of `sales_channels`:
+
+| column | use |
+|---|---|
+| `id` | join key against the page's `channel_id` values |
+| `name` | → `channelName` |
+| `code` | → `channelCode` |
+| `organization_id`, `tenant_id` | scope predicate on the lookup |
+
+`sales_orders.channel_id` / `sales_quotes.channel_id` are unchanged: nullable `uuid`, no ORM
+relationship — the id-plus-separate-query shape the module rules require. `SalesChannel.name` is not
+an encrypted field, so a plain `em.find` is correct and `findWithDecryption` is not needed.
+
+The response gains two nullable fields per item; nothing is removed or re-typed.
+
 ## API Contract
 
 `GET /api/sales/orders`, `GET /api/sales/quotes`
@@ -422,11 +478,43 @@ with the shared `parseIdsParam` rather than a locally-copied regex.
 - **Channel on the analytics/dashboard surfaces.** Grouping by `channel_id` already exists there and
   has the same name-resolution gap; out of scope here.
 
+## Risks & Impact Review
+
+| # | Failure scenario | Severity | Affected area | Mitigation | Residual |
+|---|---|---|---|---|---|
+| 1 | `hooks.afterList` is **assigned** rather than appended to, dropping `attachTags` and the single-order totals recalculation | **High** | Every orders/quotes list response; single-order GET | Compose into the existing hook (§ 1); the composition-guard unit test asserts `tags` and recalculated totals survive | Low — caught by the test, and it was already caught once in review |
+| 2 | Export rows omit `channelName` because the export column mapping doesn't pick up non-namespaced `afterList` fields | Low | CSV/XLSX export of the documents list | `afterList` runs on the export paths (`factory.ts:1821`, `:2022`) and its output is not enricher-namespaced, so it should survive the strip at `:395` | **Unverified** — the one item in this spec not confirmed against code. Verify during implementation; if it fails, exports keep today's behaviour (no channel column) rather than regressing |
+| 3 | Channel names become readable by roles that previously could not call `/api/sales/channels` | Low | Any role with `sales.orders.view` | Deliberate: `sales.orders.view` already `dependsOn` `sales.channels.view` (acl.ts:7). Only `name` and `code` are exposed — not `contact_email`, `website_url`, or address fields | Low, but it is a **deliberate exposure decision** and the one item here that wants explicit sign-off rather than review-by-default |
+| 4 | A document references a channel outside the request's org scope; the name resolves to `null` | Low | Multi-org tenants | Scoped lookup mirrors `attachTags` (`factory.ts:263–273`), using the full `organizationIds` set rather than a single org | Low — degrades to the uuid fallback the column already renders for deleted channels |
+| 5 | A perspective saved before § 4 holds `channelId` as a string; the new multi-select reads it as an array and clears the filter | Medium | Users with saved perspectives on `/backend/sales/orders` | Normalise `string → [string]` when restoring (§ 4); component test covers it | Low |
+| 6 | § 4 ships the `(No channel)` sentinel into `channelIds` without stripping it | Low | Channel filter | `parseIdsParam` drops non-uuids, so the request still succeeds — but unassigned rows are silently excluded unless `channelIdsEmpty` was also set | Low — component test asserts both params |
+| 7 | A future `buildFilters` addition needing `$or` clobbers #5198's channel `$or` | Low | Documents list filtering | Out of this spec's path (§ 1 touches `hooks.afterList`); recorded in § 2 for whoever extends `buildFilters` next | Low — pre-existing, flagged in the merged code's own comment |
+| 8 | The extra lookup adds latency to every list page | Low | List response time | Single PK `IN` lookup on a small bounded set; skipped entirely when no document on the page carries a channel | Low |
+
+## Final Compliance Report
+
+Against the root `AGENTS.md` rules that this change touches:
+
+| Rule | Status |
+|---|---|
+| No direct ORM relationships between modules | ✅ Same-module read (`sales` → its own `SalesChannel`); id-plus-separate-query, no new relation |
+| Tenant/organization scoping on every query | ✅ Lookup carries tenant + the request's `organizationIds` set |
+| Validate inputs with zod | ✅ `channelIds`/`channelIdsEmpty` are on `listSchema` (shipped in #5198) |
+| `findWithDecryption` for encrypted entities | ✅ N/A — `SalesChannel.name`/`code` are not encrypted fields |
+| No `any` types | ⚠️ **Deviation.** § 1's `attachChannelNames` signature mirrors `attachTags` (`payload: any, ctx: any`), which is how the existing hook is written. Matching the neighbour keeps one shape in one file; introducing a typed variant beside an untyped twin is worse. Implementation should type the *new* function's payload/ctx if it can be done without touching `attachTags` — otherwise carry the deviation and say so in the PR |
+| `BACKWARD_COMPATIBILITY.md` classification | ✅ API route = **additive** (two response fields, two query params already shipped). ACL feature change = **widening**, not removal. No frozen surface touched |
+| Optimistic locking | ✅ N/A — read path only, no mutating form or entity added |
+| i18n, no hardcoded user-facing strings | ✅ Reuses `sales.documents.list.filters.channel` / `.table.channel` (all four locales); one new key for the multi-select placeholder + one for `(No channel)`, added to `en/de/es/pl` |
+| Design-system rules | ✅ N/A for §§ 1–3. § 4 changes a `FilterDef` type and a cell renderer — no new colors, sizes, or arbitrary values |
+| Integration coverage ships with the feature | ✅ Planned in § Test Plan, in `.ai/qa/`, self-contained fixtures |
+| `yarn generate` after module changes | ✅ Not required — no auto-discovery file added; the OpenAPI query schema derives from `listSchema` |
+
 ## Changelog
 
 | date | change |
 |---|---|
 | 2026-08-10 | Initial draft. Verified against fork `main` @ `bdf361155`. |
 | 2026-08-10 | Review round 1 (Copilot): compose into the existing `hooks.afterList` instead of replacing it (`attachTags` + display-totals recalculation would have been dropped); scope the channel lookup by organization as well as tenant; defect count and the "no behaviour change" claim corrected. |
+| 2026-08-12 | Added the four sections `.ai/specs/AGENTS.md` requires and this spec was missing: Architecture, Data Models, Risks & Impact Review, Final Compliance Report. Two things surfaced in the process — the export-path behaviour (risk 2) is the one claim here not verified against code, and § 1's `any`-typed hook signature is a deliberate deviation from the no-`any` rule for consistency with `attachTags`. |
 | 2026-08-12 | #5198 merged into `develop` (`b4f5d05d7`). § 2 is done. All line numbers re-pinned to upstream `develop` @ `915dfd342`. Recorded the one design change the merge made: `channelIds` and `channelIdsEmpty` **combine** via `$or` rather than being mutually exclusive as this spec drafted them — which is what lets § 4's multi-select carry an `(No channel)` option that behaves the way a user reads it. § 4 spec'd accordingly, and its cross-PR dependency is discharged. |
 | 2026-08-11 | § 2 carved out and shipped as upstream #5198. Section now defers to that PR, adopts its shared `parseIdsParam` over the locally-copied `parseIdList` this spec had proposed (and documents its silent 200-id cap), and drops the `documents.factory.test.ts` cases it already covers. Added § Relationship to #5198 recording the one hard ordering constraint: § 4's multi-select must not ship before those params exist. |
