@@ -131,10 +131,11 @@ const attachChannelNames = async (payload: any, ctx: any) => {
   const em = ctx?.container?.resolve ? (ctx.container.resolve('em') as EntityManager) : null
   if (!em) return
 
-  // Same scoping predicate as attachTags (factory.ts:224-234): tenant, plus the
+  // Same scoping predicate as attachTags (factory.ts:263-273): tenant, plus the
   // request's organization scope — the SET of orgs, not ctx.auth.orgId, so a
   // multi-org scope selection does not blank the names of documents outside the
-  // primary org.
+  // primary org. Deliberately no `deletedAt: null`: a retired channel keeps its
+  // name on the documents that were placed through it.
   const where: Record<string, unknown> = { id: { $in: channelIds } }
   if (ctx?.auth?.tenantId) where.tenantId = ctx.auth.tenantId
   const orgIds =
@@ -145,7 +146,11 @@ const attachChannelNames = async (payload: any, ctx: any) => {
         : []
   if (orgIds.length) where.organizationId = { $in: orgIds }
 
-  const byId = new Map((await em.find(SalesChannel, where)).map((channel) => [channel.id, channel]))
+  const channels = await findWithDecryption(em, SalesChannel, where, {}, {
+    tenantId: ctx?.auth?.tenantId ?? null,
+    organizationId: ctx?.selectedOrganizationId ?? ctx?.auth?.orgId ?? null,
+  })
+  const byId = new Map(channels.map((channel) => [channel.id, channel]))
   items.forEach((item) => {
     if (!item || typeof item.channelId !== 'string') return
     const channel = byId.get(item.channelId)
@@ -197,8 +202,26 @@ org-scoped documents, but the lookup states its own scope rather than inheriting
 `SalesChannel` is org-scoped in its own right (`organizationId` is non-nullable; the channels CRUD
 route declares `orgField: 'organizationId'`). A channel outside the request's scope resolves to
 `channelName: null` rather than leaking a name — the same failure mode as a deleted channel, which
-the UI already handles. `SalesChannel.name` is not encrypted, so a plain `em.find` is correct here;
-`findWithDecryption` is not needed.
+the UI already handles.
+
+**Use `findWithDecryption`, not `em.find`.** The draft argued a plain `em.find` was fine because
+`SalesChannel.name` is not encrypted. That is true today and beside the point: `AGENTS.md` states the
+rule unconditionally, and every non-seed `SalesChannel` lookup in this module already goes through
+`findOneWithDecryption` (`commands/configuration.ts:199`, `:677`, `:753`, `:846`, `:901`, `:945`).
+A lookup that is correct only until someone marks a channel field encrypted is not worth the saving.
+
+**Soft-deleted channels are resolved, deliberately.** The lookup does **not** filter `deletedAt: null`,
+which differs from the live-read paths above (`configuration.ts:199`, `:753`) and needs saying out
+loud. A document's channel is a historical fact: retiring a storefront should not blank the channel
+on every order ever placed through it, and this module already takes that position everywhere else —
+`customer_snapshot`, `shipping_method_snapshot` and `payment_method_snapshot` all exist so a document
+keeps point-in-time data when the source record moves. Filtering deleted channels out here would
+replace a real name with a raw uuid on exactly the historical rows this spec is trying to fix.
+
+The consequence, and it is acceptable: the Channel **column** can show a name the Channel **filter**
+cannot offer, because the filter's options come from `/api/sales/channels`, which excludes
+soft-deleted rows. An operator can see "Web shop" on an old order and not be able to filter for it.
+The alternative — a uuid in the column *and* no filter entry — is worse on both counts.
 
 **Rejected alternative — a `channels` lookup map beside `items`.** It avoids repeating a name across
 rows, but it breaks the flat-item contract that `DataTable`, the export path, and the OpenAPI item
@@ -305,7 +328,8 @@ Channel column to be meaningful.
   a channel.
 - **i18n.** Existing keys `sales.documents.list.filters.channel` and
   `sales.documents.list.table.channel` are reused (present in all four locales at `i18n/*.json:1033`
-  and `:1049`). One new key for the multi-select placeholder, added to `en/de/es/pl`.
+  and `:1049`). **Two** new keys, both added to `en/de/es/pl`: the multi-select placeholder, and the
+  `(No channel)` option label — the latter must not ship as a literal string in the option list.
 
 The column stays visible by default when channels are enabled, as today. Users who don't want it hide
 it through the existing `DataTable` column-visibility control, which persists into perspectives — no
@@ -362,8 +386,8 @@ Read-only use of `sales_channels`:
 | `organization_id`, `tenant_id` | scope predicate on the lookup |
 
 `sales_orders.channel_id` / `sales_quotes.channel_id` are unchanged: nullable `uuid`, no ORM
-relationship — the id-plus-separate-query shape the module rules require. `SalesChannel.name` is not
-an encrypted field, so a plain `em.find` is correct and `findWithDecryption` is not needed.
+relationship — the id-plus-separate-query shape the module rules require. `deleted_at` is
+deliberately **not** in the predicate; see § 1.
 
 The response gains two nullable fields per item; nothing is removed or re-typed.
 
@@ -402,6 +426,8 @@ modelled on `shipments.afterList.test.ts`)
 - **one** `em.find` for a page containing repeated and distinct channel ids (the N+1 guard)
 - no query at all when every item has a null `channelId`
 - a `channelId` with no surviving channel row → `channelName: null`, `channelId` preserved
+- a **soft-deleted** channel still resolves to its name — the deliberate divergence in § 1, pinned by
+  a test so nobody "fixes" it into a `deletedAt: null` filter later
 - a channel outside the request's organization scope → `channelName: null`, no name leaked
 - the lookup predicate carries both the tenant and the request's organization scope, and uses the
   full `organizationIds` set when the request selects more than one org
@@ -500,7 +526,8 @@ Against the root `AGENTS.md` rules that this change touches:
 | No direct ORM relationships between modules | ✅ Same-module read (`sales` → its own `SalesChannel`); id-plus-separate-query, no new relation |
 | Tenant/organization scoping on every query | ✅ Lookup carries tenant + the request's `organizationIds` set |
 | Validate inputs with zod | ✅ `channelIds`/`channelIdsEmpty` are on `listSchema` (shipped in #5198) |
-| `findWithDecryption` for encrypted entities | ✅ N/A — `SalesChannel.name`/`code` are not encrypted fields |
+| `findWithDecryption` over raw `em.find` | ✅ § 1 uses it. No encrypted field on `SalesChannel` today, but the rule is unconditional and every non-seed lookup in this module already complies |
+| Soft-delete handling | ⚠️ **Deliberate divergence.** The lookup resolves soft-deleted channels, unlike the module's live-read paths, so a retired channel keeps its name on historical documents. Reasoned in § 1; the visible consequence is a column value the filter cannot offer |
 | No `any` types | ⚠️ **Deviation.** § 1's `attachChannelNames` signature mirrors `attachTags` (`payload: any, ctx: any`), which is how the existing hook is written. Matching the neighbour keeps one shape in one file; introducing a typed variant beside an untyped twin is worse. Implementation should type the *new* function's payload/ctx if it can be done without touching `attachTags` — otherwise carry the deviation and say so in the PR |
 | `BACKWARD_COMPATIBILITY.md` classification | ✅ API route = **additive** (two response fields, two query params already shipped). ACL feature change = **widening**, not removal. No frozen surface touched |
 | Optimistic locking | ✅ N/A — read path only, no mutating form or entity added |
@@ -515,6 +542,7 @@ Against the root `AGENTS.md` rules that this change touches:
 |---|---|
 | 2026-08-10 | Initial draft. Verified against fork `main` @ `bdf361155`. |
 | 2026-08-10 | Review round 1 (Copilot): compose into the existing `hooks.afterList` instead of replacing it (`attachTags` + display-totals recalculation would have been dropped); scope the channel lookup by organization as well as tenant; defect count and the "no behaviour change" claim corrected. |
+| 2026-08-12 | Review round 2 (Copilot): use `findWithDecryption` per `AGENTS.md` and the module's own call sites rather than a raw `em.find`; two i18n keys, not one. Soft-delete handling was a genuine gap — now an explicit decision (resolve deleted channels, so a retired storefront keeps its name on historical documents) with a test pinning it and the column/filter asymmetry stated. |
 | 2026-08-12 | Added the four sections `.ai/specs/AGENTS.md` requires and this spec was missing: Architecture, Data Models, Risks & Impact Review, Final Compliance Report. Two things surfaced in the process — the export-path behaviour (risk 2) is the one claim here not verified against code, and § 1's `any`-typed hook signature is a deliberate deviation from the no-`any` rule for consistency with `attachTags`. |
 | 2026-08-12 | #5198 merged into `develop` (`b4f5d05d7`). § 2 is done. All line numbers re-pinned to upstream `develop` @ `915dfd342`. Recorded the one design change the merge made: `channelIds` and `channelIdsEmpty` **combine** via `$or` rather than being mutually exclusive as this spec drafted them — which is what lets § 4's multi-select carry an `(No channel)` option that behaves the way a user reads it. § 4 spec'd accordingly, and its cross-PR dependency is discharged. |
 | 2026-08-11 | § 2 carved out and shipped as upstream #5198. Section now defers to that PR, adopts its shared `parseIdsParam` over the locally-copied `parseIdList` this spec had proposed (and documents its silent 200-id cap), and drops the `documents.factory.test.ts` cases it already covers. Added § Relationship to #5198 recording the one hard ordering constraint: § 4's multi-select must not ship before those params exist. |
