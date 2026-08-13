@@ -1,3 +1,4 @@
+import { LockMode } from '@mikro-orm/core'
 import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { createExternalIdMappingService, isSourceReadStale } from '../id-mapping'
 
@@ -318,6 +319,86 @@ describe('createExternalIdMappingService', () => {
     })
   })
 
+  describe('lookupMapping', () => {
+    const scope = { organizationId: 'org-1', tenantId: 'tenant-1' }
+
+    it('returns null and does not flush when no mapping exists', async () => {
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null)
+
+      const em = { flush: jest.fn().mockResolvedValue(undefined) }
+      const service = createExternalIdMappingService(em as never)
+      const result = await service.lookupMapping('sync_magento', 'sales_order', 'magento-missing', scope)
+
+      expect(result).toBeNull()
+      expect(em.flush).not.toHaveBeenCalled()
+    })
+
+    it('maps the row to a snapshot and scopes the lookup by external id', async () => {
+      const readAt = new Date('2026-08-12T10:00:00.000Z')
+      const syncedAt = new Date('2026-08-12T10:00:05.000Z')
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce({
+        id: 'mapping-1',
+        internalEntityId: 'order-1',
+        externalId: 'magento-1',
+        syncStatus: 'synced',
+        lastSyncedAt: syncedAt,
+        sourceReadAt: readAt,
+        deletedAt: null,
+      })
+
+      const em = { flush: jest.fn().mockResolvedValue(undefined) }
+      const service = createExternalIdMappingService(em as never)
+      const result = await service.lookupMapping('sync_magento', 'sales_order', 'magento-1', scope)
+
+      expect(result).toEqual({
+        localId: 'order-1',
+        externalId: 'magento-1',
+        syncStatus: 'synced',
+        lastSyncedAt: syncedAt,
+        sourceReadAt: readAt,
+      })
+      const where = (findOneWithDecryption as jest.Mock).mock.calls[0][2]
+      expect(where).toMatchObject({
+        integrationId: 'sync_magento',
+        internalEntityType: 'sales_order',
+        externalId: 'magento-1',
+        organizationId: 'org-1',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      })
+    })
+
+    it('normalizes an unstamped legacy row to null rather than undefined', async () => {
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce({
+        id: 'mapping-1',
+        internalEntityId: 'order-1',
+        externalId: 'magento-1',
+        syncStatus: 'synced',
+        deletedAt: null,
+      })
+
+      const em = { flush: jest.fn().mockResolvedValue(undefined) }
+      const service = createExternalIdMappingService(em as never)
+      const result = await service.lookupMapping('sync_magento', 'sales_order', 'magento-1', scope)
+
+      expect(result?.sourceReadAt).toBeNull()
+      expect(result?.lastSyncedAt).toBeNull()
+    })
+
+    it('takes no lock by default and a write lock under forUpdate', async () => {
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+
+      const em = { flush: jest.fn().mockResolvedValue(undefined) }
+      const service = createExternalIdMappingService(em as never)
+      await service.lookupMapping('sync_magento', 'sales_order', 'magento-1', scope)
+      await service.lookupMapping('sync_magento', 'sales_order', 'magento-1', scope, { forUpdate: true })
+
+      expect((findOneWithDecryption as jest.Mock).mock.calls[0][3]).toBeUndefined()
+      expect((findOneWithDecryption as jest.Mock).mock.calls[1][3]).toEqual({
+        lockMode: LockMode.PESSIMISTIC_WRITE,
+      })
+    })
+  })
 })
 
 describe('isSourceReadStale', () => {

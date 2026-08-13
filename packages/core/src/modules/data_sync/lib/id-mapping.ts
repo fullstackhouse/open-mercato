@@ -1,3 +1,4 @@
+import { LockMode } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { SyncExternalIdMapping } from '../../integrations/data/entities'
@@ -13,6 +14,14 @@ export type StoreExternalIdMappingOptions = {
    * the clock requirement. Omit to leave the stored stamp untouched; pass `null` to clear it.
    */
   sourceReadAt?: Date | null
+}
+
+export type ExternalIdMappingSnapshot = {
+  localId: string
+  externalId: string
+  syncStatus: SyncExternalIdMapping['syncStatus']
+  lastSyncedAt: Date | null
+  sourceReadAt: Date | null
 }
 
 function toEpochMs(value: Date | string | null | undefined): number | null {
@@ -80,6 +89,47 @@ export function createExternalIdMappingService(em: EntityManager) {
         scope,
       )
       return row?.externalId ?? null
+    },
+
+    /**
+     * Reads the full mapping for an external id in one query, so a caller can compare
+     * `sourceReadAt` (see `isSourceReadStale`) and resolve the local id it is about to overwrite
+     * without a second round trip.
+     *
+     * `forUpdate` takes a row lock for the surrounding transaction and therefore MUST be called
+     * inside one — MikroORM throws otherwise. Note the lock cannot serialize the first write for an
+     * external id, because the row does not exist yet and the table carries no unique constraint;
+     * see the module docs for the advisory-lock pattern that covers that case.
+     */
+    async lookupMapping(
+      integrationId: string,
+      entityType: string,
+      externalId: string,
+      scope: MappingScope,
+      opts?: { forUpdate?: boolean },
+    ): Promise<ExternalIdMappingSnapshot | null> {
+      const row = await findOneWithDecryption(
+        em,
+        SyncExternalIdMapping,
+        {
+        integrationId,
+        internalEntityType: entityType,
+        externalId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+        },
+        opts?.forUpdate ? { lockMode: LockMode.PESSIMISTIC_WRITE } : undefined,
+        scope,
+      )
+      if (!row) return null
+      return {
+        localId: row.internalEntityId,
+        externalId: row.externalId,
+        syncStatus: row.syncStatus,
+        lastSyncedAt: row.lastSyncedAt ?? null,
+        sourceReadAt: row.sourceReadAt ?? null,
+      }
     },
 
     async storeExternalIdMapping(
