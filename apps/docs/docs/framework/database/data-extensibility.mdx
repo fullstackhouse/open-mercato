@@ -133,11 +133,60 @@ The integrations module provides a built-in entity and enricher for tracking ext
 | `internal_entity_id` | UUID | Internal record ID |
 | `external_id` | text | ID in the external system |
 | `sync_status` | text | `synced`, `pending`, `error`, or `not_synced` |
-| `last_synced_at` | timestamp | Last successful sync time |
+| `last_synced_at` | timestamp | Last successful sync time (when **we wrote**) |
+| `source_read_at` | timestamp, nullable | When the **source produced** the data last applied. Optional; see below |
 | `organization_id` | UUID | Tenant-scoped |
 | `tenant_id` | UUID | Tenant-scoped |
 
 Entity source: `packages/core/src/modules/integrations/data/entities.ts`
+
+#### Ordering concurrent writers with `source_read_at`
+
+When two writers for one integration read the source at different times but apply in the other
+order — typically an incremental change feed racing a whole-table backfill — the older read wins and
+silently overwrites newer data. Nothing repairs it: the source already emitted its change, so the
+record stays wrong until the next edit or the next backfill.
+
+`last_synced_at` cannot order those writers, because it records when the *write* landed. That ranks
+them by who finished last, which is backwards — the clobbering writer is the one that finished later
+holding older data. `source_read_at` records when the source was *read*, which is the ordering that
+matters.
+
+Adapters that want the guarantee opt in:
+
+```ts
+const mapping = await externalIdMappingService.lookupMapping(integrationId, entityType, externalId, scope)
+if (isSourceReadStale(mapping?.sourceReadAt, payload.sourceReadAt)) return // older read; skip the apply
+
+await applyDocument(payload)
+await externalIdMappingService.storeExternalIdMapping(
+  integrationId, entityType, localId, externalId, scope,
+  { sourceReadAt: payload.sourceReadAt },
+)
+```
+
+Both the option and the check are optional — omit them and the mapping behaves exactly as it always
+has (last-write-wins, column left untouched). Deciding to skip is the adapter's call, not core's,
+because only the adapter knows what one document comprises (header, lines, linked records) and that
+applying it partially is not an option.
+
+Two requirements, both easy to get wrong:
+
+- **One clock.** The stamp MUST come from the source's own clock, read in the same query that
+  returned the payload. Not `new Date()` in the app process — with several replicas, clock skew
+  silently reorders the writers again, and a fence fed from the wrong clock is worse than none
+  because it looks safe.
+- **Serialize the compare and the stamp.** Check-then-write is racy on its own: two writers can both
+  read the stored stamp, both conclude they are newer, and land in either order. Hold the mapping row
+  with `lookupMapping(..., { forUpdate: true })` inside `em.transactional`, or take
+  `pg_advisory_xact_lock` keyed on the external id, for the duration of the document apply. The row
+  lock cannot cover the *first* write for an external id — the row does not exist yet, and the table
+  carries no unique constraint — so use the advisory lock when first-insert races are possible.
+
+Note the fence is only as fine-grained as the source's clock. Equal stamps count as **not** stale, so
+that a redelivered batch re-applies idempotently rather than being silently dropped; a source
+reporting whole-second granularity therefore will not fence a same-second out-of-order pair. Sources
+that need that require a monotonic sequence or LSN rather than a timestamp.
 
 ### External ID mapping enricher
 

@@ -301,3 +301,22 @@ Files in `apps/mercato/.mercato/generated/` are produced by the CLI generators. 
 | Polling cadence | `pollIntervalSeconds` flips 60 → 1800 only when `pushStatus='active'` is persisted. Non-push channels unchanged. | ✓ Behavior-preserving for existing channels |
 
 **Migration path for existing tenants**: no action required. Push is opt-in per channel — until an operator explicitly registers (via connect flow or `POST /push/register`), Gmail channels keep polling on the Spec B baseline. The new ACL feature `communication_channels.channel.push.manage` must be granted via `yarn mercato auth sync-role-acls` post-deploy for the "Re-register push" button to appear.
+
+---
+
+## Source Read Stamp on External ID Mappings (2026-08-13)
+
+`.ai/specs/2026-08-13-sync-source-read-at.md` adds a source-clock read stamp to `SyncExternalIdMapping` so an adapter running two writers against one source (an incremental change feed and a whole-table backfill) can refuse an apply that carries an older read than the one already applied. **All changes are additive** and pass the contract-surface checks above:
+
+| Surface | Change | Classification |
+|---------|--------|----------------|
+| Database schema | New nullable column `sync_external_id_mappings.source_read_at timestamptz` via additive migration `Migration20260813120000`. No index, no backfill — existing rows stay `NULL` and compare as older than any incoming stamp | ✓ ADDITIVE (§8 DB Schema, nullable column) |
+| `storeExternalIdMapping` | New **trailing optional** parameter `options?: { sourceReadAt?: Date \| null }`. Omitting it leaves the column untouched on updates and absent from the insert, reproducing today's behaviour byte-for-byte | ✓ ADDITIVE (§3 Function Signatures, new optional parameter) |
+| `ExternalIdMappingService` (DI `externalIdMappingService`) | New optional method `lookupMapping(integrationId, entityType, externalId, scope, opts?)`. No existing method's signature or return type changes — in particular `lookupLocalId` still returns `string \| null` | ✓ ADDITIVE (§9 DI Service Names, new method on an existing service) |
+| Import path `@open-mercato/core/modules/data_sync/lib/id-mapping` | New exports `isSourceReadStale`, `StoreExternalIdMappingOptions`, `ExternalIdMappingSnapshot` on an existing path. No new import path registered | ✓ ADDITIVE (§4 Import Paths, new exports) |
+| Enricher response (`_integrations`) | **No change.** `sourceReadAt` is deliberately not surfaced — `ExternalIdMapping` in `packages/shared/src/modules/integrations/types.ts` is a STABLE type under §2 and the enricher targets `'*'`, so widening it would commit every enriched entity in the system to carrying a field with no current consumer | ✓ No response-shape change |
+| OpenAPI / CRUD routes | **No change.** No core CRUD route serializes this table | ✓ No API surface change |
+
+`storeExternalIdMapping` is deliberately **not** added to the §3 function-signature table: that table is a whitelist of cross-package framework functions, and listing a module service method there would newly freeze a signature this change is extending.
+
+**Migration path for existing tenants**: none required. The column is nullable with no backfill; existing rows read as "never stamped" and lose the comparison to any incoming stamp, so the first apply after deploy stamps them. Both the write option and the comparison are opt-in per adapter — an adapter that passes neither keeps last-write-wins exactly as before.
