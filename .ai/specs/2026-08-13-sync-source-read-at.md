@@ -134,32 +134,71 @@ await externalIdMappingService.storeExternalIdMapping(
 )
 ```
 
-## Architecture — why the fence is adapter-owned
+## Architecture — why core stores a value it never reads
 
-Three places the comparison could live:
+The obvious objection to this change is that it adds a column core never uses. The answer is
+structural, not a preference, and it is worth stating before anyone asks.
 
-- **Minimum** — ship only the column and the write option; every adapter re-implements the same race.
-- **Middle (chosen)** — ship a read helper so an adapter can compare without a second query, plus a
-  pure comparator so the null/equality rules are written once.
-- **Most** — core owns the fence: `storeExternalIdMapping` refuses an older write and reports that it
-  skipped.
+The check must happen **immediately before the record is written**. In `data_sync` there is no such
+moment inside core. The adapter contract's unit of exchange is a whole batch — `streamImport` yields
+`ImportBatch { items: ImportItem[], cursor, hasMore }`
+(`packages/core/src/modules/data_sync/lib/adapter.ts`) — and `ImportItem.action`
+(`'create' | 'update' | 'skip' | 'failed'`) is a past-tense **report** of what the adapter already did,
+not an instruction for core to carry out. The engine's loop over those items
+(`lib/sync-engine.ts`) only counts them, logs failures, and commits cursor progress. Both in-tree
+adapters loop internally and complete every write before yielding
+(`sync-akeneo/.../adapter.ts`, `sync_excel/lib/adapters/customers.ts`).
 
-The middle is chosen because the comparison is cheap and general, but **"skip the whole document apply"
-is an adapter-level decision**: only the adapter knows what one document comprises (header, lines,
-linked records) and that partially applying it is not an option.
+The one core function on that path is `storeExternalIdMapping`, and it runs **after** the record is
+written. That ordering is not merely conventional — at several call sites it is data-dependent and
+cannot be inverted, because the mapping call consumes the write's output:
 
-There is also a concrete repo-level argument against "most". The Akeneo importer calls
-`storeExternalIdMapping` roughly ten times while applying a single product (header, categories, option
-schemas, offers, prices, attachments, variants). A core-level skip on one of those calls would leave the
-document half-applied — the exact failure the fence exists to prevent. Some adapters may also
-legitimately want last-write-wins.
+```ts
+// packages/core/src/modules/sync_excel/lib/adapters/customers.ts
+const commandResult = await params.commandBus.execute(/* customers.people.create */)
+await params.externalIdMappingService.storeExternalIdMapping(
+  'sync_excel', 'customers.person',
+  commandResult.result.entityId,   // ← the id the write just produced
+  externalId, params.scope,
+)
+```
+
+The same shape holds across the Akeneo importer (`created.categoryId`, `offerId`, `priceId`,
+`attachment.id`, `localProductId`, `localVariantId`). No call site invokes `storeExternalIdMapping`
+before its corresponding record write. So a refusal inside it would be too late to prevent the
+overwrite: it could only decline to update the mapping row, leaving the record written and the
+bookkeeping inconsistent with it — strictly worse than doing nothing.
+
+**Scoping the claim honestly:** the framework does have a per-write hook — `beforeExecute` on command
+interceptors (`packages/shared/src/lib/commands/command-interceptor.ts`), which can block an individual
+command and supports `'*'` targets. It does not close this gap, for two reasons. It fires per
+**command**, not per logical source record, so it sees fragments of an aggregate rather than the
+aggregate; and it does not cover every write — the Akeneo attachment path writes through raw ORM
+(`em.create` / `em.persist` / `em.flush`) and bypasses the bus entirely.
+
+That is also the second, independent reason the refusal should not live in core even if such a hook
+existed: **what gets skipped is a whole record aggregate.** One Akeneo product spans up to seven
+`storeExternalIdMapping` calls across six `internalEntityType`s (option schema, categories, product,
+variant, offers, prices, attachments) inside a single `upsertProduct`, and returns several
+`ImportItem`s. There is no single point at which that aggregate can be declined atomically, and
+partially applying it is not an option. Only the adapter knows where those boundaries are.
+
+**So the split: core remembers the fact, the adapter acts on it.**
+
+That makes the remaining question narrow — how much core takes on:
+
+- **Minimum** — the column and the write option only; each adapter reads the mapping row for itself.
+- **Middle (chosen)** — the above, plus a way to read the stamp back without a second query, and a pure
+  comparator so the null/equality rules are written once. Adapters that already query the mapping table
+  directly need nothing extra; ones that go through the service do.
+- **Most** — core refuses stale writes in `storeExternalIdMapping`. Rejected for the ordering reason
+  above: it fences the wrong moment. Some adapters may also legitimately want last-write-wins.
 
 `lookupMapping` returns a plain projection rather than the managed ORM row so adapters cannot mutate a
 live identity-map object and accidentally flush it — the hazard class `withAtomicFlush` exists for.
 
-**This is the contestable decision in this change.** If maintainers prefer core to own the fence, it is
-roughly ten lines moved into `storeExternalIdMapping`; if they prefer the minimum, `lookupMapping` is
-deleted and the rest stands.
+**The surface question is still the contestable one.** If maintainers prefer the minimum,
+`lookupMapping` is deleted and the rest stands.
 
 ## Concurrency & Atomicity
 
@@ -265,8 +304,9 @@ suite — a pre-existing gap this change closes.
 
 ## Open Questions for Maintainers
 
-1. **Where should the comparison live** — the middle option is proposed here, but core-owned or
-   adapter-only are both defensible. This is the decision worth your opinion.
+1. **How much of the read surface should core carry** — the middle option is proposed here; the
+   minimum (column and write option only) is equally defensible. Core owning the refusal is argued
+   against above on ordering grounds, but say so if you disagree.
 2. **Should `forUpdate` ship at all**, given it cannot cover first-insert and throws outside a
    transaction? Dropping it leaves the rest of the change intact.
 3. **Should the missing partial unique index be pursued** as a follow-up, with the dedupe migration it

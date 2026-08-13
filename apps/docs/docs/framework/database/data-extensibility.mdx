@@ -166,9 +166,16 @@ await externalIdMappingService.storeExternalIdMapping(
 ```
 
 Both the option and the check are optional — omit them and the mapping behaves exactly as it always
-has (last-write-wins, column left untouched). Deciding to skip is the adapter's call, not core's,
-because only the adapter knows what one document comprises (header, lines, linked records) and that
-applying it partially is not an option.
+has (last-write-wins, column left untouched).
+
+**Core stores this value and never reads it, deliberately.** The check has to happen immediately
+before the record is written, and there is no such moment inside core: `streamImport` hands back a
+whole `ImportBatch` whose `items` are a past-tense report of writes the adapter has already performed.
+`storeExternalIdMapping` runs *after* the write — at most call sites it consumes the id the write just
+produced — so refusing there would leave the record written and only the bookkeeping declined. The
+adapter is also the only party that knows the aggregate boundary: one Akeneo product spans up to seven
+mapping stores across six entity types, and applying it partially is not an option. Core remembers the
+fact; the adapter acts on it.
 
 Two requirements, both easy to get wrong:
 
