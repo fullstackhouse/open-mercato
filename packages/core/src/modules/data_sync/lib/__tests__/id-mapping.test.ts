@@ -1,5 +1,5 @@
 import { findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
-import { createExternalIdMappingService } from '../id-mapping'
+import { createExternalIdMappingService, isSourceReadStale } from '../id-mapping'
 
 jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
   findOneWithDecryption: jest.fn(),
@@ -213,5 +213,146 @@ describe('createExternalIdMappingService', () => {
       expect(result).toBe(0)
       expect(em.flush).not.toHaveBeenCalled()
     })
+  })
+
+  describe('storeExternalIdMapping source read stamp', () => {
+    const scope = { organizationId: 'org-1', tenantId: 'tenant-1' }
+
+    function makeEm() {
+      const persist = jest.fn((_entity: unknown) => ({ flush: jest.fn().mockResolvedValue(undefined) }))
+      return {
+        flush: jest.fn().mockResolvedValue(undefined),
+        create: jest.fn((_entity: unknown, data: Record<string, unknown>) => ({ ...data })),
+        persist,
+      }
+    }
+
+    it('leaves the stored stamp untouched when no options are supplied', async () => {
+      const storedStamp = new Date('2026-08-01T00:00:00.000Z')
+      const existing = {
+        id: 'mapping-1',
+        internalEntityId: 'order-old',
+        externalId: 'magento-1',
+        syncStatus: 'error',
+        lastSyncedAt: null,
+        sourceReadAt: storedStamp,
+        deletedAt: null,
+      }
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(existing)
+
+      const em = makeEm()
+      const service = createExternalIdMappingService(em as never)
+      await service.storeExternalIdMapping('sync_magento', 'sales_order', 'order-new', 'magento-1', scope)
+
+      expect(existing.sourceReadAt).toBe(storedStamp)
+      expect(existing.lastSyncedAt).toBeInstanceOf(Date)
+      expect(em.flush).toHaveBeenCalledTimes(1)
+      expect(em.persist).not.toHaveBeenCalled()
+    })
+
+    it('stamps a newly created mapping when the option is supplied', async () => {
+      const readAt = new Date('2026-08-12T10:00:00.000Z')
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+
+      const em = makeEm()
+      const service = createExternalIdMappingService(em as never)
+      await service.storeExternalIdMapping('sync_magento', 'sales_order', 'order-1', 'magento-1', scope, {
+        sourceReadAt: readAt,
+      })
+
+      expect(em.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ sourceReadAt: readAt }))
+      expect(em.persist).toHaveBeenCalledTimes(1)
+    })
+
+    it('omits the column from the insert entirely when no option is supplied', async () => {
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+
+      const em = makeEm()
+      const service = createExternalIdMappingService(em as never)
+      await service.storeExternalIdMapping('sync_magento', 'sales_order', 'order-1', 'magento-1', scope)
+
+      expect(em.create.mock.calls[0][1]).not.toHaveProperty('sourceReadAt')
+    })
+
+    it('updates the stamp on an existing mapping', async () => {
+      const newerStamp = new Date('2026-08-12T10:00:00.000Z')
+      const existing = {
+        id: 'mapping-1',
+        internalEntityId: 'order-1',
+        externalId: 'magento-1',
+        syncStatus: 'synced',
+        lastSyncedAt: null,
+        sourceReadAt: new Date('2026-08-01T00:00:00.000Z'),
+        deletedAt: null,
+      }
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(existing)
+
+      const em = makeEm()
+      const service = createExternalIdMappingService(em as never)
+      await service.storeExternalIdMapping('sync_magento', 'sales_order', 'order-1', 'magento-1', scope, {
+        sourceReadAt: newerStamp,
+      })
+
+      expect(existing.sourceReadAt).toBe(newerStamp)
+    })
+
+    it('clears the stamp when null is passed explicitly', async () => {
+      const existing = {
+        id: 'mapping-1',
+        internalEntityId: 'order-1',
+        externalId: 'magento-1',
+        syncStatus: 'synced',
+        lastSyncedAt: null,
+        sourceReadAt: new Date('2026-08-01T00:00:00.000Z') as Date | null,
+        deletedAt: null,
+      }
+      ;(findOneWithDecryption as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(existing)
+
+      const em = makeEm()
+      const service = createExternalIdMappingService(em as never)
+      await service.storeExternalIdMapping('sync_magento', 'sales_order', 'order-1', 'magento-1', scope, {
+        sourceReadAt: null,
+      })
+
+      expect(existing.sourceReadAt).toBeNull()
+    })
+  })
+
+})
+
+describe('isSourceReadStale', () => {
+  const stamp = new Date('2026-08-12T10:00:00.000Z')
+
+  it('treats a missing stored stamp as older than any incoming stamp', () => {
+    expect(isSourceReadStale(null, stamp)).toBe(false)
+    expect(isSourceReadStale(undefined, stamp)).toBe(false)
+  })
+
+  it('cannot fence a writer that supplies no stamp', () => {
+    expect(isSourceReadStale(stamp, null)).toBe(false)
+    expect(isSourceReadStale(stamp, undefined)).toBe(false)
+  })
+
+  it('treats equal stamps as not stale so redelivered batches re-apply', () => {
+    expect(isSourceReadStale(stamp, new Date(stamp.getTime()))).toBe(false)
+  })
+
+  it('reports an older incoming read as stale', () => {
+    expect(isSourceReadStale(stamp, new Date(stamp.getTime() - 1))).toBe(true)
+  })
+
+  it('reports a newer incoming read as not stale', () => {
+    expect(isSourceReadStale(stamp, new Date(stamp.getTime() + 1))).toBe(false)
+  })
+
+  it('accepts ISO strings on either side', () => {
+    expect(isSourceReadStale(stamp.toISOString(), '2026-08-12T09:59:59.999Z')).toBe(true)
+    expect(isSourceReadStale(stamp.toISOString(), '2026-08-12T10:00:00.000Z')).toBe(false)
+    expect(isSourceReadStale('2026-08-12T09:59:59.999Z', stamp)).toBe(false)
+  })
+
+  it('fails open on an unparseable stamp', () => {
+    expect(isSourceReadStale(stamp, 'not-a-date')).toBe(false)
+    expect(isSourceReadStale('not-a-date', stamp)).toBe(false)
   })
 })

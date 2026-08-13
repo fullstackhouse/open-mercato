@@ -7,6 +7,43 @@ type MappingScope = {
   tenantId: string
 }
 
+export type StoreExternalIdMappingOptions = {
+  /**
+   * When the source produced the data being applied — see `SyncExternalIdMapping.sourceReadAt` for
+   * the clock requirement. Omit to leave the stored stamp untouched; pass `null` to clear it.
+   */
+  sourceReadAt?: Date | null
+}
+
+function toEpochMs(value: Date | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null
+  const ms = value instanceof Date ? value.getTime() : new Date(value).getTime()
+  return Number.isNaN(ms) ? null : ms
+}
+
+/**
+ * Whether `incoming` describes an older read of the source than `stored`, i.e. applying it would
+ * overwrite newer data with older data and the caller should skip.
+ *
+ * ```ts
+ * const mapping = await service.lookupMapping(integrationId, entityType, externalId, scope)
+ * if (isSourceReadStale(mapping?.sourceReadAt, payload.sourceReadAt)) return
+ * ```
+ *
+ * Fails open — an absent or unparseable stamp on either side yields `false`, preserving
+ * last-write-wins for writers that do not track source read time. Equal stamps are NOT stale, so a
+ * redelivered batch re-applies idempotently instead of being silently dropped.
+ */
+export function isSourceReadStale(
+  stored: Date | string | null | undefined,
+  incoming: Date | string | null | undefined,
+): boolean {
+  const storedMs = toEpochMs(stored)
+  const incomingMs = toEpochMs(incoming)
+  if (storedMs === null || incomingMs === null) return false
+  return incomingMs < storedMs
+}
+
 export function createExternalIdMappingService(em: EntityManager) {
   return {
     async lookupLocalId(integrationId: string, entityType: string, externalId: string, scope: MappingScope): Promise<string | null> {
@@ -51,6 +88,7 @@ export function createExternalIdMappingService(em: EntityManager) {
       localId: string,
       externalId: string,
       scope: MappingScope,
+      options?: StoreExternalIdMappingOptions,
     ): Promise<SyncExternalIdMapping> {
       const existingByLocalId = await findOneWithDecryption(
         em,
@@ -91,6 +129,9 @@ export function createExternalIdMappingService(em: EntityManager) {
         existing.syncStatus = 'synced'
         existing.lastSyncedAt = now
         existing.deletedAt = null
+        if (options?.sourceReadAt !== undefined) {
+          existing.sourceReadAt = options.sourceReadAt
+        }
         if (
           existingByExternalId &&
           existingByLocalId &&
@@ -112,6 +153,7 @@ export function createExternalIdMappingService(em: EntityManager) {
         externalId,
         syncStatus: 'synced',
         lastSyncedAt: new Date(),
+        ...(options?.sourceReadAt !== undefined ? { sourceReadAt: options.sourceReadAt } : {}),
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
       })
