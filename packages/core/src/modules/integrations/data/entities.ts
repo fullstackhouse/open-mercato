@@ -5,7 +5,7 @@ import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legac
 @Index({ properties: ['internalEntityType', 'internalEntityId', 'organizationId'] })
 @Index({ properties: ['integrationId', 'externalId', 'organizationId'] })
 export class SyncExternalIdMapping {
-  [OptionalProps]?: 'syncStatus' | 'lastSyncedAt' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'syncStatus' | 'lastSyncedAt' | 'sourceReadAt' | 'createdAt' | 'updatedAt' | 'deletedAt'
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
@@ -26,6 +26,24 @@ export class SyncExternalIdMapping {
 
   @Property({ name: 'last_synced_at', type: Date, nullable: true })
   lastSyncedAt?: Date | null
+
+  /**
+   * When the SOURCE produced the data this row was last written from.
+   *
+   * MUST come from the source's own clock, read in the same query that returned the payload (the
+   * source row's own update timestamp, or the feed's server-side watermark). MUST NOT be
+   * `new Date()` in the application process — with several replicas, clock skew silently reorders
+   * writers — and MUST NOT be the OMS database's `now()`. Both of those order writers by when the
+   * WRITE landed, which is what `lastSyncedAt` already does and is backwards when two readers of
+   * one source apply out of order.
+   *
+   * NULL means never stamped (rows written before this column existed, or by a writer that does not
+   * track source read time) and compares as OLDER than any incoming stamp.
+   *
+   * Compare with `isSourceReadStale` from `@open-mercato/core/modules/data_sync/lib/id-mapping`.
+   */
+  @Property({ name: 'source_read_at', type: Date, nullable: true })
+  sourceReadAt?: Date | null
 
   @Property({ name: 'organization_id', type: 'uuid' })
   organizationId!: string

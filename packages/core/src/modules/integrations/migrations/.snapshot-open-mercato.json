@@ -834,6 +834,22 @@
           "enumItems": [],
           "mappedType": "uuid"
         },
+        "source_read_at": {
+          "name": "source_read_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
         "sync_status": {
           "name": "sync_status",
           "type": "text",
