@@ -317,8 +317,10 @@ many worker restarts the job may survive. Every deploy spends one. Past the budg
 deferred failure onto the job and moves it back to `wait`; the next worker reads that marker and
 fails the job **before** calling the processor.
 
-The handler therefore never runs, never throws, and never learns. Any state it created on enqueue — a
-run row, a progress record — is stranded in whatever "in progress" state it was left in, and nothing
+The handler therefore never runs on that final delivery — it does not throw, and it never learns. (An
+earlier attempt of the same job usually *did* enter the handler, in a process that then died
+mid-flight; that attempt has no way to report anything either.) Any state created on enqueue — a run
+row, a progress record — is stranded in whatever "in progress" state it was left in, and nothing
 reconciles it: the queue says `failed` while the domain row still says `running`.
 
 `onJobAbandoned` is the hook for exactly that case:
@@ -339,10 +341,17 @@ const queue = createModuleQueue<ImportPayload>('my-import', {
 - It fires **only** when the queue abandons a job it never handed to the handler. It is deliberately
   not a general "job failed" hook — a handler that ran and threw already owns its outcome, and firing
   for that case would double-report and erase the difference between *the work failed* and *the work
-  never started*.
+  never started*. The two are told apart by the reason BullMQ records (`job stalled more than
+  allowable limit`, `job started more than allowable limit`), which is exact and identical in every
+  worker process.
 - Keep it small and idempotent, and make it tolerate a payload it does not recognize. It runs on the
   worker's event emitter; the queue catches and logs anything it throws so a reporting failure cannot
-  take the worker down, but it gets no retry.
+  take the worker down, and `close()` waits for a report already in flight.
+- **It is best-effort and fires at most once.** There is no retry and no persisted intent, so a
+  process that dies between the queue recording the failure and the callback finishing loses the
+  report — and that is exactly when workers die. Treat it as a fast repair path, not a guarantee:
+  state that must never be stranded also needs a durable check that does not depend on the queue,
+  such as a scheduled sweep that fails domain rows which have stopped advancing.
 - It is an async-strategy concept. The local strategy runs handlers in-process, so no queue can
   outlive a handler and abandon its job, and the option is not forwarded.
 - It repairs reporting, not the job. A long-running job still dies when it exhausts its stall budget —

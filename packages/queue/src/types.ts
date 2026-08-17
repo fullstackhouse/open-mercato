@@ -92,25 +92,35 @@ export type AsyncQueueOptions = {
   /** Number of concurrent job processors. Defaults to 1 */
   concurrency?: number
   /**
-   * Called when the queue ABANDONS a job without ever running its handler.
+   * Called when the queue permanently gives up on a job WITHOUT its handler having run.
    *
-   * The case this exists for: a job whose worker keeps dying is redelivered, and each redelivery
-   * increments a stalled counter that never resets. Past `maxStalledCount` BullMQ writes a deferred
-   * failure onto the job and moves it back to `wait`; the next worker reads that marker and fails the
-   * job *before* calling the processor. So the handler never runs, never throws, and never learns —
-   * and any state it created on enqueue (a run row, a progress record) is orphaned in whatever
-   * "in progress" state it was left in, with nothing to correct it.
+   * Why this cannot be left to the handler: a queue may destroy a job before ever calling the
+   * processor (the usual cause is a job redelivered once too often). The handler then never runs,
+   * never throws and never learns — and any state it created on enqueue (a run row, a progress
+   * record) is orphaned in whatever "in progress" state it was left in, with nothing to correct it.
    *
-   * Deliberately NOT a general "job failed" hook. A handler that ran and threw owns its own outcome
-   * and has already had the chance to record it; calling this for that case would double-report, and
-   * would hide the difference between "the work failed" and "the work never started".
+   * Contract:
+   * - Fires **only** for a job the queue abandoned before its handler ran. It is deliberately not a
+   *   general "job failed" hook: a handler that ran and threw owns its own outcome and has already
+   *   had the chance to record it. Reporting both would double-report and would hide the difference
+   *   between "the work failed" and "the work never started".
+   * - **Best effort, at most once.** It is an in-process notification with no retry and no persisted
+   *   intent, so a crash between the queue recording the failure and this callback finishing loses
+   *   the report. Treat it as a fast repair path, not a guarantee: state that must never be left
+   *   stranded needs a durable check of its own (for example a periodic sweep over the domain rows).
+   * - Must be idempotent and must tolerate a payload it does not recognise.
+   * - Not every strategy can implement it — the local strategy runs handlers in-process, so no queue
+   *   outlives a handler to abandon its job.
+   *
+   * Backend specifics (which failures count as abandonment, and how they are detected) belong to the
+   * strategy; see `strategies/async.ts`.
    */
   onJobAbandoned?: (payload: unknown, info: AbandonedJobInfo) => void | Promise<void>
 }
 
 /** What the queue can say about a job it gave up on. */
 export type AbandonedJobInfo = {
-  /** BullMQ's job id, or null when the driver did not supply one. */
+  /** The queue driver's own job id, or null when it did not supply one. */
   jobId: string | null
   /** The failure the queue recorded, e.g. 'job stalled more than allowable limit'. */
   reason: string

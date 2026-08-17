@@ -53,6 +53,30 @@ interface BullMQModule {
 
 const REMOVABLE_JOB_STATES = ['waiting', 'delayed', 'prioritized', 'paused', 'waiting-children']
 
+/**
+ * The failures BullMQ records when it gives up on a job *before* handing it to the processor.
+ *
+ * Both are written as a `defa` (deferred failure) marker on the job, after which the next worker
+ * short-circuits in `Worker.processJob` via `getUnrecoverableErrorMessage` and fails the job without
+ * calling the handler. The first comes from the stalled-job script once a job's cumulative stall
+ * count passes `maxStalledCount`; the second from `maxStartedAttempts`.
+ *
+ * Matching the reason is what tells "the queue abandoned this" from "the handler ran and threw", and
+ * it is deliberately stateless: the alternative — tracking which jobs this process has entered — can
+ * only answer "did the handler run *here*", which is the wrong question the moment more than one
+ * worker is running. `bullmq-abandoned-reasons.test.ts` asserts these strings still exist in the
+ * installed BullMQ, so an upgrade that renames them fails loudly instead of silently disabling the
+ * hook.
+ */
+export const ABANDONED_JOB_REASONS = [
+  'job stalled more than allowable limit',
+  'job started more than allowable limit',
+] as const
+
+function isAbandonedJobReason(message: string): boolean {
+  return (ABANDONED_JOB_REASONS as readonly string[]).includes(message)
+}
+
 function payloadMatchesScope(payload: unknown, scope: QueueJobScope): boolean {
   if (!payload || typeof payload !== 'object') return false
   const scopedPayload = payload as { tenantId?: unknown; organizationId?: unknown; jobType?: unknown }
@@ -118,6 +142,10 @@ export function createAsyncQueue<T = unknown>(
   let bullWorker: BullWorkerInterface | null = null
   let bullmqModule: BullMQModule | null = null
 
+  // In-flight `onJobAbandoned` calls. Detached from the event listener that started them (see
+  // below), so `close()` drains them rather than letting a deploy truncate a repair mid-write.
+  const pendingAbandonedReports = new Set<Promise<void>>()
+
   // -------------------------------------------------------------------------
   // Lazy BullMQ initialization
   // -------------------------------------------------------------------------
@@ -169,25 +197,11 @@ export function createAsyncQueue<T = unknown>(
   async function process(handler: JobHandler<T>): Promise<ProcessResult> {
     const { Worker } = await getBullMQ()
 
-    // Jobs this worker has actually handed to the handler. A job BullMQ abandons past
-    // `maxStalledCount` is failed before the processor is called, so it never lands here — which is
-    // exactly what distinguishes it from a handler that ran and threw.
-    //
-    // Keyed by the payload id we mint in `enqueue`, not by BullMQ's `job.id`: ours exists by
-    // construction, survives redelivery under the same identity, and is the id the handler was told
-    // it had. Mixing the two sources would be worse than either — an entry written under one and
-    // read back under the other never matches, which is precisely the misclassification this set
-    // exists to prevent.
-    const startedJobIds = new Set<string>()
-
     // Create worker that processes jobs
     bullWorker = new Worker<QueuedJob<T>>(
       name,
       async (job) => {
         const jobData = job.data
-        // Recorded so the 'failed' handler below can tell "the work failed" from "the work never
-        // started". Set membership rather than a flag because concurrency > 1 runs several at once.
-        startedJobIds.add(jobData.id)
         await handler(jobData, {
           jobId: job.id ?? jobData.id,
           attemptNumber: job.attemptsMade + 1,
@@ -202,9 +216,8 @@ export function createAsyncQueue<T = unknown>(
 
     // Set up event handlers
     bullWorker.on('completed', (job) => {
-      const completedJob = job as { id?: string; data?: QueuedJob<T> }
-      if (completedJob.data) startedJobIds.delete(completedJob.data.id)
-      logger.info('Job completed', { jobId: completedJob.id })
+      const jobWithId = job as { id?: string }
+      logger.info('Job completed', { jobId: jobWithId.id })
     })
 
     bullWorker.on('failed', (job, err) => {
@@ -212,27 +225,31 @@ export function createAsyncQueue<T = unknown>(
       const error = err as Error
       logger.error('Job failed', { jobId: failedJob?.id, err: error })
 
-      const payloadId = failedJob?.data?.id ?? null
-      if (payloadId && startedJobIds.delete(payloadId)) return // the handler ran; the failure is its own
       if (!onJobAbandoned) return
-      // No payload means BullMQ could not give us the job at all. There is nothing to hand the hook
-      // and nothing it could repair, so reporting could only ever be a false alarm — the 'Job failed'
-      // line above still records it.
+      // Any other reason means a handler ran and threw. That failure is the handler's own and it has
+      // already had its chance to record it.
+      if (!isAbandonedJobReason(error?.message ?? '')) return
+      // No payload means the queue could not give us the job at all. There is nothing to hand the
+      // hook and nothing it could repair, so reporting could only ever be a false alarm — the
+      // 'Job failed' line above still records it.
       if (!failedJob?.data) return
 
       const jobId = failedJob.id ?? null
+      const payload = failedJob.data
 
-      // The handler was never called, so nothing downstream knows this job is dead. Report it, and
-      // never let the report take the worker down with it: this runs on an EventEmitter, where an
-      // unhandled rejection is fatal to the process.
+      // The handler was never called on this delivery, so nothing downstream knows the job is dead.
+      // Report it, and never let the report take the worker down with it: this runs on an
+      // EventEmitter, where an unhandled rejection is fatal to the process.
       logger.warn('Job abandoned by the queue without running its handler', { jobId, err: error })
-      void (async () => {
+      const report = (async () => {
         try {
-          await onJobAbandoned(failedJob.data, { jobId, reason: error?.message ?? 'unknown' })
+          await onJobAbandoned(payload, { jobId, reason: error?.message ?? 'unknown' })
         } catch (hookError) {
           logger.error('onJobAbandoned handler threw', { jobId, err: hookError as Error })
         }
       })()
+      pendingAbandonedReports.add(report)
+      void report.then(() => pendingAbandonedReports.delete(report))
     })
 
     bullWorker.on('error', (err) => {
@@ -279,6 +296,11 @@ export function createAsyncQueue<T = unknown>(
     if (bullWorker) {
       await bullWorker.close()
       bullWorker = null
+    }
+    // Drain any abandonment report still in flight. Without this a deploy-time shutdown can cut off
+    // the very repair the hook exists to perform — and these never reject, so awaiting is safe.
+    if (pendingAbandonedReports.size) {
+      await Promise.all([...pendingAbandonedReports])
     }
     if (bullQueue) {
       await bullQueue.close()
