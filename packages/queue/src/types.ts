@@ -91,6 +91,29 @@ export type AsyncQueueOptions = {
   connection?: RedisConnectionOptions
   /** Number of concurrent job processors. Defaults to 1 */
   concurrency?: number
+  /**
+   * Called when the queue ABANDONS a job without ever running its handler.
+   *
+   * The case this exists for: a job whose worker keeps dying is redelivered, and each redelivery
+   * increments a stalled counter that never resets. Past `maxStalledCount` BullMQ writes a deferred
+   * failure onto the job and moves it back to `wait`; the next worker reads that marker and fails the
+   * job *before* calling the processor. So the handler never runs, never throws, and never learns —
+   * and any state it created on enqueue (a run row, a progress record) is orphaned in whatever
+   * "in progress" state it was left in, with nothing to correct it.
+   *
+   * Deliberately NOT a general "job failed" hook. A handler that ran and threw owns its own outcome
+   * and has already had the chance to record it; calling this for that case would double-report, and
+   * would hide the difference between "the work failed" and "the work never started".
+   */
+  onJobAbandoned?: (payload: unknown, info: AbandonedJobInfo) => void | Promise<void>
+}
+
+/** What the queue can say about a job it gave up on. */
+export type AbandonedJobInfo = {
+  /** BullMQ's job id, or null when the driver did not supply one. */
+  jobId: string | null
+  /** The failure the queue recorded, e.g. 'job stalled more than allowable limit'. */
+  reason: string
 }
 
 /**

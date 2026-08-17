@@ -111,6 +111,7 @@ export function createAsyncQueue<T = unknown>(
 ): Queue<T> {
   const connection = resolveConnection(options?.connection)
   const concurrency = options?.concurrency ?? 1
+  const onJobAbandoned = options?.onJobAbandoned
   const logger = packageLogger.child({ queue: name })
 
   let bullQueue: BullQueueInterface<QueuedJob<T>> | null = null
@@ -168,11 +169,19 @@ export function createAsyncQueue<T = unknown>(
   async function process(handler: JobHandler<T>): Promise<ProcessResult> {
     const { Worker } = await getBullMQ()
 
+    // Job ids this worker has actually handed to the handler. A job BullMQ abandons past
+    // `maxStalledCount` is failed before the processor is called, so its id never lands here — which
+    // is exactly what distinguishes it from a handler that ran and threw.
+    const startedJobIds = new Set<string>()
+
     // Create worker that processes jobs
     bullWorker = new Worker<QueuedJob<T>>(
       name,
       async (job) => {
         const jobData = job.data
+        // Recorded so the 'failed' handler below can tell "the work failed" from "the work never
+        // started". Set membership rather than a flag because concurrency > 1 runs several at once.
+        if (job.id) startedJobIds.add(job.id)
         await handler(jobData, {
           jobId: job.id ?? jobData.id,
           attemptNumber: job.attemptsMade + 1,
@@ -188,13 +197,30 @@ export function createAsyncQueue<T = unknown>(
     // Set up event handlers
     bullWorker.on('completed', (job) => {
       const jobWithId = job as { id?: string }
+      if (jobWithId.id) startedJobIds.delete(jobWithId.id)
       logger.info('Job completed', { jobId: jobWithId.id })
     })
 
     bullWorker.on('failed', (job, err) => {
-      const jobWithId = job as { id?: string } | undefined
+      const failedJob = job as { id?: string; data?: QueuedJob<T> } | undefined
       const error = err as Error
-      logger.error('Job failed', { jobId: jobWithId?.id, err: error })
+      logger.error('Job failed', { jobId: failedJob?.id, err: error })
+
+      const jobId = failedJob?.id ?? null
+      if (jobId && startedJobIds.delete(jobId)) return // the handler ran; the failure is its own
+      if (!onJobAbandoned) return
+
+      // The handler was never called, so nothing downstream knows this job is dead. Report it, and
+      // never let the report take the worker down with it: this runs on an EventEmitter, where an
+      // unhandled rejection is fatal to the process.
+      logger.warn('Job abandoned by the queue without running its handler', { jobId, err: error })
+      void (async () => {
+        try {
+          await onJobAbandoned(failedJob?.data, { jobId, reason: error?.message ?? 'unknown' })
+        } catch (hookError) {
+          logger.error('onJobAbandoned handler threw', { jobId, err: hookError as Error })
+        }
+      })()
     })
 
     bullWorker.on('error', (err) => {
