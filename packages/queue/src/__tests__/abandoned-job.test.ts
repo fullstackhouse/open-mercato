@@ -60,6 +60,18 @@ function bullJob(id: string, payload: Payload): { id: string; data: QueuedJob<Pa
   }
 }
 
+/** A delivery BullMQ did not put its own id on — the payload still carries the id we minted. */
+function bullJobWithoutId(
+  payloadId: string,
+  payload: Payload,
+): { id?: string; data: QueuedJob<Payload>; attemptsMade: number } {
+  return {
+    id: undefined,
+    data: { id: payloadId, payload, createdAt: new Date(0).toISOString() },
+    attemptsMade: 0,
+  }
+}
+
 describe('onJobAbandoned', () => {
   const getRedisUrlOrThrowMock = getRedisUrlOrThrow as jest.MockedFunction<typeof getRedisUrlOrThrow>
   const originalStrategy = process.env.QUEUE_STRATEGY
@@ -140,6 +152,49 @@ describe('onJobAbandoned', () => {
       jobId: 'job-abandoned',
       reason: 'job stalled more than allowable limit',
     })
+  })
+
+  it('still recognises a handler that ran when the driver supplied no job id of its own', async () => {
+    const onJobAbandoned = jest.fn(async () => {})
+    const handlerError = new Error('import batch blew up')
+    const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+    await queue.process(async () => {
+      throw handlerError
+    })
+
+    const job = bullJobWithoutId('payload-1', { runId: 'run-1' })
+    await expect(capturedProcessor!(job)).rejects.toThrow(handlerError)
+    emit('failed', job, handlerError)
+    await Promise.resolve()
+
+    expect(onJobAbandoned).not.toHaveBeenCalled()
+  })
+
+  it('reports an abandoned job that carries no job id, keyed on the payload instead', async () => {
+    const onJobAbandoned = jest.fn(async () => {})
+    const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+    await queue.process(async () => {})
+
+    const job = bullJobWithoutId('payload-1', { runId: 'run-1' })
+    emit('failed', job, new Error('job stalled more than allowable limit'))
+    await Promise.resolve()
+
+    expect(onJobAbandoned).toHaveBeenCalledWith(job.data, {
+      jobId: null,
+      reason: 'job stalled more than allowable limit',
+    })
+  })
+
+  it('stays quiet when the queue cannot produce the job at all', async () => {
+    const onJobAbandoned = jest.fn(async () => {})
+    const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+    await queue.process(async () => {})
+
+    emit('failed', undefined, new Error('missing key for job'))
+    emit('failed', { id: 'job-1' }, new Error('missing key for job'))
+    await Promise.resolve()
+
+    expect(onJobAbandoned).not.toHaveBeenCalled()
   })
 
   it('swallows a throwing hook so the reporting cannot kill the worker', async () => {
