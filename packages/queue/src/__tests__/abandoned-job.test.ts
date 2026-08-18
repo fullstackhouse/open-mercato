@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createModuleQueue } from '../factory'
+import { ABANDONED_JOB_SWEEP_INTERVAL_MS } from '../strategies/async'
 import { getRedisUrlOrThrow } from '@open-mercato/shared/lib/redis/connection'
 import type { QueuedJob } from '../types'
 
@@ -19,6 +20,8 @@ jest.mock('@open-mercato/shared/lib/redis/connection', () => ({
   getRedisUrlOrThrow: jest.fn(),
 }))
 
+const mockQueueGetJobs = jest.fn(async (): Promise<unknown[]> => [])
+
 jest.mock('bullmq', () => {
   class MockQueue<T> {
     constructor(_name: string, _opts: unknown) {}
@@ -26,7 +29,7 @@ jest.mock('bullmq', () => {
     close = jest.fn(async () => {})
     obliterate = jest.fn(async () => {})
     getJobCounts = jest.fn(async () => ({ waiting: 0, active: 0, completed: 0, failed: 0 }))
-    getJobs = jest.fn(async () => [])
+    getJobs = mockQueueGetJobs
   }
 
   class MockWorker<T> {
@@ -72,6 +75,39 @@ function bullJobWithoutId(
   }
 }
 
+type FailedSetJob = {
+  id: string
+  data: QueuedJob<Payload>
+  failedReason: string
+  remove: jest.Mock
+  updateData: jest.Mock
+}
+
+/** A job as the sweep sees it in the failed set. `updateData` persists like the real driver's. */
+function failedSetJob(
+  id: string,
+  payload: Payload,
+  failedReason: string,
+  metadata?: Record<string, unknown>,
+): FailedSetJob {
+  const record: FailedSetJob = {
+    id,
+    data: { id, payload, createdAt: new Date(0).toISOString(), ...(metadata ? { metadata } : {}) },
+    failedReason,
+    remove: jest.fn(async () => {}),
+    updateData: jest.fn(async (data: QueuedJob<Payload>) => {
+      record.data = data
+    }),
+  }
+  return record
+}
+
+async function flushAsync(turns = 12): Promise<void> {
+  for (let index = 0; index < turns; index += 1) {
+    await Promise.resolve()
+  }
+}
+
 describe('onJobAbandoned', () => {
   const getRedisUrlOrThrowMock = getRedisUrlOrThrow as jest.MockedFunction<typeof getRedisUrlOrThrow>
   const originalStrategy = process.env.QUEUE_STRATEGY
@@ -81,6 +117,7 @@ describe('onJobAbandoned', () => {
     capturedProcessor = null
     capturedListeners.clear()
     getRedisUrlOrThrowMock.mockReturnValue('redis://localhost:6379')
+    mockQueueGetJobs.mockResolvedValue([])
     process.env.QUEUE_STRATEGY = 'async'
   })
 
@@ -248,6 +285,110 @@ describe('onJobAbandoned', () => {
     await Promise.resolve()
 
     expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+  })
+
+  it('sweeps the failed set on worker start and delivers reports nobody was alive to send', async () => {
+    const abandoned = failedSetJob('job-a', { runId: 'run-a' }, 'job stalled more than allowable limit')
+    const handlerFailure = failedSetJob('job-b', { runId: 'run-b' }, 'import batch blew up')
+    const alreadyReported = failedSetJob('job-c', { runId: 'run-c' }, 'job stalled more than allowable limit', {
+      abandonReportedAt: '2026-01-01T00:00:00.000Z',
+    })
+    mockQueueGetJobs.mockResolvedValue([abandoned, handlerFailure, alreadyReported])
+
+    const onJobAbandoned = jest.fn(async () => {})
+    const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+    await queue.process(async () => {})
+    await flushAsync()
+
+    expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+    expect(onJobAbandoned).toHaveBeenCalledWith(expect.objectContaining({ id: 'job-a' }), {
+      jobId: 'job-a',
+      reason: 'job stalled more than allowable limit',
+    })
+    expect(abandoned.data.metadata?.abandonReportedAt).toEqual(expect.any(String))
+    expect(handlerFailure.updateData).not.toHaveBeenCalled()
+    expect(alreadyReported.updateData).not.toHaveBeenCalled()
+    expect(abandoned.remove).not.toHaveBeenCalled()
+    await queue.close()
+  })
+
+  it('retries an undelivered report on the next sweep instead of losing it', async () => {
+    jest.useFakeTimers()
+    try {
+      const abandoned = failedSetJob('job-a', { runId: 'run-a' }, 'job stalled more than allowable limit')
+      mockQueueGetJobs.mockResolvedValue([abandoned])
+
+      const onJobAbandoned = jest
+        .fn<Promise<void>, [unknown, unknown]>()
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValue(undefined)
+      const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+      await queue.process(async () => {})
+      await flushAsync()
+
+      expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+      expect(abandoned.updateData).not.toHaveBeenCalled()
+
+      jest.advanceTimersByTime(ABANDONED_JOB_SWEEP_INTERVAL_MS)
+      await flushAsync()
+
+      expect(onJobAbandoned).toHaveBeenCalledTimes(2)
+      expect(abandoned.updateData).toHaveBeenCalledTimes(1)
+      await queue.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('acknowledges a delivered report so later sweeps do not repeat it', async () => {
+    jest.useFakeTimers()
+    try {
+      const job = failedSetJob('job-1', { runId: 'run-1' }, 'job stalled more than allowable limit')
+      const onJobAbandoned = jest.fn(async () => {})
+      const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+      await queue.process(async () => {})
+      await flushAsync()
+
+      emit('failed', job, new Error('job stalled more than allowable limit'))
+      await flushAsync()
+      expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+      expect(job.data.metadata?.abandonReportedAt).toEqual(expect.any(String))
+
+      mockQueueGetJobs.mockResolvedValue([job])
+      jest.advanceTimersByTime(ABANDONED_JOB_SWEEP_INTERVAL_MS)
+      await flushAsync()
+
+      expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+      await queue.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('does not report a job twice while its first report is still in flight', async () => {
+    const job = failedSetJob('job-1', { runId: 'run-1' }, 'job stalled more than allowable limit')
+    mockQueueGetJobs.mockResolvedValue([job])
+
+    let finishReport = () => {}
+    const onJobAbandoned = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishReport = resolve
+        }),
+    )
+    const queue = createModuleQueue<Payload>('test-queue', { onJobAbandoned })
+    await queue.process(async () => {})
+    await flushAsync()
+    expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+
+    emit('failed', job, new Error('job stalled more than allowable limit'))
+    await flushAsync()
+    expect(onJobAbandoned).toHaveBeenCalledTimes(1)
+
+    finishReport()
+    await flushAsync()
+    expect(job.updateData).toHaveBeenCalledTimes(1)
+    await queue.close()
   })
 
   it('is not forwarded to the local strategy, which cannot abandon a job', async () => {

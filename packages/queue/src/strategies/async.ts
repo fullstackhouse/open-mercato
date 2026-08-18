@@ -32,8 +32,11 @@ interface BullQueueInterface<T> {
   close: () => Promise<void>
   getJobCounts: (...states: string[]) => Promise<Record<string, number>>
   getJobs: (types: string[], start?: number, end?: number) => Promise<Array<{
+    id?: string
     data?: T
+    failedReason?: string
     remove: () => Promise<void>
+    updateData?: (data: T) => Promise<void>
   }>>
 }
 
@@ -76,6 +79,19 @@ export const ABANDONED_JOB_REASONS = [
 function isAbandonedJobReason(message: string): boolean {
   return (ABANDONED_JOB_REASONS as readonly string[]).includes(message)
 }
+
+/**
+ * Metadata key written onto the stored job once `onJobAbandoned` has completed for it.
+ *
+ * BullMQ's failed set is the durable record of abandoned jobs (`removeOnFail` keeps them), so it
+ * doubles as the dead-letter queue for reports: the sweep re-delivers any abandoned job that does not
+ * carry this marker. The marker — not `job.remove()` — is the acknowledgement, so the failed job
+ * itself survives for diagnosis.
+ */
+const ABANDON_REPORT_ACK_KEY = 'abandonReportedAt'
+
+/** How often a worker re-sweeps the failed set for unacknowledged abandoned jobs. */
+export const ABANDONED_JOB_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
 function payloadMatchesScope(payload: unknown, scope: QueueJobScope): boolean {
   if (!payload || typeof payload !== 'object') return false
@@ -141,10 +157,86 @@ export function createAsyncQueue<T = unknown>(
   let bullQueue: BullQueueInterface<QueuedJob<T>> | null = null
   let bullWorker: BullWorkerInterface | null = null
   let bullmqModule: BullMQModule | null = null
+  let abandonedSweepTimer: ReturnType<typeof setInterval> | null = null
 
-  // In-flight `onJobAbandoned` calls. Detached from the event listener that started them (see
-  // below), so `close()` drains them rather than letting a deploy truncate a repair mid-write.
+  // In-flight `onJobAbandoned` calls. Detached from the caller that started them (the 'failed'
+  // listener or the sweep), so `close()` drains them rather than letting a deploy truncate a repair
+  // mid-write. The id set stops the two callers from double-reporting a job inside one process.
   const pendingAbandonedReports = new Set<Promise<void>>()
+  const inFlightAbandonedJobIds = new Set<string>()
+
+  type AbandonedJobRecord = {
+    id?: string
+    data?: QueuedJob<T>
+    updateData?: (data: QueuedJob<T>) => Promise<void>
+  }
+
+  // The acknowledgement that makes delivery at-least-once: written only after the callback returns,
+  // so a callback that threw or a process that died mid-report leaves the job unmarked and a later
+  // sweep retries it. Requires the driver to expose `updateData`; without it the report simply stays
+  // unacknowledged and repeats, which the idempotency contract permits.
+  async function acknowledgeAbandonedReport(job: AbandonedJobRecord): Promise<void> {
+    if (!job.data || typeof job.updateData !== 'function') return
+    await job.updateData({
+      ...job.data,
+      metadata: { ...(job.data.metadata ?? {}), [ABANDON_REPORT_ACK_KEY]: new Date().toISOString() },
+    })
+  }
+
+  function reportAbandonedJob(job: AbandonedJobRecord, reason: string): void {
+    if (!onJobAbandoned) return
+    const payload = job.data
+    if (!payload) return
+    if (payload.metadata && payload.metadata[ABANDON_REPORT_ACK_KEY]) return
+    if (inFlightAbandonedJobIds.has(payload.id)) return
+    inFlightAbandonedJobIds.add(payload.id)
+
+    const jobId = job.id ?? null
+    logger.warn('Job abandoned by the queue without running its handler', { jobId, reason })
+    const report = (async () => {
+      try {
+        await onJobAbandoned(payload, { jobId, reason })
+      } catch (hookError) {
+        logger.error('onJobAbandoned handler threw; the report stays unacknowledged and the sweep will retry it', {
+          jobId,
+          err: hookError as Error,
+        })
+        return
+      }
+      try {
+        await acknowledgeAbandonedReport(job)
+      } catch (ackError) {
+        logger.error('Failed to acknowledge an abandoned-job report; the sweep may repeat it', {
+          jobId,
+          err: ackError as Error,
+        })
+      }
+    })().finally(() => {
+      inFlightAbandonedJobIds.delete(payload.id)
+    })
+    pendingAbandonedReports.add(report)
+    void report.then(() => pendingAbandonedReports.delete(report))
+  }
+
+  // The failed set is this strategy's dead-letter queue for abandoned jobs. Enumerating it on worker
+  // start and on an interval, and re-delivering anything unacknowledged, is what upgrades the
+  // 'failed'-listener fast path from at-most-once to at-least-once: a report lost to a crash is
+  // simply still unmarked when the next sweep looks. Residual loss: `removeOnFail` caps the set, so
+  // a job evicted before any sweep sees it is gone for good.
+  async function sweepAbandonedJobs(): Promise<void> {
+    if (!onJobAbandoned) return
+    try {
+      const queue = await getQueue()
+      const failedJobs = await queue.getJobs(['failed'], 0, -1)
+      for (const failedJob of failedJobs) {
+        const reason = failedJob.failedReason ?? ''
+        if (!isAbandonedJobReason(reason)) continue
+        reportAbandonedJob(failedJob, reason)
+      }
+    } catch (sweepError) {
+      logger.error('Abandoned-job sweep failed', { err: sweepError as Error })
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Lazy BullMQ initialization
@@ -221,7 +313,7 @@ export function createAsyncQueue<T = unknown>(
     })
 
     bullWorker.on('failed', (job, err) => {
-      const failedJob = job as { id?: string; data?: QueuedJob<T> } | undefined
+      const failedJob = job as AbandonedJobRecord | undefined
       const error = err as Error
       logger.error('Job failed', { jobId: failedJob?.id, err: error })
 
@@ -234,28 +326,30 @@ export function createAsyncQueue<T = unknown>(
       // 'Job failed' line above still records it.
       if (!failedJob?.data) return
 
-      const jobId = failedJob.id ?? null
-      const payload = failedJob.data
-
-      // The handler was never called on this delivery, so nothing downstream knows the job is dead.
-      // Report it, and never let the report take the worker down with it: this runs on an
-      // EventEmitter, where an unhandled rejection is fatal to the process.
-      logger.warn('Job abandoned by the queue without running its handler', { jobId, err: error })
-      const report = (async () => {
-        try {
-          await onJobAbandoned(payload, { jobId, reason: error?.message ?? 'unknown' })
-        } catch (hookError) {
-          logger.error('onJobAbandoned handler threw', { jobId, err: hookError as Error })
-        }
-      })()
-      pendingAbandonedReports.add(report)
-      void report.then(() => pendingAbandonedReports.delete(report))
+      // The fast path: report the moment the abandonment is observed. `reportAbandonedJob` runs the
+      // callback detached with its own try/catch — this is an EventEmitter, where an unhandled
+      // rejection is fatal to the process — and acknowledges the job only afterwards, so a report
+      // lost here is retried by the sweep.
+      reportAbandonedJob(failedJob, error.message)
     })
 
     bullWorker.on('error', (err) => {
       const error = err as Error
       logger.error('Worker error', { err: error })
     })
+
+    if (onJobAbandoned) {
+      // Sweep immediately so reports lost to a previous process's crash are re-delivered as soon as
+      // a worker is back, then keep re-sweeping for anything the fast path loses while running.
+      // A polling loop in this package normally needs sign-off; this one was requested in review to
+      // make the hook at-least-once (fork PR #91). The timer is unref'd so it never holds the
+      // process open.
+      void sweepAbandonedJobs()
+      abandonedSweepTimer = setInterval(() => {
+        void sweepAbandonedJobs()
+      }, ABANDONED_JOB_SWEEP_INTERVAL_MS)
+      ;(abandonedSweepTimer as unknown as { unref?: () => void }).unref?.()
+    }
 
     logger.info('Worker started', { concurrency })
 
@@ -293,6 +387,10 @@ export function createAsyncQueue<T = unknown>(
   }
 
   async function close(): Promise<void> {
+    if (abandonedSweepTimer) {
+      clearInterval(abandonedSweepTimer)
+      abandonedSweepTimer = null
+    }
     if (bullWorker) {
       await bullWorker.close()
       bullWorker = null

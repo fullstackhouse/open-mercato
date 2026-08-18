@@ -104,11 +104,14 @@ export type AsyncQueueOptions = {
    *   general "job failed" hook: a handler that ran and threw owns its own outcome and has already
    *   had the chance to record it. Reporting both would double-report and would hide the difference
    *   between "the work failed" and "the work never started".
-   * - **Best effort, at most once.** It is an in-process notification with no retry and no persisted
-   *   intent, so a crash between the queue recording the failure and this callback finishing loses
-   *   the report. Treat it as a fast repair path, not a guarantee: state that must never be left
-   *   stranded needs a durable check of its own (for example a periodic sweep over the domain rows).
-   * - Must be idempotent and must tolerate a payload it does not recognise.
+   * - **At-least-once, where the backend allows it.** The strategy reports as soon as it observes
+   *   the abandonment, and also sweeps the backend's dead-job records — on worker start, then
+   *   periodically — for reports that were never acknowledged. A report is acknowledged only after
+   *   this callback returns, so a callback that threw or a process that died mid-report is retried
+   *   by a later sweep. The callback MUST therefore be idempotent, and MUST tolerate a payload it
+   *   does not recognise. Residual loss is still possible when the backend evicts its dead-job
+   *   records before any sweep sees them; state that absolutely must never be stranded should also
+   *   have a staleness check of its own at the domain level.
    * - Not every strategy can implement it — the local strategy runs handlers in-process, so no queue
    *   outlives a handler to abandon its job.
    *
