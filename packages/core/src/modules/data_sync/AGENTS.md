@@ -126,7 +126,7 @@ If the sync provider needs bootstrap credentials, mappings, locales, channels, o
 - **Cursor persistence**: After each batch, cursor is saved to `SyncCursor`
 - **Resume**: Retry reads the last successful cursor, resumes from there
 - **Progress**: Linked to `ProgressJob` via `progressJobId` for `ProgressTopBar` display
-- **Cancellation**: Via `progressService.isCancellationRequested()`
+- **Cancellation**: The engine polls `progressService.isCancellationRequested()` between batches AND on a timer while a batch is still in flight, aborting `StreamImportInput.signal` / `StreamExportInput.signal`. Adapters SHOULD honour the signal wherever the work is divisible (per page, per record, around a long flush) and `return` — with the `return` ABOVE the `yield`, never below it, or the engine commits a cursor for a half-applied page. Adapters that ignore the signal keep the old between-batches behavior.
 
 ## Queue Names
 

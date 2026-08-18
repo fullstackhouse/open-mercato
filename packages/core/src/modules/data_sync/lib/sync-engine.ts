@@ -4,6 +4,7 @@ import type { CredentialsService } from '../../integrations/lib/credentials-serv
 import type { IntegrationLogService } from '../../integrations/lib/log-service'
 import type { IntegrationStateService } from '../../integrations/lib/state-service'
 import type { ProgressService } from '../../progress/lib/progressService'
+import { STALE_JOB_TIMEOUT_SECONDS } from '../../progress/lib/progressService'
 import { refreshCoverageSnapshot } from '../../query_index/lib/coverage'
 import { emitDataSyncEvent } from '../events'
 import type { DataSyncAdapter, DataMapping, ExportBatch, ImportBatch } from './adapter'
@@ -75,6 +76,35 @@ function applyExportCounters(batch: ExportBatch): SyncCounterDelta {
   }
 }
 
+// Cancellation therefore lands within one tick rather than immediately. Tied to the stale-job
+// sweep window so that a progress heartbeat, when it arrives, shares this one timer and its one
+// round-trip instead of adding a second.
+const CANCELLATION_TICK_MS = (STALE_JOB_TIMEOUT_SECONDS * 1000) / 4
+
+// Runs `tick` on an interval only while the source iterator is pending — that is the window the
+// engine otherwise cannot see into, because its own cancellation check sits at the top of the
+// `for await` body and is reached only once the adapter has yielded. Ticks stop the moment the
+// producer settles, and the outer finally closes the adapter generator on early exits so its own
+// `finally` (advisory lock, connection) runs.
+async function* withTicksWhilePending<T>(source: AsyncIterable<T>, tick: () => void, intervalMs: number): AsyncGenerator<T, void, undefined> {
+  const iterator = source[Symbol.asyncIterator]()
+  try {
+    while (true) {
+      const timer = setInterval(tick, intervalMs)
+      let result: IteratorResult<T>
+      try {
+        result = await iterator.next()
+      } finally {
+        clearInterval(timer)
+      }
+      if (result.done) return
+      yield result.value
+    }
+  } finally {
+    await iterator.return?.()
+  }
+}
+
 export function createSyncEngine(deps: EngineDeps) {
   const { syncRunService, integrationCredentialsService, integrationLogService, integrationStateService, progressService } = deps
 
@@ -100,6 +130,30 @@ export function createSyncEngine(deps: EngineDeps) {
         userId: scope.userId,
       },
     )
+  }
+
+  // Runs on a timer, where an unhandled rejection is fatal — so it swallows its own errors. It also
+  // guards against overlapping polls and against polling once it has already aborted.
+  function makeCancellationTick(progressJobId: string | null | undefined, scope: SyncScope, controller: AbortController): () => void {
+    if (!progressJobId) return () => {}
+    let inFlight = false
+    return () => {
+      if (inFlight || controller.signal.aborted) return
+      inFlight = true
+      progressService.isCancellationRequested(progressJobId, scope.tenantId, scope.organizationId)
+        .then((cancelled) => {
+          if (cancelled) controller.abort()
+        })
+        .catch((error) => {
+          logger.warn('Cancellation poll failed', {
+            progressJobId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
+        .finally(() => {
+          inFlight = false
+        })
+    }
   }
 
   async function refreshCoverageSnapshots(entityTypes: string[] | undefined, scope: SyncScope): Promise<void> {
@@ -452,9 +506,12 @@ export function createSyncEngine(deps: EngineDeps) {
       const mapping = await resolveMapping(adapter, run.entityType, scope)
       let processedCount = 0
       let totalCount: number | null = null
+      // Declared outside the try because both the catch and the completion path below read it.
+      const cancellation = new AbortController()
+      const pollCancellation = makeCancellationTick(run.progressJobId, scope, cancellation)
 
       try {
-        for await (const batch of adapter.streamImport({
+        for await (const batch of withTicksWhilePending(adapter.streamImport({
           entityType: run.entityType,
           cursor: run.cursor ?? undefined,
           batchSize,
@@ -462,8 +519,9 @@ export function createSyncEngine(deps: EngineDeps) {
           mapping,
           scope: { organizationId: scope.organizationId, tenantId: scope.tenantId },
           runId: run.id,
-        })) {
-          if (run.progressJobId && await progressService.isCancellationRequested(run.progressJobId, scope.tenantId, scope.organizationId)) {
+          signal: cancellation.signal,
+        }), pollCancellation, CANCELLATION_TICK_MS)) {
+          if (cancellation.signal.aborted || (run.progressJobId && await progressService.isCancellationRequested(run.progressJobId, scope.tenantId, scope.organizationId))) {
             await finalizeRun(run.id, 'cancelled', scope, undefined, operationalTelemetry)
             return
           }
@@ -517,7 +575,20 @@ export function createSyncEngine(deps: EngineDeps) {
           },
           scope,
         )
+        // An adapter that honours the signal may reject instead of returning. The operator asked
+        // for cancellation, so the run is cancelled, not failed — the error stays in the log above.
+        if (cancellation.signal.aborted) {
+          await finalizeRun(run.id, 'cancelled', scope, undefined, operationalTelemetry)
+          return
+        }
         await finalizeRun(run.id, 'failed', scope, message, operationalTelemetry)
+        return
+      }
+
+      // An adapter that honours the signal stops mid-batch and returns WITHOUT yielding, so the
+      // loop body — which owns the only other `cancelled` transition — never runs.
+      if (cancellation.signal.aborted) {
+        await finalizeRun(run.id, 'cancelled', scope, undefined, operationalTelemetry)
         return
       }
 
@@ -596,9 +667,12 @@ export function createSyncEngine(deps: EngineDeps) {
 
       const mapping = await resolveMapping(adapter, run.entityType, scope)
       let processedCount = 0
+      // Declared outside the try because both the catch and the completion path below read it.
+      const cancellation = new AbortController()
+      const pollCancellation = makeCancellationTick(run.progressJobId, scope, cancellation)
 
       try {
-        for await (const batch of adapter.streamExport({
+        for await (const batch of withTicksWhilePending(adapter.streamExport({
           entityType: run.entityType,
           cursor: run.cursor ?? undefined,
           batchSize,
@@ -606,8 +680,9 @@ export function createSyncEngine(deps: EngineDeps) {
           mapping,
           scope: { organizationId: scope.organizationId, tenantId: scope.tenantId },
           runId: run.id,
-        })) {
-          if (run.progressJobId && await progressService.isCancellationRequested(run.progressJobId, scope.tenantId, scope.organizationId)) {
+          signal: cancellation.signal,
+        }), pollCancellation, CANCELLATION_TICK_MS)) {
+          if (cancellation.signal.aborted || (run.progressJobId && await progressService.isCancellationRequested(run.progressJobId, scope.tenantId, scope.organizationId))) {
             await finalizeRun(run.id, 'cancelled', scope, undefined, operationalTelemetry)
             return
           }
@@ -657,7 +732,20 @@ export function createSyncEngine(deps: EngineDeps) {
           },
           scope,
         )
+        // An adapter that honours the signal may reject instead of returning. The operator asked
+        // for cancellation, so the run is cancelled, not failed — the error stays in the log above.
+        if (cancellation.signal.aborted) {
+          await finalizeRun(run.id, 'cancelled', scope, undefined, operationalTelemetry)
+          return
+        }
         await finalizeRun(run.id, 'failed', scope, message, operationalTelemetry)
+        return
+      }
+
+      // An adapter that honours the signal stops mid-batch and returns WITHOUT yielding, so the
+      // loop body — which owns the only other `cancelled` transition — never runs.
+      if (cancellation.signal.aborted) {
+        await finalizeRun(run.id, 'cancelled', scope, undefined, operationalTelemetry)
         return
       }
 
