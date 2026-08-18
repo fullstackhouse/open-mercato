@@ -6,9 +6,12 @@ Open Mercato core renders system emails and notification mail in the
 **initiator's request locale** (or a global default), never the **recipient's
 stored language**. Give core a stored per-user locale and a backward-compatible
 recipient-locale seam so mail renders in the recipient's language out of the box,
-with an optional override. **Phase 1 (auth emails) is implemented now; Phase 2
-(notification delivery) is deferred until after the upstream notification-pipeline
-rewrite `open-mercato/open-mercato#4326`.**
+with an optional override. **Phase 1 (auth emails) is implemented; Phase 2
+(notification delivery) is now unblocked — the notification-pipeline rewrite
+landed upstream as `open-mercato/open-mercato#5366` (supersedes the closed
+#4326) — and has narrowed to the email channel plus a base-copy-locale handoff
+to the push fan-out, because the merged pipeline already localizes push
+per device and in-app per viewer.**
 
 ## Problem
 
@@ -36,8 +39,11 @@ Root cause, confirmed in core:
   2. **Brand-new invitee** — `auth/commands/users.ts` (`sendInviteToUser`) uses
      `resolveTranslations()` (the inviting admin's request locale).
   3. **Notification delivery** — `notifications/subscribers/deliver-notification`
-     hardcodes `loadDictionary(defaultLocale)`; the recipient row is loaded but
-     locale is never read.
+     resolves the base copy via `resolveNotificationCopy(notification)` without a
+     locale argument, i.e. always `defaultLocale`; the recipient row is loaded but
+     locale is never read. Post-#5366 this only mis-renders the **email** channel:
+     push re-resolves copy per device locale in the fan-out and in-app resolves
+     keys client-side in the viewer's UI locale (see § Phasing).
 - **No seam.** There is no DI/callback hook for an app to feed a recipient locale
   into the render; an app would have to override the whole subscriber/route.
 
@@ -80,17 +86,38 @@ than changing this default.
 
 ## Phasing
 
-- **Phase 1 — auth emails (implemented now).** Password reset + new-invitee.
+- **Phase 1 — auth emails (implemented).** Password reset + new-invitee.
   Independent of the notification-pipeline rewrite.
-- **Phase 2 — notification delivery (deferred, after #4326).**
-  `open-mercato/open-mercato#4326` (devices + end-to-end push) rewrites the
-  delivery pipeline this path hooks into — adds a `shouldDeliver` gate, a
-  module-registered channel catalogue, per-`(user, type, channel)` preferences, a
-  `NotificationDeliveryContext` split, **and a per-device locale concept**, and
-  rewrites the `resolveNotificationCopy` path directly. Building path 3 now
-  guarantees a rebase conflict. Phase 2 lands after #4326 merges, reuses the same
-  resolver on the new pipeline, and reconciles with per-device locale (device
-  locale likely wins for push; stored locale drives email / in-app).
+- **Phase 2 — notification delivery (unblocked).** The rewrite this phase was
+  waiting on landed upstream as `open-mercato/open-mercato#5366` (devices
+  registry + end-to-end mobile push; supersedes the closed #4326, merged as
+  `fb93574fa`). The merged pipeline already localizes two of the three channels,
+  which narrows Phase 2 to:
+  - **Push — no locale work needed.** The `push` strategy hands raw i18n keys +
+    variables to `fanOutPushDeliveries`, which resolves title/body **per
+    `device.locale`** (memoized per distinct locale) via the shared
+    `resolveNotificationCopy(copy, locale)` helper. Device locale wins for push,
+    as intended.
+  - **In-app — no locale work needed.** The `Notification` row carries the keys;
+    the bell/inbox resolves them client-side in the viewer's own UI locale
+    (`NotificationItem.tsx`). The in-app strategy itself is a no-op.
+  - **Email — the remaining gap.** The dispatch subscriber resolves the base
+    copy (`title`/`body`/`t`) in `defaultLocale` and the email strategy bakes
+    the subject, body, and mail chrome from it. Phase 2 resolves the recipient's
+    stored locale via the SPEC-072 resolver (precedence: `OM_FORCE_LOCALE` →
+    registered resolver → `defaultLocale`; there is no request context in the
+    subscriber, so the `detectLocale()` step does not apply) and passes it to
+    `resolveNotificationCopy`, exposing the resolved locale on
+    `NotificationDeliveryContext` (e.g. `copyLocale`).
+  - **Base-copy handoff to push (required reconciliation).** The push fan-out
+    has a fast path that reuses `ctx.title`/`ctx.body` verbatim when a device's
+    locale resolves to `defaultLocale` — it assumes the base copy IS
+    default-locale. Once the base copy follows the recipient's stored locale,
+    that assumption breaks (an `en` device of a user with a `pl` preference
+    would get a Polish push). The fan-out must compare against the base copy's
+    actual locale (`copyLocale`) instead of `defaultLocale`, and a device with
+    **no** locale falls back to `copyLocale` (the recipient's stored preference)
+    rather than `defaultLocale` — device locale still wins whenever set.
 
 ## Architecture
 
@@ -167,8 +194,12 @@ Validated: `build:packages`, `generate`, `typecheck`, `lint` (0 errors).
   `undefined`-on-absence default.
 - **Contract surface** — additive only: new module, new optional resolver, new
   table. Frozen `User` untouched. Residual risk low.
-- **Phase 2 sequencing** — building the notification path before #4326 merges
-  risks conflicts; mitigated by deferring Phase 2.
+- **Email↔push base-copy coupling (Phase 2)** — the push fan-out's fast path
+  assumes the base copy is default-locale; changing the base copy to the
+  recipient's stored locale without passing `copyLocale` down would send
+  wrong-language pushes to devices explicitly set to the default locale.
+  Mitigation: the handoff described in § Phasing, covered by a dedicated
+  fan-out test (an `en` device of a `pl`-preference user gets `en`).
 
 ## Backward compatibility
 
@@ -182,7 +213,15 @@ Unregistered resolver + no stored preference ⇒ byte-for-byte today's behavior.
   recipient, not the initiator).
 - No stored preference + no resolver → today's behavior (request locale).
 - Registered override takes precedence over the stored preference.
-- Phase 2: two recipients with different stored locales each render in their own.
+- Phase 2 (email): notification email renders in the recipient's stored locale;
+  two recipients with different stored locales each get their own; no stored
+  preference ⇒ `defaultLocale` (today's behavior).
+- Phase 2 (push handoff): a device with an explicit locale keeps it regardless
+  of the recipient's stored preference (`en` device + `pl` preference ⇒ `en`
+  push); a device with no locale falls back to the stored preference; per-locale
+  memoization in the fan-out is unchanged.
+- Phase 2 (in-app): row still carries raw keys — bell rendering follows the
+  viewer's UI locale, unaffected by the stored preference.
 
 ## Example consumers
 
@@ -201,8 +240,31 @@ Contribution fork (`fullstackhouse/open-mercato`) → internal FSH review →
 upstream PR to `open-mercato/open-mercato` → on release, downstream apps bump the
 dependency. Not an eject: the change lands back upstream.
 
+## Implementation (Phase 2)
+
+Small delta on the merged pipeline:
+
+- `packages/core/src/modules/notifications/subscribers/deliver-notification.ts`
+  — resolve the recipient's stored locale (resolver seam; `em`,
+  `recipientUserId`, `tenantId`), pass it to `resolveNotificationCopy`, expose
+  it as `copyLocale` on `NotificationDeliveryContext`.
+- `packages/core/src/modules/notifications/lib/deliveryStrategies.ts` —
+  additive `copyLocale` field on the context type.
+- `packages/core/src/modules/push_notifications/lib/push-delivery-strategy.ts` /
+  `push-fanout.ts` — thread `copyLocale` through; reuse-base-copy condition
+  becomes `locale === copyLocale`; no-locale device fallback becomes
+  `copyLocale`.
+- Email / in-app strategies — no changes (email consumes the already-localized
+  `ctx.title`/`ctx.body`/`ctx.t`; in-app is a no-op).
+
 ## Changelog
 
+- 2026-08-18 — Phase 2 unblocked: #4326 was closed and superseded by #5366
+  (merged as `fb93574fa`). Re-scoped Phase 2 to the merged pipeline: push is
+  already per-device localized and in-app is viewer-localized, so the remaining
+  work is the email base copy in the dispatch subscriber plus the
+  `copyLocale` handoff to the push fan-out. Added Phase 2 implementation notes,
+  acceptance tests, and the email↔push coupling risk.
 - 2026-07-31 — Reframed as an OM-platform spec (Tournee/Covo as example
   consumers); added built-in stored locale + resolver design, resolution
   precedence, phasing (emails now / notifications after #4326), and usage
@@ -211,4 +273,5 @@ dependency. Not an eject: the change lands back upstream.
 
 ## Status
 
-Phase 1 implemented; Phase 2 deferred pending #4326. Draft for review.
+Phase 1 implemented; Phase 2 unblocked (#5366 merged) and re-scoped — ready to
+implement. Draft for review.
