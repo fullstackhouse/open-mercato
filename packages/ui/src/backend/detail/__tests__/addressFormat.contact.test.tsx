@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AddressView, formatAddressContactPairs } from '../addressFormat'
+import { AddressView, canSeeTaxId, formatAddressContactPairs } from '../addressFormat'
 
 // `packages/ui/src/backend/detail/addressFormat.tsx` and
 // `packages/core/src/modules/customers/utils/addressFormat.tsx` are the documented near-identical
@@ -69,5 +69,35 @@ describe('ui addressFormat — contact block parity with the customers twin', ()
     expect(renderToStaticMarkup(<AddressView address={postalOnly} format="street_first" contactLabels={labels} />)).toBe(
       renderToStaticMarkup(<AddressView address={postalOnly} format="street_first" />),
     )
+  })
+  // Mirrors the core suite: the twin must resolve a by-type label map and gate visibility the same
+  // way, or the same address reads differently depending on which surface rendered it.
+  describe('tax id labelled by type', () => {
+    const BY_TYPE = { plNip: 'NIP', euVat: 'EU VAT', other: 'Tax number' }
+    const labelFor = (taxIdType: string | null) =>
+      formatAddressContactPairs({ addressLine1: null, taxId: '1234567890', taxIdType }, { taxId: BY_TYPE })[0]?.label
+
+    it('names each type, and falls back to the neutral label for the rest', () => {
+      expect(labelFor('pl_nip')).toBe('NIP')
+      expect(labelFor('eu_vat')).toBe('EU VAT')
+      expect(labelFor('other')).toBe('Tax number')
+      expect(labelFor('us_ein')).toBe('Tax number')
+      expect(labelFor(null)).toBe('Tax number')
+    })
+
+    it('still accepts a plain string — the map is additive', () => {
+      expect(
+        formatAddressContactPairs({ addressLine1: null, taxId: '1234567890', taxIdType: 'pl_nip' }, { taxId: 'Tax ID' }),
+      ).toEqual([{ field: 'taxId', label: 'Tax ID', value: '1234567890' }])
+    })
+  })
+
+  describe('canSeeTaxId', () => {
+    it('shows an EU VAT number to anyone, and gates the rest on a customer-view grant', () => {
+      expect(canSeeTaxId('eu_vat', [])).toBe(true)
+      expect(canSeeTaxId('pl_nip', ['sales.orders.view'])).toBe(false)
+      expect(canSeeTaxId('pl_nip', ['customers.people.view'])).toBe(true)
+      expect(canSeeTaxId('pl_nip', ['customers.companies.view'])).toBe(true)
+    })
   })
 })

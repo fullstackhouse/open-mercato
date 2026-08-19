@@ -18,11 +18,11 @@ import {
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useBackendChrome } from '@open-mercato/ui/backend/BackendChromeProvider'
-import { hasFeature } from '@open-mercato/shared/security/features'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { AddressEditor, type AddressEditorDraft } from '@open-mercato/core/modules/customers/components/AddressEditor'
 import {
   AddressView,
+  canSeeTaxId,
   formatAddressContactPairs,
   formatAddressString,
   type AddressContactLabels,
@@ -223,25 +223,6 @@ function draftFromDocumentAddress(entry: DocumentAddressAssignment): AddressEdit
     country: entry.value.country ?? '',
     isPrimary: false,
   }
-}
-
-/**
- * `eu_vat` is a public business identifier — VIES is an open lookup — so it renders to anyone who can
- * read the document. A `pl_nip` or `other` number may be a local or personal tax number, so it sits
- * behind the same customer-PII grant the search config already applies to `tax_id`
- * (`customers/search.ts`: `excluded` for people, `hashOnly` for companies).
- *
- * Either customer-view grant is enough: a document address's identifier may belong to a person or to
- * a company, and demanding both would hide a company's tax id from a user who can open that company.
- * The spec leaves the exact id to this phase's review — see "Displaying a tax identifier is gated by
- * type" in 2026-08-10-address-contact-and-tax-fields.
- */
-function canSeeTaxId(taxIdType: unknown, grantedFeatures: string[] | null | undefined): boolean {
-  if (taxIdType === 'eu_vat') return true
-  return (
-    hasFeature(grantedFeatures ?? undefined, 'customers.people.view') ||
-    hasFeature(grantedFeatures ?? undefined, 'customers.companies.view')
-  )
 }
 
 /**
@@ -1128,7 +1109,15 @@ export function SalesDocumentAddressesSection({
 
   const { payload } = useBackendChrome()
   const contactLabels: AddressContactLabels = {
-    taxId: t('sales.documents.detail.addresses.taxId', 'Tax ID'),
+    // Named by type rather than with one flat label: `1234567890` and `PL1234567890` are the same
+    // business, and a single "Tax ID" string would print a foreign VAT number under a domestic
+    // scheme's name. `formatAddressContactPairs` picks the one that matches the snapshot's
+    // `taxIdType`, falling back to the neutral label for a type it does not recognise.
+    taxId: {
+      plNip: t('sales.documents.detail.addresses.taxId.plNip', 'Tax ID'),
+      euVat: t('sales.documents.detail.addresses.taxId.euVat', 'EU VAT'),
+      other: t('sales.documents.detail.addresses.taxId.other', 'Tax number'),
+    },
     phone: t('sales.documents.detail.addresses.phone', 'Phone'),
   }
 

@@ -370,7 +370,7 @@ describe('SalesDocumentAddressesSection', () => {
     )
 
     await screen.findByRole('combobox')
-    expect(screen.getByText('Tax ID: PL1234567890')).toBeTruthy()
+    expect(screen.getByText('EU VAT: PL1234567890')).toBeTruthy()
     expect(screen.getByText('Phone: +48 600 100 200')).toBeTruthy()
     // The type interprets the value; it is never a displayed line of its own.
     expect(screen.queryByText(/eu_vat/)).toBeNull()
@@ -392,7 +392,7 @@ describe('SalesDocumentAddressesSection', () => {
     )
 
     await screen.findByRole('combobox')
-    expect(screen.queryByText(/^Tax ID:/)).toBeNull()
+    expect(screen.queryByText(/^(Tax ID|EU VAT|Tax number):/)).toBeNull()
     expect(screen.queryByText(/^Phone:/)).toBeNull()
   })
 
@@ -484,7 +484,7 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByText('Tax ID: PL1234567890')).toBeTruthy()
+    expect(screen.getByText('EU VAT: PL1234567890')).toBeTruthy()
   })
 
   it('hides the contact block once a saved address is selected, so it cannot show stale details', async () => {

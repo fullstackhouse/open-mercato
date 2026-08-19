@@ -1,4 +1,5 @@
 import {
+  canSeeTaxId,
   formatAddressContactPairs,
   formatAddressJson,
   formatAddressLines,
@@ -148,14 +149,76 @@ describe('customers utils - address formatting', () => {
       expect(formatAddressContactPairs(sparse, labels)).toEqual([])
     })
 
-    // `taxIdType` interprets the value (and will gate its display in a later phase); it must never
-    // surface as a pair of its own, whatever labels the caller passes.
+    // `taxIdType` interprets the value — it selects the tax id's label and gates its visibility —
+    // but it must never surface as a pair of its own, whatever labels the caller passes.
     it('never emits the tax id TYPE as a displayed pair', () => {
       const pairs = formatAddressContactPairs(address, { ...labels, taxIdType: 'Type' } as never)
       expect(pairs).toEqual([
         { field: 'taxId', label: 'Tax ID', value: '1234567890' },
         { field: 'phone', label: 'Phone', value: '+44 20 7946 0000' },
       ])
+    })
+  })
+  describe('tax id labelled by type', () => {
+    const BY_TYPE = { plNip: 'NIP', euVat: 'EU VAT', other: 'Tax number' }
+    const withType = (taxId: string, taxIdType: string | null) => ({ addressLine1: null, taxId, taxIdType })
+    const labelFor = (taxId: string, taxIdType: string | null) =>
+      formatAddressContactPairs(withType(taxId, taxIdType), { taxId: BY_TYPE })[0]?.label
+
+    // The distinction the type exists for: `1234567890` and `PL1234567890` are the same business, so
+    // one flat label necessarily misnames one of them.
+    it('names a domestic identifier and an EU VAT number differently', () => {
+      expect(labelFor('1234567890', 'pl_nip')).toBe('NIP')
+      expect(labelFor('PL1234567890', 'eu_vat')).toBe('EU VAT')
+    })
+
+    // Anything with a two-letter prefix is `eu_vat` whatever the country, so a German number must not
+    // fall through to the neutral label.
+    it('treats every prefixed number as EU VAT, not just the local country', () => {
+      expect(labelFor('DE811907980', 'eu_vat')).toBe('EU VAT')
+    })
+
+    // The case a flat label gets wrong: naming a foreign number after a domestic scheme renames it.
+    it('falls back to the neutral label for other, unknown and missing types', () => {
+      expect(labelFor('811907980', 'other')).toBe('Tax number')
+      expect(labelFor('811907980', 'us_ein')).toBe('Tax number')
+      expect(labelFor('811907980', null)).toBe('Tax number')
+    })
+
+    it('still accepts a plain string — the map is additive', () => {
+      expect(formatAddressContactPairs(withType('1234567890', 'pl_nip'), { taxId: 'Tax ID' })).toEqual([
+        { field: 'taxId', label: 'Tax ID', value: '1234567890' },
+      ])
+    })
+
+    it('hides the tax id when the map is absent, like any unlabelled field', () => {
+      expect(formatAddressContactPairs(withType('1234567890', 'pl_nip'), { phone: 'Phone' })).toEqual([])
+    })
+  })
+
+  describe('canSeeTaxId', () => {
+    // VIES is an open lookup, so an EU VAT number is public business data — no grant needed.
+    it('shows an EU VAT number to anyone who can read the record', () => {
+      expect(canSeeTaxId('eu_vat', [])).toBe(true)
+      expect(canSeeTaxId('eu_vat', null)).toBe(true)
+    })
+
+    // A domestic number may be a sole trader's personal tax number, so it sits behind customer PII.
+    it('withholds a domestic or untyped identifier without a customer-view grant', () => {
+      expect(canSeeTaxId('pl_nip', ['sales.orders.view'])).toBe(false)
+      expect(canSeeTaxId('other', ['sales.orders.view'])).toBe(false)
+      expect(canSeeTaxId(null, ['sales.orders.view'])).toBe(false)
+      expect(canSeeTaxId('pl_nip', undefined)).toBe(false)
+    })
+
+    // Either grant suffices: an address's identifier may belong to a person or to a company, and
+    // demanding both would hide a company's tax id from a user who can open that company.
+    it.each(['customers.people.view', 'customers.companies.view'])('accepts %s on its own', (feature) => {
+      expect(canSeeTaxId('pl_nip', [feature])).toBe(true)
+    })
+
+    it('honours a wildcard grant', () => {
+      expect(canSeeTaxId('pl_nip', ['customers.*'])).toBe(true)
     })
   })
 })
