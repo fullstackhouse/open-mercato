@@ -1449,6 +1449,7 @@ function MethodInlineEditor({
   label,
   value,
   snapshot,
+  code,
   emptyLabel,
   options,
   loading,
@@ -1465,6 +1466,12 @@ function MethodInlineEditor({
   label: string
   value: string | null | undefined
   snapshot: Record<string, unknown> | null
+  /**
+   * The document's free-text method code (`shipping_method_code` / `payment_method_code`), used
+   * when it carries no dictionary reference. Documents imported from an external system record the
+   * method this way: the value is mastered upstream, so there is no row to point at.
+   */
+  code?: string | null
   emptyLabel: string
   options: MethodOption[]
   loading: boolean
@@ -1510,8 +1517,7 @@ function MethodInlineEditor({
 
   const resolveDisplay = React.useCallback(
     (id: string | null | undefined): { label: string | null; description: string | null } => {
-      if (!id) return { label: null, description: null }
-      const option = options.find((entry) => entry.id === id)
+      const option = id ? options.find((entry) => entry.id === id) : undefined
       if (option) {
         return {
           label: option.name ?? option.code,
@@ -1526,12 +1532,17 @@ function MethodInlineEditor({
         snapshot && typeof (snapshot as any)?.description === 'string'
           ? (snapshot as any).description
           : null
+      const fallback = snapName ?? snapCode ?? code ?? null
+      // A document may record its method as free text with no dictionary reference at all, which is
+      // how integrations that mirror an external system store it. Without this the field renders
+      // `emptyLabel` on a document that plainly has the value.
+      if (!id) return { label: fallback, description: fallback ? snapDescription : null }
       return {
-        label: snapName ?? snapCode ?? id,
+        label: fallback ?? id,
         description: snapDescription,
       }
     },
-    [options, snapshot]
+    [code, options, snapshot]
   )
 
   const currentDisplay = React.useMemo(
@@ -3809,6 +3820,7 @@ export default function SalesDocumentDetailPage({
             label={t('sales.documents.detail.shippingMethod.label', 'Shipping method')}
             value={record?.shippingMethodId ?? null}
             snapshot={(record?.shippingMethodSnapshot ?? null) as Record<string, unknown> | null}
+            code={record?.shippingMethodCode ?? null}
             emptyLabel={t('sales.documents.detail.empty', 'Not set')}
             options={shippingMethodOptions}
             loading={shippingMethodLoading}
@@ -3835,6 +3847,7 @@ export default function SalesDocumentDetailPage({
             label={t('sales.documents.detail.paymentMethod.label', 'Payment method')}
             value={record?.paymentMethodId ?? null}
             snapshot={(record?.paymentMethodSnapshot ?? null) as Record<string, unknown> | null}
+            code={record?.paymentMethodCode ?? null}
             emptyLabel={t('sales.documents.detail.empty', 'Not set')}
             options={paymentMethodOptions}
             loading={paymentMethodLoading}
