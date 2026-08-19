@@ -487,6 +487,54 @@ describe('SalesDocumentAddressesSection', () => {
     expect(screen.getByText('EU VAT: PL1234567890')).toBeTruthy()
   })
 
+  // The `other` branch has no fixture in any environment we can click through: dev's tax-id orders
+  // are all domestic, and staging anonymises identifiers to digits only. This is the only place the
+  // seam gets exercised end-to-end — snapshot `taxIdType` reaching the component, and the component
+  // resolving it against the label map — so a foreign address silently reading "Tax ID" would be
+  // caught nowhere else.
+  it('names a foreign identifier neutrally rather than after a domestic scheme', async () => {
+    // Not an `eu_vat` number, so it sits behind the customer-PII grant like any domestic one.
+    mockGrantedFeatures = ['customers.companies.view']
+    render(
+      <SalesDocumentAddressesSection
+        documentId="order-1"
+        kind="order"
+        customerId="customer-1"
+        billingAddressSnapshot={{
+          addressLine1: 'Stephansplatz 1',
+          city: 'Wien',
+          country: 'AT',
+          taxId: '258349555297',
+          taxIdType: 'other',
+        }}
+      />,
+    )
+    await screen.findByRole('combobox')
+    expect(screen.getByText('Tax number: 258349555297')).toBeTruthy()
+    expect(screen.queryByText(/^(Tax ID|EU VAT):/)).toBeNull()
+  })
+
+  // Orders written before `taxIdType` existed carry the value alone; they must take the same neutral
+  // route rather than being assumed domestic.
+  it('names an untyped identifier neutrally too', async () => {
+    // Not an `eu_vat` number, so it sits behind the customer-PII grant like any domestic one.
+    mockGrantedFeatures = ['customers.companies.view']
+    render(
+      <SalesDocumentAddressesSection
+        documentId="order-1"
+        kind="order"
+        customerId="customer-1"
+        billingAddressSnapshot={{
+          addressLine1: '12 Market Street',
+          city: 'London',
+          taxId: '1234567890',
+        }}
+      />,
+    )
+    await screen.findByRole('combobox')
+    expect(screen.getByText('Tax number: 1234567890')).toBeTruthy()
+  })
+
   it('hides the contact block once a saved address is selected, so it cannot show stale details', async () => {
     // The block renders the FROZEN snapshot. With a saved address chosen the tile shows that address
     // while the snapshot still describes the previous one, so the pairing would be a lie until save.
