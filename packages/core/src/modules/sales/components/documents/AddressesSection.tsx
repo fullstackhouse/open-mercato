@@ -8,6 +8,7 @@ import { createCrud } from '@open-mercato/ui/backend/utils/crud'
 import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { ErrorMessage, LoadingMessage, TabEmptyState } from '@open-mercato/ui/backend/detail'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { Input } from '@open-mercato/ui/primitives/input'
 import {
   Select,
   SelectContent,
@@ -238,18 +239,15 @@ function draftFromDocumentAddress(entry: DocumentAddressAssignment): AddressEdit
 function AddressContactBlock({
   snapshot,
   labels,
-  format,
   grantedFeatures,
 }: {
   snapshot?: Record<string, unknown> | null
   labels: AddressContactLabels
-  format: AddressFormatStrategy
   grantedFeatures: string[] | null | undefined
 }) {
   const record = (snapshot ?? {}) as Record<string, unknown>
   const contactOnly: AddressValue = {
-    // No postal fields on purpose: with nothing for `formatAddressLines` to emit, `AddressView`
-    // renders the contact lines alone, beside the editor that already shows the street.
+    // No postal fields: this block shows only what the editor above does not.
     addressLine1: null,
     phone: typeof record.phone === 'string' ? record.phone : null,
     taxId: typeof record.taxId === 'string' ? record.taxId : null,
@@ -258,14 +256,31 @@ function AddressContactBlock({
   const permitted: AddressContactLabels = canSeeTaxId(contactOnly.taxIdType, grantedFeatures)
     ? labels
     : { ...labels, taxId: undefined }
-  if (!formatAddressContactPairs(contactOnly, permitted).length) return null
+  const pairs = formatAddressContactPairs(contactOnly, permitted)
+  if (!pairs.length) return null
+  // Rendered as read-only FIELDS in the editor's own grid, not as a caption under it. The first cut
+  // used `AddressView`'s contact block — small muted text appended after the editor — and it read as
+  // a footnote on the "save this address" switch rather than as part of the address: different size,
+  // different colour, and separated from the fields it belongs to.
+  //
+  // `disabled` + `readOnly` is honest rather than decorative: these keys are written by integrations,
+  // the editor has no input for them, and the API refuses to change them. The label rides in
+  // `rightIcon`, the same treatment the country field gives its ISO code — the placeholder would be
+  // invisible here, since a field is only rendered when it HAS a value. `rightIcon` is aria-hidden,
+  // hence the explicit `aria-label`.
   return (
-    <AddressView
-      address={contactOnly}
-      format={format}
-      contactLabels={permitted}
-      contactClassName="text-xs text-muted-foreground"
-    />
+    <div className="grid gap-2 sm:grid-cols-2">
+      {pairs.map(({ field, label, value }) => (
+        <Input
+          key={field}
+          value={value}
+          readOnly
+          disabled
+          aria-label={label}
+          rightIcon={<span className="text-xs">{label}</span>}
+        />
+      ))}
+    </div>
   )
 }
 
@@ -1184,6 +1199,11 @@ export function SalesDocumentAddressesSection({
                 hidePrimaryToggle
                 disabled={locked}
               />
+              <AddressContactBlock
+                snapshot={shippingAddressSnapshot}
+                labels={contactLabels}
+                grantedFeatures={payload?.grantedFeatures}
+              />
               <SwitchField
                 label={t('sales.documents.form.address.saveToCustomer', 'Save this address to the customer')}
                 flip
@@ -1192,14 +1212,6 @@ export function SalesDocumentAddressesSection({
                 disabled={customerRequired || locked}
               />
             </div>
-          ) : null}
-          {useCustomShipping ? (
-            <AddressContactBlock
-              snapshot={shippingAddressSnapshot}
-              labels={contactLabels}
-              format={addressFormat}
-              grantedFeatures={payload?.grantedFeatures}
-            />
           ) : null}
         </div>
 
@@ -1260,6 +1272,11 @@ export function SalesDocumentAddressesSection({
                     hidePrimaryToggle
                     disabled={locked}
                   />
+                  <AddressContactBlock
+                    snapshot={billingAddressSnapshot}
+                    labels={contactLabels}
+                    grantedFeatures={payload?.grantedFeatures}
+                  />
                   <SwitchField
                     label={t('sales.documents.form.address.saveToCustomer', 'Save this address to the customer')}
                     flip
@@ -1270,14 +1287,6 @@ export function SalesDocumentAddressesSection({
                 </div>
               ) : null}
             </>
-          ) : null}
-          {useCustomBilling ? (
-            <AddressContactBlock
-              snapshot={billingAddressSnapshot}
-              labels={contactLabels}
-              format={addressFormat}
-              grantedFeatures={payload?.grantedFeatures}
-            />
           ) : null}
         </div>
         </div>

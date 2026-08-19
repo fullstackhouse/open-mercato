@@ -370,8 +370,8 @@ describe('SalesDocumentAddressesSection', () => {
     )
 
     await screen.findByRole('combobox')
-    expect(screen.getByText('EU VAT: PL1234567890')).toBeTruthy()
-    expect(screen.getByText('Phone: +48 600 100 200')).toBeTruthy()
+    expect(screen.getByLabelText('EU VAT')).toHaveValue('PL1234567890')
+    expect(screen.getByLabelText('Phone')).toHaveValue('+48 600 100 200')
     // The type interprets the value; it is never a displayed line of its own.
     expect(screen.queryByText(/eu_vat/)).toBeNull()
   })
@@ -392,8 +392,8 @@ describe('SalesDocumentAddressesSection', () => {
     )
 
     await screen.findByRole('combobox')
-    expect(screen.queryByText(/^(Tax ID|EU VAT|Tax number):/)).toBeNull()
-    expect(screen.queryByText(/^Phone:/)).toBeNull()
+    expect(screen.queryByLabelText(/^(Tax ID|EU VAT|Tax number)$/)).toBeNull()
+    expect(screen.queryByLabelText('Phone')).toBeNull()
   })
 
   it('renders a disabled editor on a locked document, instead of an editable form the API will refuse', async () => {
@@ -447,7 +447,7 @@ describe('SalesDocumentAddressesSection', () => {
     await screen.findByRole('combobox')
     expect(screen.queryByText(/1234567890/)).toBeNull()
     // The phone is not gated — only the tax id is.
-    expect(screen.getByText('Phone: +48 600 100 200')).toBeTruthy()
+    expect(screen.getByLabelText('Phone')).toHaveValue('+48 600 100 200')
   })
 
   it('shows a domestic tax id to a viewer who can see customers', async () => {
@@ -466,7 +466,7 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByText('Tax ID: 1234567890')).toBeTruthy()
+    expect(screen.getByLabelText('Tax ID')).toHaveValue('1234567890')
   })
 
   it('renders an EU VAT number without any grant — it is a public identifier', async () => {
@@ -484,7 +484,7 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByText('EU VAT: PL1234567890')).toBeTruthy()
+    expect(screen.getByLabelText('EU VAT')).toHaveValue('PL1234567890')
   })
 
   // The `other` branch has no fixture in any environment we can click through: dev's tax-id orders
@@ -492,6 +492,32 @@ describe('SalesDocumentAddressesSection', () => {
   // seam gets exercised end-to-end — snapshot `taxIdType` reaching the component, and the component
   // resolving it against the label map — so a foreign address silently reading "Tax ID" would be
   // caught nowhere else.
+  // The first cut rendered these as small muted text after the editor, which read as a footnote on
+  // the "save this address" switch rather than as part of the address. They are fields now, and
+  // read-only ones: the keys are integration-written, the editor has no input for them, and the API
+  // refuses to change them — so an enabled input would promise an edit that cannot happen.
+  it('renders the tax id as a read-only field, not a caption', async () => {
+    mockGrantedFeatures = ['customers.companies.view']
+    render(
+      <SalesDocumentAddressesSection
+        documentId="order-1"
+        kind="order"
+        customerId="customer-1"
+        billingAddressSnapshot={{
+          addressLine1: '12 Market Street',
+          city: 'London',
+          taxId: '1234567890',
+          taxIdType: 'pl_nip',
+        }}
+      />,
+    )
+    await screen.findByRole('combobox')
+    const field = screen.getByLabelText('Tax ID')
+    expect(field.tagName).toBe('INPUT')
+    expect(field).toBeDisabled()
+    expect(field).toHaveAttribute('readonly')
+  })
+
   it('names a foreign identifier neutrally rather than after a domestic scheme', async () => {
     // Not an `eu_vat` number, so it sits behind the customer-PII grant like any domestic one.
     mockGrantedFeatures = ['customers.companies.view']
@@ -510,8 +536,8 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByText('Tax number: 258349555297')).toBeTruthy()
-    expect(screen.queryByText(/^(Tax ID|EU VAT):/)).toBeNull()
+    expect(screen.getByLabelText('Tax number')).toHaveValue('258349555297')
+    expect(screen.queryByLabelText(/^(Tax ID|EU VAT)$/)).toBeNull()
   })
 
   // Orders written before `taxIdType` existed carry the value alone; they must take the same neutral
@@ -532,7 +558,7 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByText('Tax number: 1234567890')).toBeTruthy()
+    expect(screen.getByLabelText('Tax number')).toHaveValue('1234567890')
   })
 
   it('hides the contact block once a saved address is selected, so it cannot show stale details', async () => {
