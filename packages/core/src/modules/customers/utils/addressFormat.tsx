@@ -207,6 +207,12 @@ export const TAX_ID_VIEW_FEATURES = ['customers.people.view', 'customers.compani
  * exporting it is what lets a SERVER route apply the same rule. That matters — a client-side check
  * can only hide a value the response already carried, so an API that answers with an address is the
  * only place the value can actually be withheld.
+ *
+ * An absent grant list DENIES: `hasFeature` returns false for `undefined` or an empty array, so a
+ * caller passing a chrome payload that has not resolved yet withholds the tax id rather than leaking
+ * it, and the block simply appears once the payload lands. That is load-bearing and invisible at the
+ * call site — do not "tidy away" the `?? undefined` normalisation below on the grounds that it looks
+ * redundant; it is what keeps the unresolved case fail-closed.
  */
 export function canSeeTaxId(taxIdType: unknown, grantedFeatures: string[] | null | undefined): boolean {
   if (taxIdType === 'eu_vat') return true
