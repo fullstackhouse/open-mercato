@@ -164,7 +164,12 @@ const TAX_ID_LABEL_KEY_BY_TYPE: Record<string, keyof TaxIdLabelByType> = {
   eu_vat: 'euVat',
 }
 
-function resolveTaxIdLabel(labels: AddressContactLabels, taxIdType: string | null | undefined): string | undefined {
+/**
+ * The label a tax identifier should carry, given its type. Exported because the editor renders the
+ * same identifier as an input and must name it the same way this formatter does — two copies of the
+ * mapping is exactly how a foreign number ends up under a domestic scheme's name.
+ */
+export function resolveTaxIdLabel(labels: AddressContactLabels, taxIdType: string | null | undefined): string | undefined {
   const label = labels.taxId
   if (!label) return undefined
   if (typeof label === 'string') return label

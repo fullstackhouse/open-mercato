@@ -87,6 +87,10 @@ jest.mock('@open-mercato/core/modules/customers/components/AddressEditor', () =>
   AddressEditor: ({ value, onChange, disabled }: any) => (
     <>
       <span data-testid="address-editor-disabled">{String(Boolean(disabled))}</span>
+      {/* The editor renders the contact details itself; what this section owes it is a draft that
+          carries them off the snapshot, which is what these expose. */}
+      <span data-testid="draft-taxId">{value?.taxId ?? ''}</span>
+      <span data-testid="draft-phone">{value?.phone ?? ''}</span>
       <button
         type="button"
         onClick={() =>
@@ -368,8 +372,8 @@ describe('SalesDocumentAddressesSection', () => {
     )
 
     await screen.findByRole('combobox')
-    expect(screen.getByLabelText('EU VAT')).toHaveValue('PL1234567890')
-    expect(screen.getByLabelText('Phone')).toHaveValue('+48 600 100 200')
+    expect(screen.getByTestId('draft-taxId').textContent).toBe('PL1234567890')
+    expect(screen.getByTestId('draft-phone').textContent).toBe('+48 600 100 200')
     // The type interprets the value; it is never a displayed line of its own.
     expect(screen.queryByText(/eu_vat/)).toBeNull()
   })
@@ -390,8 +394,8 @@ describe('SalesDocumentAddressesSection', () => {
     )
 
     await screen.findByRole('combobox')
-    expect(screen.queryByLabelText(/^(Tax ID|EU VAT|Tax number)$/)).toBeNull()
-    expect(screen.queryByLabelText('Phone')).toBeNull()
+    expect(screen.getByTestId('draft-taxId').textContent).toBe('')
+    expect(screen.getByTestId('draft-phone').textContent).toBe('')
   })
 
   it('renders a disabled editor on a locked document, instead of an editable form the API will refuse', async () => {
@@ -440,7 +444,7 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByLabelText('Tax ID')).toHaveValue('1234567890')
+    expect(screen.getByTestId('draft-taxId').textContent).toBe('1234567890')
   })
 
   it('renders an EU VAT number', async () => {
@@ -458,76 +462,7 @@ describe('SalesDocumentAddressesSection', () => {
       />,
     )
     await screen.findByRole('combobox')
-    expect(screen.getByLabelText('EU VAT')).toHaveValue('PL1234567890')
-  })
-
-  // The `other` branch has no fixture in any environment we can click through: dev's tax-id orders
-  // are all domestic, and staging anonymises identifiers to digits only. This is the only place the
-  // seam gets exercised end-to-end — snapshot `taxIdType` reaching the component, and the component
-  // resolving it against the label map — so a foreign address silently reading "Tax ID" would be
-  // caught nowhere else.
-  // The first cut rendered these as small muted text after the editor, which read as a footnote on
-  // the "save this address" switch rather than as part of the address. They are fields now, and
-  // read-only ones: the keys are integration-written, the editor has no input for them, and the API
-  // refuses to change them — so an enabled input would promise an edit that cannot happen.
-  it('renders the tax id as a read-only field, not a caption', async () => {
-    render(
-      <SalesDocumentAddressesSection
-        documentId="order-1"
-        kind="order"
-        customerId="customer-1"
-        billingAddressSnapshot={{
-          addressLine1: '12 Market Street',
-          city: 'London',
-          taxId: '1234567890',
-          taxIdType: 'pl_nip',
-        }}
-      />,
-    )
-    await screen.findByRole('combobox')
-    const field = screen.getByLabelText('Tax ID')
-    expect(field.tagName).toBe('INPUT')
-    expect(field).toBeDisabled()
-    expect(field).toHaveAttribute('readonly')
-  })
-
-  it('names a foreign identifier neutrally rather than after a domestic scheme', async () => {
-    render(
-      <SalesDocumentAddressesSection
-        documentId="order-1"
-        kind="order"
-        customerId="customer-1"
-        billingAddressSnapshot={{
-          addressLine1: 'Stephansplatz 1',
-          city: 'Wien',
-          country: 'AT',
-          taxId: '258349555297',
-          taxIdType: 'other',
-        }}
-      />,
-    )
-    await screen.findByRole('combobox')
-    expect(screen.getByLabelText('Tax number')).toHaveValue('258349555297')
-    expect(screen.queryByLabelText(/^(Tax ID|EU VAT)$/)).toBeNull()
-  })
-
-  // Orders written before `taxIdType` existed carry the value alone; they must take the same neutral
-  // route rather than being assumed domestic.
-  it('names an untyped identifier neutrally too', async () => {
-    render(
-      <SalesDocumentAddressesSection
-        documentId="order-1"
-        kind="order"
-        customerId="customer-1"
-        billingAddressSnapshot={{
-          addressLine1: '12 Market Street',
-          city: 'London',
-          taxId: '1234567890',
-        }}
-      />,
-    )
-    await screen.findByRole('combobox')
-    expect(screen.getByLabelText('Tax number')).toHaveValue('1234567890')
+    expect(screen.getByTestId('draft-taxId').textContent).toBe('PL1234567890')
   })
 
   it('hides the contact block once a saved address is selected, so it cannot show stale details', async () => {

@@ -24,7 +24,7 @@ import {
 } from '@open-mercato/ui/primitives/dialog'
 import { buildCountryOptions } from '@open-mercato/shared/lib/location/countries'
 import { buildHrefWithReturnTo } from '@open-mercato/shared/lib/navigation/returnTo'
-import type { AddressFormatStrategy } from '../utils/addressFormat'
+import { resolveTaxIdLabel, type AddressFormatStrategy } from '../utils/addressFormat'
 import { useAddressTypes } from './detail/hooks/useAddressTypes'
 
 type Translator = (key: string, fallback?: string, params?: Record<string, string | number>) => string
@@ -41,6 +41,13 @@ export type AddressEditorDraft = {
   region: string
   postalCode: string
   country: string
+  /**
+   * Contact details that belong to the ADDRESS rather than to the customer: the tax identifier it was
+   * invoiced under, and the phone a carrier calls about a delivery. Optional so every existing caller
+   * keeps compiling — one that omits them renders two empty fields, exactly as it does for `region`.
+   */
+  taxId?: string
+  phone?: string
   latitude?: string
   longitude?: string
   isPrimary: boolean
@@ -58,6 +65,8 @@ export type AddressEditorField =
   | 'region'
   | 'postalCode'
   | 'country'
+  | 'taxId'
+  | 'phone'
   | 'latitude'
   | 'longitude'
   | 'isPrimary'
@@ -70,6 +79,12 @@ type AddressEditorProps = {
   disabled?: boolean
   errors?: Partial<Record<AddressEditorField, string>>
   hidePrimaryToggle?: boolean
+  /**
+   * Interprets `taxId` for its label only — a `pl_nip` reads "NIP", an `eu_vat` reads "EU VAT". It is
+   * metadata about the value, never an edited field, which is why it is a prop rather than a member
+   * of the draft: nothing in this component may write it.
+   */
+  taxIdType?: string | null
   showFormatHint?: boolean
   showCoordinateFields?: boolean
 }
@@ -82,6 +97,7 @@ export function AddressEditor({
   disabled = false,
   errors = {},
   hidePrimaryToggle = false,
+  taxIdType,
   showFormatHint = true,
   showCoordinateFields = false,
 }: AddressEditorProps) {
@@ -114,6 +130,8 @@ export function AddressEditor({
     region: value.region ?? '',
     postalCode: value.postalCode ?? '',
     country: value.country ?? '',
+    taxId: value.taxId ?? '',
+    phone: value.phone ?? '',
     ...(showCoordinateFields
       ? { latitude: value.latitude ?? '', longitude: value.longitude ?? '' }
       : {}),
@@ -472,6 +490,49 @@ export function AddressEditor({
             {errors.longitude ? <p className="text-xs text-destructive">{errors.longitude}</p> : null}
           </>
         ) : null}
+        {/*
+          Ordinary fields, not a block rendered beside the editor. An address's tax identifier and
+          phone are as much part of it as its street, so they render always and edit the same way —
+          whether the address can be edited at all is a property of the address, not decided per
+          field.
+        */}
+        <Input
+          className={inputClass('taxId')}
+          placeholder={t('customers.people.detail.addresses.fields.taxId', 'Tax number')}
+          // The type names the identifier once it has a value, the way the country field shows its
+          // ISO code. A placeholder cannot do it: it disappears exactly when the value arrives.
+          rightIcon={
+            current.taxId ? (
+              <span className="text-xs">
+                {resolveTaxIdLabel(
+                  {
+                    taxId: {
+                      plNip: t('customers.people.detail.addresses.fields.taxId.plNip', 'Tax ID'),
+                      euVat: t('customers.people.detail.addresses.fields.taxId.euVat', 'EU VAT'),
+                      other: t('customers.people.detail.addresses.fields.taxId.other', 'Tax number'),
+                    },
+                  },
+                  taxIdType,
+                )}
+              </span>
+            ) : null
+          }
+          value={current.taxId ?? ''}
+          onChange={(evt) => update('taxId', evt.target.value)}
+          disabled={disabled}
+          aria-invalid={errors.taxId ? 'true' : undefined}
+        />
+        {errors.taxId ? <p className="text-xs text-destructive">{errors.taxId}</p> : null}
+        <Input
+          className={inputClass('phone')}
+          placeholder={t('customers.people.detail.addresses.fields.phone', 'Phone')}
+          inputMode="tel"
+          value={current.phone ?? ''}
+          onChange={(evt) => update('phone', evt.target.value)}
+          disabled={disabled}
+          aria-invalid={errors.phone ? 'true' : undefined}
+        />
+        {errors.phone ? <p className="text-xs text-destructive">{errors.phone}</p> : null}
       </div>
       {!hidePrimaryToggle ? (
         <label className="inline-flex items-center gap-2 text-sm">
