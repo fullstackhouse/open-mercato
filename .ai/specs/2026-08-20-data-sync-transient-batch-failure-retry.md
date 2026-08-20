@@ -206,10 +206,17 @@ re-establish, short enough that a genuinely dead source is not mistaken for a sl
 
 Two implementation requirements that are easy to miss and must be in the implementing PR:
 
-- **Heartbeat through the backoff.** The engine's `withHeartbeat` wrapper only ticks while the adapter's
-  `next()` is pending. A backoff sleep sits outside that window, and `STALE_JOB_TIMEOUT_SECONDS` is 60 s with
-  a 15 s tick — so a sleep longer than a minute would let the stale-job sweep treat a healthy, waiting run as
-  abandoned. The wait must tick the same heartbeat.
+- **Heartbeat through the backoff.** The engine's `withHeartbeat` wrapper (`lib/sync-engine.ts`) only ticks
+  while the adapter's `next()` is pending, on `HEARTBEAT_TICK_MS` — derived as `STALE_JOB_TIMEOUT_SECONDS / 4`,
+  so 15 s against the 60 s sweep. A backoff sleep sits outside that window, so any wait longer than the
+  60 s timeout would let `markStaleJobsFailed` treat a healthy, waiting run as abandoned — and the delay cap
+  proposed above is five minutes. The wait must drive the same keepalive
+  (`progressService.touchJobHeartbeat?.(…)`), not merely sleep.
+
+  Not to be confused with `HEARTBEAT_INTERVAL_MS` (5 s) in `progress/lib/progressService.ts`: that one
+  throttles how often *already-flowing* progress updates are persisted, and it does nothing for a run that has
+  stopped calling `updateProgress` because it is waiting. The two are independent, and only the first one
+  keeps a backing-off run alive.
 - **Stay cancellable during the backoff.** Poll `isCancellationRequested` while waiting, or Cancel appears
   dead for up to the delay cap — the same complaint the mid-batch cancellation change (#5403) is fixing.
 
