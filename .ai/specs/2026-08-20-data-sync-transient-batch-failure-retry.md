@@ -200,9 +200,11 @@ simply down still fails within a bounded window.
 | Delay cap | 5 min | `DATA_SYNC_TRANSIENT_RETRY_MAX_DELAY_MS` |
 
 Reuse `calculateBackoffDelayMs` from `@open-mercato/shared/lib/delivery/retry` (exponential with jitter;
-jitter matters because concurrency is 5 per queue and one pool outage fails every in-flight run at once).
-Defaults ride out roughly ten minutes of outage — long enough for a pool to recover or a tunnel to
-re-establish, short enough that a genuinely dead source is not mistaken for a slow one.
+jitter matters because worker concurrency is 5 per sync queue, so one pool outage fails every in-flight run at
+once). Those defaults spend 5 + 10 + 20 + 40 + 80 + 160 s before giving up — about five minutes of waiting,
+before jitter, none of it hitting the cap. That is sized for a pool refilling or a connection
+re-establishing, not for an outage measured in hours. Each further attempt adds at most the cap, so riding
+out ten minutes is one more attempt, not a different design; upstream should say which it wants.
 
 Two implementation requirements that are easy to miss and must be in the implementing PR:
 
