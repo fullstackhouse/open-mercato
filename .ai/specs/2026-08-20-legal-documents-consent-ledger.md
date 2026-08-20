@@ -246,7 +246,7 @@ One row per accepted content. Append-only. Indexes on `user_id` and `action_id`.
 | `user_id` | uuid | auth user (FK-id only, cross-module - resolved separately) |
 | `document_content_id` | uuid | FK → `legal_document_contents.id` - captures version **and** language |
 | `action_id` | uuid null | groups the rows of one acceptance (accepted content + closure) |
-| `metadata` | jsonb null | generic `{ source?: string; ... }` |
+| `metadata` | jsonb null | caller-supplied context bag stored verbatim - the acceptance's provenance and any external links (e.g. `{ source: 'payment', paymentId, paymentMethodId, ... }`); see note below |
 | `placeholder_values` | jsonb null | app-supplied `{{placeholder}}` substitutions the user saw (e.g. `{ amount: '€10.00' }`) |
 | `tenant_id` | uuid null | scope |
 | `organization_id` | uuid null | scope |
@@ -256,6 +256,21 @@ No separate `language` column - the referenced content row already encodes the s
 consented wording is reproduced from the immutable content row (`title` + `body`, tokens intact) with
 `placeholder_values` substituted into `{{...}}`; the `legal:` tokens in the body are the durable record
 of the incorporated documents.
+
+**Consent metadata.** `metadata` is an **open, caller-supplied JSON object** (validated only as an
+object with string keys; no fixed schema), stored verbatim on each row written for the acceptance
+(all rows sharing the `action_id` carry the same metadata, so any row is self-describing). It captures
+*why/where* the consent was taken and links it to the business event that required it - the most
+important case being a **payment authorization**, where the caller passes the payment identity so the
+consent is provably tied to the charge it authorized, e.g.:
+
+```json
+{ "source": "payment", "paymentId": "pi_123", "paymentMethodId": "pm_456", "platform": "stripe" }
+```
+
+`source` is a free-form string (app-defined: `signup`, `reconsent`, `payment`, `top_up`, …) - the core
+module does not enumerate a closed set, keeping it generic. Metadata is never interpreted by the
+module beyond storage; it is part of the immutable, append-only record.
 
 ## API Contracts
 
@@ -271,7 +286,7 @@ requested locale, falling back to the `en` content row; consumers resolve the to
 | `GET /api/legal/documents/[type]?language=` | public | Active version detail + referenced-documents tree (bodies verbatim). |
 | `GET /api/legal/documents/[type]/[version]?language=` | public | A specific version (body verbatim). |
 | `POST /api/legal/documents/[type]/[version]/languages` | `legal.document.add_language` | Body: `{ language, title, body }` (both non-empty). Inserts a content row on a current/future version. 4xx on duplicate language, past-version, or reference-discrepancy violations. |
-| `POST /api/legal/consents` | authenticated user | Record consent for the caller. Body: `{ type, consentByType?, language?, placeholderValues?, metadata? }`. Resolves each accepted/closure document to a content row and appends the acceptance. |
+| `POST /api/legal/consents` | authenticated user | Record consent for the caller. Body: `{ type, consentByType?, language?, placeholderValues?, metadata? }`. `metadata` is an open object stored verbatim on every row of the acceptance (e.g. `{ source: 'payment', paymentId }`). Resolves each accepted/closure document to a content row and appends the acceptance. |
 | `GET /api/legal/consents/admin?userId=` | `legal.consent.view` | A user's recorded consents (rendered wording, resolved via `document_content_id`). |
 
 Status codes: publish 201/400/401/500; add-language 400 (invalid / discrepancy), 404 (unknown
@@ -328,8 +343,9 @@ on seeded/demo data).
 - `POST /api/legal/consents` + `GET /api/legal/consents/admin?userId=` → records the closure under one
   `actionId`, each row bound to a content row; a pinned `legal:<type>:<version>` reference records the
   pinned version while an unpinned one records the active version; `placeholder_values` holds the
-  app-supplied values on the primary row; 400 on incomplete closure, 409 on a non-effective supplied
-  version.
+  app-supplied values on the primary row; supplied `metadata` (e.g. `{ source: 'payment', paymentId }`)
+  is stored verbatim on every row of the acceptance and round-trips through the admin listing; 400 on
+  incomplete closure, 409 on a non-effective supplied version.
 - Logging: publish and `record-consent` write an `ActionLog` (correct `resourceKind`, `resourceId`,
   `actorUserId`); `GET /api/legal/consents/admin` writes an access-log entry for the viewed ids.
 
@@ -385,6 +401,10 @@ deprecation protocol does not apply.
 - Language granularity: **ISO 639-1** (confirmed) via `isValidIso639`; BCP-47 regional variants
   (`pt-BR`) are out of scope for now.
 - Consent subject: **auth user** (confirmed).
+- Consent `metadata` is an **open caller-supplied JSON object** (confirmed), stored verbatim on every
+  row of the acceptance, for provenance and linking the consent to the business event that required it
+  (notably a payment: `{ source: 'payment', paymentId, paymentMethodId, ... }`). The core module does
+  not enumerate a closed `source` set or interpret metadata.
 - `body` (and `title`) on a content row are **required, non-empty** (confirmed). There are no
   metadata-only rows: a title without a body has nothing to serve or consent against.
 - No `published_url` column (confirmed, dropped). The stored per-language content is the canonical,
