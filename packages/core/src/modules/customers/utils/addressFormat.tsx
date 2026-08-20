@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { hasFeature } from '@open-mercato/shared/security/features'
 import type { CustomerAddressFormat } from '../data/entities'
 
 export type AddressFormatStrategy = CustomerAddressFormat
@@ -187,37 +186,6 @@ export function formatAddressContactPairs(
   push('taxId', resolveTaxIdLabel(labels, address.taxIdType), address.taxId)
   push('phone', labels.phone, address.phone)
   return pairs
-}
-
-/**
- * Either customer-view grant is enough to see a domestic tax id: an address's identifier may belong
- * to a person or to a company, and demanding both would hide a company's tax id from a user who can
- * open that company.
- */
-export const TAX_ID_VIEW_FEATURES = ['customers.people.view', 'customers.companies.view'] as const
-
-/**
- * `eu_vat` is a public business identifier — VIES is an open lookup — so it renders to anyone who can
- * read the record. A `pl_nip` or `other` number may be a local or personal tax number, so it sits
- * behind the same customer-PII grant the search config already applies to `tax_id`
- * (`customers/search.ts`: `excluded` for people, `hashOnly` for companies).
- *
- * Lives here, beside the formatter it gates, rather than inside the component that first needed it:
- * it is a pure predicate over `taxIdType` and the caller's granted features, with no React in it, and
- * exporting it is what lets a SERVER route apply the same rule. That matters — a client-side check
- * can only hide a value the response already carried, so an API that answers with an address is the
- * only place the value can actually be withheld.
- *
- * An absent grant list DENIES: `hasFeature` returns false for `undefined` or an empty array, so a
- * caller passing a chrome payload that has not resolved yet withholds the tax id rather than leaking
- * it, and the block simply appears once the payload lands. That is load-bearing and invisible at the
- * call site — do not "tidy away" the `?? undefined` normalisation below on the grounds that it looks
- * redundant; it is what keeps the unresolved case fail-closed.
- */
-export function canSeeTaxId(taxIdType: unknown, grantedFeatures: string[] | null | undefined): boolean {
-  if (taxIdType === 'eu_vat') return true
-  const granted = grantedFeatures ?? undefined
-  return TAX_ID_VIEW_FEATURES.some((feature) => hasFeature(granted, feature))
 }
 
 type AddressViewProps = {

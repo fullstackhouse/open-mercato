@@ -1,6 +1,5 @@
 import {
-  canSeeTaxId,
-  formatAddressContactPairs,
+    formatAddressContactPairs,
   formatAddressJson,
   formatAddressLines,
   formatAddressString,
@@ -196,29 +195,4 @@ describe('customers utils - address formatting', () => {
     })
   })
 
-  describe('canSeeTaxId', () => {
-    // VIES is an open lookup, so an EU VAT number is public business data — no grant needed.
-    it('shows an EU VAT number to anyone who can read the record', () => {
-      expect(canSeeTaxId('eu_vat', [])).toBe(true)
-      expect(canSeeTaxId('eu_vat', null)).toBe(true)
-    })
-
-    // A domestic number may be a sole trader's personal tax number, so it sits behind customer PII.
-    it('withholds a domestic or untyped identifier without a customer-view grant', () => {
-      expect(canSeeTaxId('pl_nip', ['sales.orders.view'])).toBe(false)
-      expect(canSeeTaxId('other', ['sales.orders.view'])).toBe(false)
-      expect(canSeeTaxId(null, ['sales.orders.view'])).toBe(false)
-      expect(canSeeTaxId('pl_nip', undefined)).toBe(false)
-    })
-
-    // Either grant suffices: an address's identifier may belong to a person or to a company, and
-    // demanding both would hide a company's tax id from a user who can open that company.
-    it.each(['customers.people.view', 'customers.companies.view'])('accepts %s on its own', (feature) => {
-      expect(canSeeTaxId('pl_nip', [feature])).toBe(true)
-    })
-
-    it('honours a wildcard grant', () => {
-      expect(canSeeTaxId('pl_nip', ['customers.*'])).toBe(true)
-    })
-  })
 })

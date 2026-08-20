@@ -18,12 +18,10 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { SwitchField } from '@open-mercato/ui/primitives/switch-field'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { useBackendChrome } from '@open-mercato/ui/backend/BackendChromeProvider'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { AddressEditor, type AddressEditorDraft } from '@open-mercato/core/modules/customers/components/AddressEditor'
 import {
   AddressView,
-  canSeeTaxId,
   formatAddressContactPairs,
   formatAddressString,
   type AddressContactLabels,
@@ -239,11 +237,9 @@ function draftFromDocumentAddress(entry: DocumentAddressAssignment): AddressEdit
 function AddressContactBlock({
   snapshot,
   labels,
-  grantedFeatures,
 }: {
   snapshot?: Record<string, unknown> | null
   labels: AddressContactLabels
-  grantedFeatures: string[] | null | undefined
 }) {
   const record = (snapshot ?? {}) as Record<string, unknown>
   const contactOnly: AddressValue = {
@@ -253,10 +249,7 @@ function AddressContactBlock({
     taxId: typeof record.taxId === 'string' ? record.taxId : null,
     taxIdType: typeof record.taxIdType === 'string' ? record.taxIdType : null,
   }
-  const permitted: AddressContactLabels = canSeeTaxId(contactOnly.taxIdType, grantedFeatures)
-    ? labels
-    : { ...labels, taxId: undefined }
-  const pairs = formatAddressContactPairs(contactOnly, permitted)
+  const pairs = formatAddressContactPairs(contactOnly, labels)
   if (!pairs.length) return null
   // Rendered as read-only FIELDS in the editor's own grid, not as a caption under it. The first cut
   // used `AddressView`'s contact block — small muted text appended after the editor — and it read as
@@ -1122,7 +1115,6 @@ export function SalesDocumentAddressesSection({
     )
   }
 
-  const { payload } = useBackendChrome()
   const contactLabels: AddressContactLabels = {
     // Named by type rather than with one flat label: `1234567890` and `PL1234567890` are the same
     // business, and a single "Tax ID" string would print a foreign VAT number under a domestic
@@ -1202,7 +1194,6 @@ export function SalesDocumentAddressesSection({
               <AddressContactBlock
                 snapshot={shippingAddressSnapshot}
                 labels={contactLabels}
-                grantedFeatures={payload?.grantedFeatures}
               />
               <SwitchField
                 label={t('sales.documents.form.address.saveToCustomer', 'Save this address to the customer')}
@@ -1275,7 +1266,6 @@ export function SalesDocumentAddressesSection({
                   <AddressContactBlock
                     snapshot={billingAddressSnapshot}
                     labels={contactLabels}
-                    grantedFeatures={payload?.grantedFeatures}
                   />
                   <SwitchField
                     label={t('sales.documents.form.address.saveToCustomer', 'Save this address to the customer')}

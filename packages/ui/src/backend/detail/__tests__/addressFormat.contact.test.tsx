@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AddressView, canSeeTaxId, formatAddressContactPairs } from '../addressFormat'
+import { AddressView, formatAddressContactPairs } from '../addressFormat'
 
 // `packages/ui/src/backend/detail/addressFormat.tsx` and
 // `packages/core/src/modules/customers/utils/addressFormat.tsx` are the documented near-identical
@@ -92,12 +92,4 @@ describe('ui addressFormat — contact block parity with the customers twin', ()
     })
   })
 
-  describe('canSeeTaxId', () => {
-    it('shows an EU VAT number to anyone, and gates the rest on a customer-view grant', () => {
-      expect(canSeeTaxId('eu_vat', [])).toBe(true)
-      expect(canSeeTaxId('pl_nip', ['sales.orders.view'])).toBe(false)
-      expect(canSeeTaxId('pl_nip', ['customers.people.view'])).toBe(true)
-      expect(canSeeTaxId('pl_nip', ['customers.companies.view'])).toBe(true)
-    })
-  })
 })
