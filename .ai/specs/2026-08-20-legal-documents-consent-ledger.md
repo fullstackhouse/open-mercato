@@ -138,13 +138,16 @@ writes one `legal_consents` row per document, all sharing one `actionId`:
 
 A supplied consent map must still cover the whole closure (400 if any document is missing).
 
-**Pre-check without recording.** `assertConsentCurrent(type, consentByType?, userId?, at?)` runs the
-same completeness (400) and effective-version (409) checks as recording but writes nothing. An
-interactive flow with an irreversible side effect - most importantly a **payment** - calls it *before*
-the charge so a stale or incomplete consent is rejected up front rather than discovered after the
-money moves. Primary use is server-side (e.g. a payment module resolves the helper via DI before
-authorizing); it can also be exposed as `POST /api/legal/consents/verify` for a client that wants to
-pre-flight before showing a confirm screen.
+**Standing-consent check (for charges with no fresh consent).** In an interactive flow, consent is
+recorded at the moment the payment intent is minted, and that record is itself the gate - a separate
+pre-check there would be redundant. The check earns its place when money moves with **no user present
+to consent**: an off-session/recurring charge (e.g. auto-refill) or a delayed capture. The user
+consented once at setup; weeks later the system charges them with nobody at the screen.
+`assertConsentCurrent(userId, type, at?)` verifies the user already holds a recorded consent for `type`
+and its whole currently-active reference closure, each at the current version; if any document has
+moved on since they consented it reports that, so the caller **pauses and re-asks (re-consent)** rather
+than charging on stale consent. It writes nothing. `POST /api/legal/consents/verify` exposes the same
+check - also useful to decide whether to show a re-consent prompt before an interactive charge.
 
 ## Architecture
 
@@ -203,9 +206,11 @@ FK-id only, resolved separately). Within the module, `legal_document_contents.do
 
 Another module records or verifies a consent through the **command bus** (`legal.consent.record`,
 `assertConsentCurrent`) and reacts to the **`legal.consent.recorded`** event - it never imports the
-`legal` internals. The canonical example is a payment flow: it pre-checks consent before charging and,
-on success, records a `payment_authorization` consent carrying `{ source: 'payment', paymentId }` in
-`metadata` - all via the command bus, so `legal` stays isomorphic and does not depend on the caller.
+`legal` internals. The canonical example is a payment flow: when minting a payment intent it records a
+`payment_authorization` consent carrying `{ source: 'payment', paymentId }` in `metadata` - that record
+is the gate; for a later **off-session** charge it calls `assertConsentCurrent` first and re-asks if the
+consent has gone stale. All via the command bus, so `legal` stays isomorphic and does not depend on the
+caller.
 
 ## Data Models
 
@@ -314,7 +319,7 @@ requested locale, falling back to the `en` content row; consumers resolve the to
 | `GET /api/legal/documents/[type]/[version]?language=` | public | A specific version (body verbatim). |
 | `POST /api/legal/documents/[type]/[version]/languages` | `legal.document.add_language` | Body: `{ language, title, body }` (both non-empty). Inserts a content row on a current/future version. 4xx on duplicate language, past-version, or reference-discrepancy violations. |
 | `POST /api/legal/consents` | authenticated user | Record consent for the caller. Body: `{ type, consentByType?, language?, placeholderValues?, metadata? }`. `metadata` is an open object stored verbatim on every row of the acceptance (e.g. `{ source: 'payment', paymentId }`). Resolves each accepted/closure document to a content row and appends the acceptance. |
-| `POST /api/legal/consents/verify` | authenticated user | Pre-check without writing: same closure-complete (400) and effective-version (409) checks as recording; `200` when the caller's consent map is current and complete. For flows that gate an irreversible action (e.g. a payment) on a fresh consent. |
+| `POST /api/legal/consents/verify` | authenticated user | Check without writing whether the user already holds a current consent for `type` and its active closure (`200` current; otherwise reports which documents need (re)consent). For off-session/recurring charges and deciding whether to prompt re-consent - **not** the on-session gate (that is the mint-time record). |
 | `GET /api/legal/consents/admin?userId=` | `legal.consent.view` | A user's recorded consents. Each item reconstructs `renderedContent` (the accepted content row's `body` with `placeholder_values` substituted into `{{...}}`) plus `type`, `title`, `version`, `language`, `source` (`metadata.source`), and `createdAt`. |
 
 Status codes: publish 201/400/401/500; add-language 400 (invalid / discrepancy), 404 (unknown
@@ -400,8 +405,9 @@ on seeded/demo data).
   is stored verbatim on every row of the acceptance and round-trips through the admin listing; the
   admin item's `renderedContent` has `{{placeholder}}` values substituted; 400 on incomplete closure,
   409 on a non-effective supplied version.
-- `POST /api/legal/consents/verify` → 200 when the map is current and complete; 400 on incomplete
-  closure; 409 on a non-effective supplied version; writes no `legal_consents` row.
+- `POST /api/legal/consents/verify` → 200 when the user already holds a current consent for the type +
+  active closure; reports the documents needing (re)consent when a referenced version has moved on
+  since the user's last consent; writes no `legal_consents` row.
 - Logging: publish and `record-consent` write an `ActionLog` (correct `resourceKind`, `resourceId`,
   `actorUserId`); `GET /api/legal/consents/admin` writes an access-log entry for the viewed ids.
 
@@ -418,8 +424,9 @@ on seeded/demo data).
   content rows); `add-document-language` (duplicate-language rejection, past-version rejection,
   reference consistency, row inserted); `record-consent` (closure resolution to content rows, pinned
   vs active version selection, pinned-language selection with default-locale fallback,
-  effective-version check) and `assertConsentCurrent` (complete+effective → ok; incomplete → 400;
-  stale → 409; no write); `render-consent-text` (values substituted, unknown `{{token}}` left literal,
+  effective-version check) and `assertConsentCurrent` (user holds current consent for type + active
+  closure → ok; a referenced version moved on since their consent → reported as needing re-consent; no
+  recorded consent → not current; writes nothing); `render-consent-text` (values substituted, unknown `{{token}}` left literal,
   values not re-substituted); `select-document-content` (row selection + `en` fallback).
 
 ## Risks & Impact Review
@@ -477,10 +484,11 @@ is modified, so `BACKWARD_COMPATIBILITY.md` deprecation protocol does not apply.
   version (same rule as the version level). A "supersede a single content row" mechanism is
   intentionally **not** included - it would complicate content resolution for little gain. Revisit
   only if operational need appears.
-- Consent **pre-check** (`assertConsentCurrent` / `POST /api/legal/consents/verify`): validate a
-  consent map is complete and effective **without recording**, so an irreversible flow (notably a
-  payment) rejects a stale/incomplete consent before the side effect. Primary use is server-side via
-  DI; the endpoint is for clients that want to pre-flight.
+- Consent **standing-check** (`assertConsentCurrent(userId, type, at?)` / `POST /api/legal/consents/verify`):
+  confirm a user already holds a current consent for a type + its active closure **without recording**.
+  Redundant in the on-session flow (consent is recorded when the payment intent is minted, which is
+  itself the gate); it exists for **off-session/recurring** charges (e.g. auto-refill) and re-consent
+  prompts, where money moves with no user present to consent.
 - Data-protection stance: the consent ledger is retained under right-to-erasure (legal-claims basis);
   `metadata`/`placeholder_values` are the only free-form fields (keep direct identifiers out); no
   encryption map needed (justified N/A). A future subscriber to the platform's generic
