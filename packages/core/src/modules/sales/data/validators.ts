@@ -340,6 +340,8 @@ const linePricingSchema = z.object({
   priceMode: z.enum(['net', 'gross']).optional(),
   taxRateId: uuid().optional(),
   discountAmount: decimal({ min: 0 }).optional(),
+  // Omitted means 'unit', which is the historical input meaning (#5019).
+  discountAmountBasis: z.enum(['unit', 'line']).optional(),
   discountPercent: percentage().optional(),
   taxRate: percentage().optional(),
   taxAmount: decimal({ min: 0 }).optional(),

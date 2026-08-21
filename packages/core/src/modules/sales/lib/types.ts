@@ -32,6 +32,8 @@ export type SalesLineUomSnapshot = {
   }
 }
 
+export type SalesLineDiscountBasis = 'unit' | 'line'
+
 export type SalesLineSnapshot = {
   id?: string
   lineNumber?: number
@@ -50,6 +52,20 @@ export type SalesLineSnapshot = {
   unitPriceNet?: number | null
   unitPriceGross?: number | null
   discountAmount?: number | null
+  /**
+   * How to interpret a caller-supplied `discountAmount`. Omitted means `'unit'`,
+   * which is the historical API input meaning. Entity→snapshot mappers MUST NOT
+   * set this — they set `discountAmountFromStoredRow` instead, so a populated
+   * basis stays a reliable signal that the amount came from a caller.
+   */
+  discountAmountBasis?: SalesLineDiscountBasis | null
+  /**
+   * Set by entity→snapshot mappers only. Marks `discountAmount` as reconstructed
+   * from a persisted row, which stores the discount for the whole line, so the
+   * value must not be multiplied by quantity again. Never persisted and never
+   * accepted from a request payload.
+   */
+  discountAmountFromStoredRow?: boolean
   discountPercent?: number | null
   taxRate?: number | null
   taxAmount?: number | null

@@ -24,6 +24,10 @@ import { resolveTranslations } from "@open-mercato/shared/lib/i18n/server";
 import { resolveNotificationService } from "../../notifications/lib/notificationService";
 import { buildFeatureNotificationFromType } from "../../notifications/lib/notificationBuilder";
 import { emitSalesEvent } from "../events";
+import {
+  mapOrderLineEntityToSnapshot,
+  mapQuoteLineEntityToSnapshot,
+} from "../lib/lineSnapshots";
 import { setRecordCustomFields } from "@open-mercato/core/modules/entities/lib/helpers";
 import { loadCustomFieldValues } from "@open-mercato/shared/lib/crud/custom-fields";
 import { normalizeCustomFieldValues } from "@open-mercato/shared/lib/custom-fields/normalize";
@@ -124,6 +128,7 @@ import type {
 } from "../lib/providers";
 import {
   type SalesLineSnapshot,
+  type SalesLineDiscountBasis,
   type SalesLineUomSnapshot,
   type SalesAdjustmentDraft,
   type SalesLineCalculationResult,
@@ -3003,6 +3008,42 @@ async function emitTotalsCalculated(
   await eventBus.emitEvent("sales.document.totals.calculated", payload);
 }
 
+type UpsertDiscountInput = {
+  discountAmount?: number | null;
+  discountAmountBasis?: SalesLineDiscountBasis | null;
+  discountPercent?: number | null;
+};
+
+// Keeps the caller-supplied amount distinguishable from the stored line total,
+// and preserves an explicit `0` rather than collapsing it into "not supplied".
+function resolveUpsertDiscountFields(
+  parsed: UpsertDiscountInput,
+  existingSnapshot: SalesLineSnapshot | null,
+): Pick<
+  SalesLineSnapshot,
+  | "discountAmount"
+  | "discountAmountBasis"
+  | "discountAmountFromStoredRow"
+  | "discountPercent"
+> {
+  const discountPercent =
+    parsed.discountPercent ?? existingSnapshot?.discountPercent ?? 0;
+
+  if (parsed.discountAmount !== undefined && parsed.discountAmount !== null) {
+    return {
+      discountAmount: parsed.discountAmount,
+      discountAmountBasis: parsed.discountAmountBasis ?? "unit",
+      discountPercent,
+    };
+  }
+
+  return {
+    discountAmount: existingSnapshot?.discountAmount ?? null,
+    discountAmountFromStoredRow: existingSnapshot != null,
+    discountPercent,
+  };
+}
+
 function createLineSnapshotFromInput(
   line: DocumentLineCreateInput,
   lineNumber: number,
@@ -3034,6 +3075,7 @@ function createLineSnapshotFromInput(
     unitPriceNet: line.unitPriceNet ?? null,
     unitPriceGross: line.unitPriceGross ?? null,
     discountAmount: line.discountAmount ?? null,
+    discountAmountBasis: line.discountAmountBasis ?? null,
     discountPercent: line.discountPercent ?? null,
     taxRate: line.taxRate ?? null,
     taxAmount: line.taxAmount ?? null,
@@ -7173,10 +7215,11 @@ const orderLineUpsertCommand: CommandHandler<
         order.currencyCode,
       unitPriceNet: unitPriceNet ?? 0,
       unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
-      discountAmount:
-        parsed.discountAmount ?? existingSnapshot?.discountAmount ?? 0,
-      discountPercent:
-        parsed.discountPercent ?? existingSnapshot?.discountPercent ?? 0,
+      // The caller's amount and the stored one are not interchangeable: a stored
+      // value is already a line total, a supplied one is per-unit unless the
+      // caller says otherwise. Coalescing them into a single expression loses
+      // that distinction and re-inflates the discount on every upsert (#5019).
+      ...resolveUpsertDiscountFields(parsed, existingSnapshot),
       taxRate: taxRate ?? 0,
       taxAmount: parsed.taxAmount ?? existingSnapshot?.taxAmount ?? null,
       totalNetAmount:
@@ -7667,10 +7710,11 @@ const quoteLineUpsertCommand: CommandHandler<
         quote.currencyCode,
       unitPriceNet: unitPriceNet ?? 0,
       unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
-      discountAmount:
-        parsed.discountAmount ?? existingSnapshot?.discountAmount ?? 0,
-      discountPercent:
-        parsed.discountPercent ?? existingSnapshot?.discountPercent ?? 0,
+      // The caller's amount and the stored one are not interchangeable: a stored
+      // value is already a line total, a supplied one is per-unit unless the
+      // caller says otherwise. Coalescing them into a single expression loses
+      // that distinction and re-inflates the discount on every upsert (#5019).
+      ...resolveUpsertDiscountFields(parsed, existingSnapshot),
       taxRate: taxRate ?? 0,
       taxAmount: parsed.taxAmount ?? existingSnapshot?.taxAmount ?? null,
       totalNetAmount:

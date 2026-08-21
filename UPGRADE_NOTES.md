@@ -22,6 +22,52 @@ most of the patterns listed below in a user's codebase.
 
 ---
 
+## 0.7.0 → 0.7.1 (unreleased)
+
+### Sales line discounts: `discount_percent` now governs, and `discount_amount` is a line total
+
+`sales_order_lines.discount_amount` and `sales_quote_lines.discount_amount` were read as a **per-unit**
+figure and written as a **line total** through the same column, so recalculating a document multiplied
+the discount by the line quantity again on every pass. Alongside that, both `lines.upsert` paths
+coalesced a missing amount to `0`, and `0 ?? percent` is `0`, so a percentage-only line lost its
+discount entirely. See `.ai/specs/2026-08-07-sales-line-discount-amount-contract.md` and #5019.
+
+The column is now contractually the discount for the **whole line**, and precedence is
+percentage-first: a non-zero `discount_percent` governs, and `discount_amount` is only consulted when
+there is no percentage to derive from. The column is `numeric NOT NULL DEFAULT '0'`, so a stored `0`
+cannot be told apart from "no discount supplied" — which is why the percentage has to win for the
+round trip to be stable.
+
+**Three caller shapes change behaviour. All three are silent — nothing throws.**
+
+| you send | before | after |
+|---|---|---|
+| a percent **and** an overriding amount | the amount won | the **percent** wins; the amount is ignored |
+| an amount only, onto a line whose stored `discount_percent` is non-zero | the amount won | the **inherited** percent wins; the amount is ignored |
+| `discountPercent: 12` with `discountAmount: 0` | **no discount** | **12% applied** |
+
+The third row is the dangerous one, because it inverts rather than drops. `discountAmount: 0` used to
+be a working way to *suppress* a percentage; it now applies one. If your integration did that on a
+unit price already net of the discount, you will start double-discounting.
+
+**Action for module and integration authors:**
+
+- To keep an explicit amount authoritative, send `discountPercent: 0` alongside it. This is required
+  even if you never send a percent yourself — the upsert path inherits `discount_percent` from the
+  stored row, so a value written earlier can still override your amount.
+- If you relied on `discountAmount: 0` to suppress a percentage, send `discountPercent: 0` instead.
+- New optional input field `discountAmountBasis: 'unit' | 'line'` on order and quote line payloads
+  says how to read a supplied `discountAmount`. Omitting it means `'unit'`, which is the historical
+  meaning, so existing callers need no change. Send `'line'` when you are pushing a total you have
+  already multiplied out.
+
+Nothing is persisted for the basis and no migration ships with this change. Rows whose discount was
+dropped or inflated carry the correct `discount_percent` and self-heal on the next recalculation of
+their document; rows that carry an amount and **no** percent cannot be distinguished from correct ones
+and are left untouched.
+
+---
+
 ## 0.6.7 → 0.7.0 (2026-08-26)
 
 ### Passkey MFA verification requires a real WebAuthn assertion (#3852)
