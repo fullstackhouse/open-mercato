@@ -1,5 +1,6 @@
 import { calculateDocumentTotals } from '../calculations'
 import { mapOrderLineEntityToSnapshot, mapQuoteLineEntityToSnapshot } from '../lineSnapshots'
+import { createLineSnapshotFromInput } from '../../commands/documents'
 import type { SalesLineSnapshot } from '../types'
 
 const baseContext = {
@@ -184,6 +185,78 @@ describe('line discount contract (#5019)', () => {
       })
       expect(result.discountAmount).toBeCloseTo(20, 4)
       expect(result.netAmount).toBeCloseTo(0, 4)
+    })
+  })
+
+  describe('createLineSnapshotFromInput passthrough', () => {
+    // `lines.upsert` builds an updated snapshot, then re-runs every line of the
+    // document through `createLineSnapshotFromInput` before calculating. Any
+    // discount field dropped in that rebuild silently changes the result: losing
+    // `discountAmountFromStoredRow` lets a stored line total re-enter as a
+    // per-unit amount and be multiplied by quantity again.
+    it('carries the stored-row marker and the caller basis across a rebuild', () => {
+      const stored = createLineSnapshotFromInput(
+        { kind: 'product', quantity: 4, currencyCode: 'USD', unitPriceNet: 25, discountAmount: 20, discountAmountFromStoredRow: true } as never,
+        1,
+      )
+      expect(stored.discountAmountFromStoredRow).toBe(true)
+
+      const fromCaller = createLineSnapshotFromInput(
+        { kind: 'product', quantity: 4, currencyCode: 'USD', unitPriceNet: 25, discountAmount: 5, discountAmountBasis: 'line' } as never,
+        1,
+      )
+      expect(fromCaller.discountAmountBasis).toBe('line')
+      expect(fromCaller.discountAmountFromStoredRow).toBeUndefined()
+    })
+
+    it('a rebuilt stored line still resolves to its line total, not quantity times it', async () => {
+      const rebuilt = createLineSnapshotFromInput(
+        { kind: 'product', quantity: 4, currencyCode: 'USD', unitPriceNet: 25, discountAmount: 20, discountPercent: 0, discountAmountFromStoredRow: true, taxRate: 0 } as never,
+        1,
+      )
+      const result = await calculateLine(rebuilt)
+      expect(result.discountAmount).toBeCloseTo(20, 4)
+      expect(result.netAmount).toBeCloseTo(80, 4)
+    })
+  })
+
+  describe('discount resolution from an already-marked snapshot', () => {
+    // `lines.upsert` rebuilds every line through `createLineSnapshotFromInput`
+    // before calculating, so a snapshot that has already been marked as coming
+    // from a stored row must keep that marker across the rebuild. Losing it lets
+    // the stored line total re-enter as a per-unit amount.
+    it('keeps a stored line total intact when no percentage competes with it', async () => {
+      const storedLine: SalesLineSnapshot = {
+        kind: 'product',
+        quantity: 4,
+        currencyCode: 'USD',
+        unitPriceNet: 25,
+        discountAmount: 20,
+        discountPercent: 0,
+        discountAmountFromStoredRow: true,
+        taxRate: 0,
+      }
+
+      const first = await calculateLine(storedLine)
+      expect(first.discountAmount).toBeCloseTo(20, 4)
+      expect(first.netAmount).toBeCloseTo(80, 4)
+
+      const second = await calculateLine({ ...storedLine, discountAmount: first.discountAmount })
+      expect(second.discountAmount).toBeCloseTo(20, 4)
+      expect(second.netAmount).toBeCloseTo(80, 4)
+    })
+
+    it('drops to per-unit only when the marker is genuinely absent', async () => {
+      const result = await calculateLine({
+        kind: 'product',
+        quantity: 4,
+        currencyCode: 'USD',
+        unitPriceNet: 25,
+        discountAmount: 20,
+        discountPercent: 0,
+        taxRate: 0,
+      })
+      expect(result.discountAmount).toBeCloseTo(80, 4)
     })
   })
 

@@ -3044,7 +3044,9 @@ function resolveUpsertDiscountFields(
   };
 }
 
-function createLineSnapshotFromInput(
+// Exported for regression coverage: the upsert path re-snapshots already-built
+// lines through here, so field passthrough is load-bearing rather than incidental.
+export function createLineSnapshotFromInput(
   line: DocumentLineCreateInput,
   lineNumber: number,
 ): SalesLineSnapshot {
@@ -3076,6 +3078,10 @@ function createLineSnapshotFromInput(
     unitPriceGross: line.unitPriceGross ?? null,
     discountAmount: line.discountAmount ?? null,
     discountAmountBasis: line.discountAmountBasis ?? null,
+    // The upsert path re-snapshots an already-built line through here, so the
+    // stored-row marker has to survive or the line total re-enters as per-unit
+    // and gets multiplied by quantity again (#5019).
+    discountAmountFromStoredRow: line.discountAmountFromStoredRow ?? undefined,
     discountPercent: line.discountPercent ?? null,
     taxRate: line.taxRate ?? null,
     taxAmount: line.taxAmount ?? null,

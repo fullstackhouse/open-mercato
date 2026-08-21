@@ -66,21 +66,30 @@ test.describe('TC-SALES-5019: line discount idempotency', () => {
 
       // Create stores the discount as a line total, with the net discounted.
       const afterCreate = await readLine(lineId)
-      expect(Number(afterCreate.discountAmount)).toBeCloseTo(EXPECTED_DISCOUNT, 2)
-      expect(Number(afterCreate.totalNetAmount)).toBeCloseTo(EXPECTED_NET, 2)
+      expect(Number(afterCreate.discount_amount)).toBeCloseTo(EXPECTED_DISCOUNT, 2)
+      expect(Number(afterCreate.total_net_amount)).toBeCloseTo(EXPECTED_NET, 2)
 
       // Re-upserting the same line without re-sending the discount must change
       // nothing. Before the fix this re-read the stored 300.00 line total as a
       // per-unit figure, clamped 300 x 60 to the subtotal, and zeroed the net.
       const upsert = await apiRequest(request, 'PUT', '/api/sales/order-lines', {
         token,
-        data: { id: lineId, orderId, comment: 'touched by TC-SALES-5019' },
+        data: {
+          id: lineId,
+          orderId,
+          currencyCode: 'USD',
+          quantity: QUANTITY,
+          comment: 'touched by TC-SALES-5019',
+        },
       })
-      expect(upsert.ok(), `PUT order line failed: ${upsert.status()}`).toBeTruthy()
+      expect(
+        upsert.ok(),
+        `PUT order line failed: ${upsert.status()} ${JSON.stringify(await readJsonSafe<unknown>(upsert))}`,
+      ).toBeTruthy()
 
       const afterUpsert = await readLine(lineId)
-      expect(Number(afterUpsert.discountAmount)).toBeCloseTo(EXPECTED_DISCOUNT, 2)
-      expect(Number(afterUpsert.totalNetAmount)).toBeCloseTo(EXPECTED_NET, 2)
+      expect(Number(afterUpsert.discount_amount)).toBeCloseTo(EXPECTED_DISCOUNT, 2)
+      expect(Number(afterUpsert.total_net_amount)).toBeCloseTo(EXPECTED_NET, 2)
 
       // The single-order GET recalculates totals for display through the same
       // snapshot mappers, so it must agree with the persisted state and stay
@@ -121,18 +130,27 @@ test.describe('TC-SALES-5019: line discount idempotency', () => {
 
       // 5.00 per unit over 4 units is a 20.00 line discount, leaving 80.00 net.
       const afterCreate = await read()
-      expect(Number(afterCreate.discountAmount)).toBeCloseTo(20, 2)
-      expect(Number(afterCreate.totalNetAmount)).toBeCloseTo(80, 2)
+      expect(Number(afterCreate.discount_amount)).toBeCloseTo(20, 2)
+      expect(Number(afterCreate.total_net_amount)).toBeCloseTo(80, 2)
 
       const upsert = await apiRequest(request, 'PUT', '/api/sales/order-lines', {
         token,
-        data: { id: lineId, orderId, comment: 'touched by TC-SALES-5019' },
+        data: {
+          id: lineId,
+          orderId,
+          currencyCode: 'USD',
+          quantity: 4,
+          comment: 'touched by TC-SALES-5019',
+        },
       })
-      expect(upsert.ok(), `PUT order line failed: ${upsert.status()}`).toBeTruthy()
+      expect(
+        upsert.ok(),
+        `PUT order line failed: ${upsert.status()} ${JSON.stringify(await readJsonSafe<unknown>(upsert))}`,
+      ).toBeTruthy()
 
       const afterUpsert = await read()
-      expect(Number(afterUpsert.discountAmount)).toBeCloseTo(20, 2)
-      expect(Number(afterUpsert.totalNetAmount)).toBeCloseTo(80, 2)
+      expect(Number(afterUpsert.discount_amount)).toBeCloseTo(20, 2)
+      expect(Number(afterUpsert.total_net_amount)).toBeCloseTo(80, 2)
     } finally {
       if (orderId) {
         await deleteSalesEntityIfExists(request, token, '/api/sales/orders', orderId)
