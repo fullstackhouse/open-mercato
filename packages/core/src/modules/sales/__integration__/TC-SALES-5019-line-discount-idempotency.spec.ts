@@ -157,4 +157,67 @@ test.describe('TC-SALES-5019: line discount idempotency', () => {
       }
     }
   })
+  test('an untouched line keeps its discount when a sibling line is upserted', async ({ request }) => {
+    const token = await getAuthToken(request, 'admin')
+    test.skip(!(await canManageSalesOrders(request, token)), 'sales.orders.manage not granted on this tenant')
+
+    let orderId: string | null = null
+
+    try {
+      orderId = await createSalesOrderFixture(request, token, 'USD')
+
+      // Line A carries an amount-only discount: 5.00 per unit over 4 units is a
+      // 20.00 line total, leaving 80.00 net. With no percentage to fall back on,
+      // this line depends entirely on the stored-row marker surviving.
+      const lineA = await createOrderLineFixture(request, token, orderId, {
+        quantity: 4,
+        unitPriceNet: 25,
+        discountAmount: 5,
+        discountPercent: 0,
+        taxRate: 0,
+      })
+      const lineB = await createOrderLineFixture(request, token, orderId, {
+        quantity: 1,
+        unitPriceNet: 10,
+        taxRate: 0,
+      })
+
+      const readLineA = async (): Promise<Record<string, unknown>> => {
+        const res = await apiRequest(request, 'GET', `/api/sales/order-lines?orderId=${encodeURIComponent(orderId as string)}`, { token })
+        expect(res.ok(), `GET order lines failed: ${res.status()}`).toBeTruthy()
+        const body = (await readJsonSafe<{ items?: Array<Record<string, unknown>> }>(res)) ?? {}
+        return ((body.items ?? []).find((item) => item.id === lineA) ?? {}) as Record<string, unknown>
+      }
+
+      expect(Number((await readLineA()).discount_amount)).toBeCloseTo(20, 2)
+
+      // Upserting line B recalculates the whole document, so line A is rebuilt
+      // from its stored row by the entity mapper rather than by the upsert's own
+      // discount resolution. If that mapper does not mark the amount as a stored
+      // line total, line A's 20.00 re-enters as per-unit, becomes 20 x 4 = 80,
+      // clamps to the subtotal and zeroes line A's net.
+      const upsert = await apiRequest(request, 'PUT', '/api/sales/order-lines', {
+        token,
+        data: {
+          id: lineB,
+          orderId,
+          currencyCode: 'USD',
+          quantity: 1,
+          comment: 'touched by TC-SALES-5019',
+        },
+      })
+      expect(
+        upsert.ok(),
+        `PUT order line failed: ${upsert.status()} ${JSON.stringify(await readJsonSafe<unknown>(upsert))}`,
+      ).toBeTruthy()
+
+      const afterSiblingUpsert = await readLineA()
+      expect(Number(afterSiblingUpsert.discount_amount)).toBeCloseTo(20, 2)
+      expect(Number(afterSiblingUpsert.total_net_amount)).toBeCloseTo(80, 2)
+    } finally {
+      if (orderId) {
+        await deleteSalesEntityIfExists(request, token, '/api/sales/orders', orderId)
+      }
+    }
+  })
 })
