@@ -11,7 +11,8 @@ erasure model - and adds four capabilities on top:
 
 1. **Append-a-translation to a live version.** Per-language **content rows** in `content` so a locale
    can be added to an already-published (current or future) version without cutting a new version -
-   each row write-once and separately hashed.
+   each row write-once and separately hashed. (Cutting a new version to add a language would force
+   everyone who already consented to re-agree to text that is byte-identical in the locale they saw.)
 2. **Cross-document references + closure consent.** A stable `legal:<kind>[:<version>][?lang=<code>]`
    token in a document body incorporates another legal document; accepting the primary also records
    consent for its whole reference closure under one action, in `auth`.
@@ -71,6 +72,17 @@ Unique `(document_id, locale) where deleted_at is null`.
   except it selects a content **row** for the locale (requested → `en` → first available); the `en` row
   is required at publish so the fallback always resolves. Public/admin responses return `published_*`
   (with `legal:` tokens intact - delta 2).
+
+**Why append instead of cutting a new version.** A version bump is the platform's signal that the terms
+changed - the standing-consent check (delta 3) treats a newer effective version of a kind as "the user
+must re-consent." So if adding a translation required a **new version** (v3), every user who already
+accepted v2 would be prompted to re-consent to a document whose wording, in the locale they actually
+saw, is **byte-identical** - only a *different* language was added, which they never read. That is a
+false re-consent: bad UX, and worse, it erodes the legal meaning of re-consent, which must fire only
+when the wording someone agreed to actually changes. Appending the locale as a write-once row on the
+existing version leaves every existing content row - and therefore every recorded consent that pins one
+- untouched and current, so a new translation reaches the users who need it without disturbing anyone
+who already consented. Cutting a new version stays reserved for a real wording change.
 
 ## Delta 2 - cross-document references + closure consent
 
