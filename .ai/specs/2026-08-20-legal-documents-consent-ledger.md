@@ -1,507 +1,197 @@
-# Legal Documents & Consent Ledger (core `legal` module)
+# Amendments to Tenant Legal Documents & Consent Versioning
 
 ## TLDR
 
-A new upstream core module `packages/core/src/modules/legal/` providing a versioned, append-only
-**legal-documents ledger** and an append-only **consent ledger**. Each document type has an ordered
-history of **versions**; a version carries its title and body as **separate per-language content
-rows** (translations), not a mutable JSONB blob. Versions get auto-assigned effective-date-aware
-dotted-decimal labels and can incorporate other documents by reference. Recording one user's
-acceptance also records acceptance of the whole referenced closure under a shared `actionId`, each
-row pointing at the exact **content row** (version + language) the user was shown. Design highlights:
+This spec is an **amendment layered on** `.ai/specs/2026-08-18-tenant-legal-documents-and-consent-versioning.md`
+(the merged base design). It keeps that design's **module placement and infrastructure wholesale** -
+legal documents in `content`, controller identity in `directory`, the append-only consent ledger in
+`auth`, `onboarding`/`checkout` as consumers, host-based public-page tenant resolution, the neutral
+sample fallback, `{{controller*}}` identity-token baking, integrity seals, and the pseudonym-salt
+erasure model - and adds four capabilities on top:
 
-1. Documents reference each other with a **stable token** (`legal:<type>[:<version>][?lang=<code>]`,
-   optionally pinning an exact version and/or display language) in the content, never a real URL. The
-   backend never resolves the token to a URL - it stores and returns it verbatim; each client (web,
-   mobile, …) substitutes it into a link of its own choosing. No deeplink configuration exists in the
-   backend.
-2. References are **computed in the backend** from those tokens - never admin-selected. The admin UI
-   shows the resulting incorporated-document names read-only (no checkboxes).
-3. Content accepts **any language** (validated with `isValidIso639`, the i18n way), not only served
-   locales; and an admin can **add a language** to a document's current or any future version by
-   **appending a new content row** - existing translations are never modified.
+1. **Append-a-translation to a live version.** Per-language **content rows** in `content` so a locale
+   can be added to an already-published (current or future) version without cutting a new version -
+   each row write-once and separately hashed.
+2. **Cross-document references + closure consent.** A stable `legal:<kind>[:<version>][?lang=<code>]`
+   token in a document body incorporates another legal document; accepting the primary also records
+   consent for its whole reference closure under one action, in `auth`.
+3. **Open consent metadata + off-session pre-check.** An unsealed `metadata` bag on the ledger (e.g.
+   `{ source:'payment', paymentId }`) and a read-only "is this user's consent still current?" check for
+   charges taken with no user present (auto-refill).
+4. **Any-language input.** Content locales accept any ISO 639-1 code (`isValidIso639`), not only the
+   app's served locales.
 
-Scope: documents + consent ledger only. Consent subject = auth user.
+Nothing here changes the base spec's GDPR-erasure, host-resolution, or seal design; those are adopted
+as-is. Where an earlier standalone draft of this file proposed a separate `legal` module, that is
+**superseded** - see § Superseded.
 
-## Overview
+## Relationship to the base spec
 
-Applications built on Open Mercato need to serve versioned legal documents (Terms & Conditions,
-Privacy Policy, etc.) to clients, prove which exact wording a user accepted, and re-ask for consent
-when a document changes. There is no such capability upstream today. This spec introduces one as a
-reusable core module.
+| Base spec area | This amendment |
+|---|---|
+| Placement (`content`/`directory`/`auth`/`onboarding`/`checkout`) | **Keep unchanged.** |
+| GDPR erasure via `subject_ref = HMAC(salt, user_id)` + salt destruction; integrity seals (`cev1`/`v2`/legacy); idempotency key | **Adopt as-is.** These supersede the lighter retention note in the earlier draft. |
+| Host classification + neutral sample + `legal_document_domains` + default tenant | **Keep unchanged.** |
+| Controller identity in `directory` (`legal_entity` config, `legalEntityService`, `{{controller*}}` baking) | **Keep unchanged.** |
+| Versioning: `version int = max+1` per `(scope, kind)` + `effective_at` | **Keep** - drop the earlier draft's dotted-decimal `compute-version`; integer monotonicity resolves same-effective-date ties (higher version wins). |
+| Consent write path via DI `consentLogService` (not the command bus) | **Keep** - the append-only ledger is itself the audit record and `consentLogService` emits `auth.consent.granted/withdrawn`, so a command's "free" ActionLog would only duplicate the ledger while forcing undo ceremony onto a system-flow write. Our closure/metadata/pre-check logic lives **inside** the service. Draft CRUD stays undoable commands; publish stays the guarded action. |
+| Document content stored as `published_locales` jsonb on the version row | **Amended** to per-language content rows (delta 1). |
 
-Three append-only tables:
+## Delta 1 - per-language content rows (append-a-translation), in `content`
 
-- **`legal_documents`** - one row per **version** of a document type. Holds the version label, its
-  `effectiveFrom` date, the computed list of documents it incorporates by reference, and scope.
-  Immutable once written - a correction is a new version.
-- **`legal_document_contents`** - one row per **(version, language)** translation: the localized
-  title and body. This is what makes the ledger genuinely append-only: adding a language is an
-  INSERT of a new row, and existing translations are never mutated. Unique `(document_id, language)`.
-- **`legal_consents`** - one row per accepted content. A single acceptance writes one row for the
-  content the user saw plus one row per document in the transitive reference closure (each in its
-  served language), all sharing an `actionId`. Each row references a `legal_document_contents` row,
-  so the exact version **and** language the user was shown are captured without a separate `language`
-  column. App-supplied placeholder substitutions the user saw are stored alongside.
+Replace the base spec's `locales` / `published_locales` jsonb columns on `legal_documents` with a child
+table so a translation is a row, not a key in a frozen blob - which is what lets a locale be appended
+to a live version without a new version, while keeping every published locale immutable.
 
-## Problem Statement
-
-- **No versioned legal documents upstream.** Apps cannot serve, version, or prove legal-document
-  acceptance without building it themselves.
-- **Baking real URLs into the content couples the ledger to one app's URL layout and rots.** Content
-  rows are immutable, so a URL written into a body goes stale the moment the app's domain or routing
-  changes, with no way to fix past versions. Worse, different clients want different targets - a web
-  app wants an `href`, a mobile app wants a native screen or a `myapp://` deep link. The document must
-  therefore carry a portable, stable reference and leave link-building to each client.
-- **An editable references field can drift from reality.** If an admin hand-picks incorporated
-  documents, the stored list can diverge from what the content actually links. References must be
-  derived from the content so the ledger cannot misrepresent what a document incorporates.
-- **Restricting content to served locales is too narrow, and a mutable per-version blob is not a
-  ledger.** A legal team may need to publish in a language the app UI does not (yet) serve, and to
-  backfill a translation onto an existing version. Storing translations as rows lets that be an
-  append, preserving the provenance of the languages already published.
-
-## Proposed Solution
-
-Build `packages/core/src/modules/legal/` following the `customers` reference module structure, reusing
-the platform's existing i18n, dictionaries, markdown-editor, CRUD-factory, and command
-infrastructure. The module is generic: document types are a `dictionaries` value, consent metadata is
-an open shape, and there is no app-specific document type, payment metadata, or third-party
-observability coupling.
-
-### Change 1 - references are stable tokens the client resolves
-
-Authors reference another legal document with a **stable token**, not a real URL - a markdown link
-whose target is `legal:<type>[:<version>][?lang=<code>]`:
-
-- `legal:<type>` - the **currently-active** version of `<type>`, served in the reader's language, e.g.
-  `[Terms and Conditions](legal:terms_and_conditions)`.
-- `legal:<type>:<version>` - a **pinned exact version**, incorporated even after it is superseded, e.g.
-  `[Privacy Policy v2.1](legal:privacy_policy:2.1)`.
-- `?lang=<code>` - a **pinned display language**, overriding the reader's locale for that reference,
-  e.g. `[English Privacy Policy](legal:privacy_policy:2.0?lang=en)` (for "governed by the English
-  version" clauses). Combines with or without a pinned version.
-
-Token grammar: `legal:` scheme (fixed), then `<type>` (`[a-z0-9_]+`), then an optional `:<version>`
-(dotted-decimal `[0-9.]+`), then an optional `?lang=<code>` (`<code>` validated with `isValidIso639`).
-**`<type>` must not contain a colon or a question mark** - the type validator forbids `:` and `?`, so
-the token parses unambiguously: strip an optional `?lang=<code>` suffix, then split the rest on `:`.
-
-The backend **stores and returns the token verbatim** and never turns it into a URL. Each consumer
-detects `legal:<type>[:<version>][?lang=<code>]` link targets and substitutes them however suits it
-(web route, native navigation, `myapp://` deep link, an emailed/PDF URL, …), using knowledge it
-already has at render time. This keeps the stored wording stable and immutable, needs no per-tenant
-deeplink configuration in the backend at all, and lets web and mobile handle the same document
-differently.
-
-### Change 2 - references computed, not selected
-
-`publishDocumentSchema` has no `references` field. The publish command derives `references` **only**
-from the tokens found across the version's content rows (deduplicated, own type excluded). Each
-reference is stored as `{ type, version?, language? }` (`version`/`language` present only when the
-token pins them). Guards: every language of the version must link the same set of
-`{ type, version?, language? }` tuples (`findReferenceDiscrepancies`); an unpinned reference's type must
-exist in the ledger and a pinned reference's exact `(type, version)` must exist (a pinned `?lang` is
-**not** required to exist at publish - translations can be added later, and serving falls back to the
-default locale); a document cannot reference its own type. The admin create form inserts tokens via an
-"insert legal link" helper and shows a read-only "Incorporated documents" panel recomputed client-side
-from the tokens - no checkboxes/multi-select.
-
-### Change 3 - any language input + append-a-language
-
-- Content rows are keyed by arbitrary language codes validated with `isValidIso639` (ISO 639-1, ~184
-  codes). Every content row carries a non-empty `title` **and** `body` (no metadata-only rows - there
-  is nothing else to serve). The default locale (`en`) content row is required at publish so the
-  serving fallback always resolves.
-- New command/endpoint `legal.document.add_language`: **inserts** a new `legal_document_contents` row
-  for a `(version, language)`. Rejects if that language row already exists (unique constraint /
-  existing translations are immutable), rejects unless the version is the currently-effective one
-  **or** future-dated (never a superseded past version), and requires the new content to link the same
-  referenced documents as the version's existing content rows.
-
-### Reference closure & consent recording
-
-Recording consent for a document resolves its transitive reference closure (BFS, cycle-safe) and
-writes one `legal_consents` row per document, all sharing one `actionId`:
-
-- An **unpinned** reference (`{ type }`) resolves to that type's **currently-active** version; a
-  client-supplied version for it must be the currently-effective one (else 409).
-- A **pinned** reference (`{ type, version }`) resolves to that **exact** version regardless of
-  whether it is still active; the supplied/recorded version must equal the pinned one.
-- A reference with a **pinned `language`** is served in that language (falling back to the default
-  locale if that translation does not exist); an unpinned reference is served in the requested language
-  with the same fallback. Either way the consent row points at the exact `legal_document_contents` row
-  actually served.
-- App-supplied `{{placeholder}}` values (e.g. an amount shown in a waiver) are stored in
-  `placeholder_values` on the accepted (primary) document's row. The `legal:` tokens in the immutable
-  body are themselves the durable record of what was incorporated - there is nothing to freeze.
-
-A supplied consent map must still cover the whole closure (400 if any document is missing).
-
-**Standing-consent check (for charges with no fresh consent).** In an interactive flow, consent is
-recorded at the moment the payment intent is minted, and that record is itself the gate - a separate
-pre-check there would be redundant. The check earns its place when money moves with **no user present
-to consent**: an off-session/recurring charge (e.g. auto-refill) or a delayed capture. The user
-consented once at setup; weeks later the system charges them with nobody at the screen.
-`assertConsentCurrent(userId, type, at?)` verifies the user already holds a recorded consent for `type`
-and its whole currently-active reference closure, each at the current version; if any document has
-moved on since they consented it reports that, so the caller **pauses and re-asks (re-consent)** rather
-than charging on stale consent. It writes nothing. `POST /api/legal/consents/verify` exposes the same
-check - also useful to decide whether to show a re-consent prompt before an interactive charge.
-
-## Architecture
-
-Module tree (mirrors `customers`):
-
-```
-packages/core/src/modules/legal/
-  index.ts            ModuleInfo + export { features } from './acl'
-  acl.ts              feature ids
-  setup.ts            defaultRoleFeatures, seedDefaults (types dictionary)
-  di.ts               register legalDocumentResolver
-  events.ts           legal.document.published, legal.document.language_added, legal.consent.recorded
-  data/entities.ts    LegalDocument, LegalDocumentContent, LegalConsent
-  data/validators.ts  zod schemas (language via isValidIso639; type forbids ':' and '?')
-  lib/
-    compute-version.ts         effective-date-aware version assignment
-    document-references.ts      legal:<type>[:<version>][?lang=<code>] token parse + cross-lang discrepancy
-    select-document-content.ts  pick a content row for a locale, with default fallback
-    record-consent.ts           closure resolution + append; assertConsentCurrent pre-check
-    render-consent-text.ts      substitute placeholder_values into a body for the admin view
-    serialize-document.ts       public/admin serializers (return body verbatim, tokens intact)
-    seeds.ts                    LEGAL_DOCUMENT_TYPES_DICTIONARY_KEY + default types
-  services/legal-document.service.ts     LegalDocumentResolver (active/current/all/version + closure)
-  commands/
-    index.ts, publish-document.ts, add-document-language.ts, record-consent.ts
-  api/
-    openapi.ts
-    documents/route.ts                      GET public list, POST publish
-    documents/admin/route.ts                GET admin list (current|all)
-    documents/[type]/route.ts               GET active detail + reference tree
-    documents/[type]/[version]/route.ts     GET one version
-    documents/[type]/[version]/languages/route.ts  POST add language
-    consents/route.ts                       POST record consent (auth user)
-    consents/verify/route.ts                POST pre-check consent (no write)
-    consents/admin/route.ts                 GET consents by userId
-  backend/
-    legal-documents/page.tsx (+ .meta)      DataTable list, Add-translation row action
-    legal-documents/create/page.tsx (+ .meta)  publish form (dynamic langs, no ref checkboxes)
-    legal-documents/add-language/...         add-translation UI (useGuardedMutation)
-    legal-documents/document-details-dialog.tsx
-  i18n/{en,pl,es,de,ko}.json
-  migrations/Migration<fullTimestamp>_legal.ts + .snapshot-open-mercato.json
-  __tests__/  __integration__/  AGENTS.md
-```
-
-Reused platform pieces: `isValidIso639` / `getIso639Label` / `ISO_639_1`
-(`@open-mercato/shared/lib/i18n/iso639`), `defaultLocale`, the `dictionaries` module
-(`DictionarySelectControl`, `loadDictionaryEntriesByKey`), `MarkdownField`
-(`@open-mercato/ui/backend/inputs/MarkdownField`), `makeCrudRoute` + command bus,
-`getAuthFromRequest`, `createLogger`.
-
-Cross-module rules honored: no direct ORM relations across modules (consent `userId` is an auth-user
-FK-id only, resolved separately). Within the module, `legal_document_contents.document_id` and
-`legal_consents.document_content_id` are ordinary intra-module FKs. All queries scoped by
-`tenantId`/`organizationId`.
-
-Another module records or verifies a consent through the **command bus** (`legal.consent.record`,
-`assertConsentCurrent`) and reacts to the **`legal.consent.recorded`** event - it never imports the
-`legal` internals. The canonical example is a payment flow: when minting a payment intent it records a
-`payment_authorization` consent carrying `{ source: 'payment', paymentId }` in `metadata` - that record
-is the gate; for a later **off-session** charge it calls `assertConsentCurrent` first and re-asks if the
-consent has gone stale. All via the command bus, so `legal` stays isomorphic and does not depend on the
-caller.
-
-## Data Models
-
-### `legal_documents` (entity `LegalDocument`)
-One row per version. Append-only. Unique `(type, version)`.
+### `legal_document_contents` (`content`, NEW) - append-only once published
 
 | Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | `gen_random_uuid()` |
-| `type` | text | document type (a `legal_document_types` dictionary value) |
-| `version` | text | dotted-decimal, auto-assigned (effective-date-aware) |
-| `effective_from` | timestamptz | activation instant |
-| `references` | jsonb null | `Array<{ type: string; version?: string; language?: string }>` incorporated references (`version`/`language` set only when the `legal:<type>[:<version>][?lang=<code>]` token pins them) - **computed from content tokens, never client-set** |
-| `tenant_id` | uuid null | scope |
-| `organization_id` | uuid null | scope |
-| `created_at` | timestamptz | tie-breaker for same-`effective_from` versions |
-
-No `updated_at`: a version row is immutable. There is no in-place edit and no undo - a correction is
-always a **new version**. A mistaken version that has not yet taken effect is neutralized by
-publishing another version at the same `effective_from` (the newer-created row wins the tie, so the
-mistaken one never serves); a version that has already taken effect can only be corrected going
-forward by publishing a superseding version. In both cases the earlier row stays in the ledger as
-evidence.
-
-**Version ordering & same-date ties.** Versions are ordered by `(effective_from ASC, created_at
-ASC)`; the dotted-decimal label is assigned to match that order (a new row is appended with the next
-leading integer, or given the shortest label strictly between its neighbours). `effective_from` has
-no unique constraint, so two versions may share a date. When a new version is published with the same
-`effective_from` as an existing (e.g. future-dated) version, the new row - created later - sorts
-**after** the existing one and takes a higher label; and once that date is reached, active resolution
-(`ORDER BY effective_from DESC, created_at DESC`) serves the **newer-created** row, superseding the
-earlier same-date version (the sanctioned "re-publish to correct a future version" path). The earlier
-version remains in the ledger as evidence but never serves. Consequences: (a) you cannot insert a
-same-date version that sorts *before* an existing same-date one - choose an earlier `effective_from`
-instead; (b) concurrent publishes computing the same label collide on `(type, version)` and the loser
-recomputes via the retry loop.
-
-### `legal_document_contents` (entity `LegalDocumentContent`)
-One row per `(version, language)` translation. Append-only. Unique `(document_id, language)`.
-
-| Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | uuid PK | |
 | `document_id` | uuid | FK → `legal_documents.id` (intra-module) |
-| `language` | text | ISO 639-1 code (`isValidIso639`) |
-| `title` | text | localized title (required, non-empty) |
-| `body` | text | localized body markdown (required, non-empty), storing `legal:<type>[:<version>][?lang=<code>]` reference tokens verbatim |
-| `tenant_id` | uuid null | scope |
-| `organization_id` | uuid null | scope |
-| `created_at` | timestamptz | |
+| `locale` | text | any ISO 639-1 code (`isValidIso639`) - see delta 4 |
+| `title` | text | authored title (may carry `{{controller*}}` and `legal:` tokens) |
+| `markdown` | text | authored body (tokens verbatim) |
+| `published_title` | text NULL | baked at publish/append, immutable |
+| `published_markdown` | text NULL | baked at publish/append, immutable |
+| `content_hash` | text NULL | `sha256:<hex>` over canonical JSON `{ kind, version, locale, published_title, published_markdown }`, set once when this row is baked; the exact string a consent snapshot pins |
+| `created_at` / `updated_at` / `deleted_at` | timestamptz | draft rows editable/soft-deletable (`updated_at` → optimistic lock); published rows reject update/delete |
 
-Existing rows are never updated; adding a language inserts a new row. Reference detection scans the
-`body` for `legal:<type>[:<version>][?lang=<code>]` tokens. The body is stored and served verbatim
-(tokens intact); consumers resolve tokens themselves.
+Unique `(document_id, locale) where deleted_at is null`.
 
-### `legal_consents` (entity `LegalConsent`)
-One row per accepted content. Append-only. Indexes on `user_id` and `action_id`. Exempt from
-`updated_at`/optimistic locking (append-only log).
+- **Draft** rows are fully editable/soft-deletable (mirrors base-spec draft editing). **Publish** bakes
+  tokens into every draft locale row (`published_*` + `content_hash`) and flips the version to
+  `published`; those rows become immutable.
+- **Append-a-translation** (`content.legal_documents.add_language`, an intra-module command): insert a
+  new content row for a locale not yet present on a version, baked + hashed at insert. Allowed only on
+  the **currently-effective or a future-dated** version of the `(scope, kind)` - never a superseded past
+  version. Existing rows are untouched (immutability preserved). The new locale must incorporate the
+  same `legal:` references as the version's existing published locales (delta 2 discrepancy check).
+- The base spec's version-level `content_hash` moves here (per row). Rendering resolution is unchanged
+  except it selects a content **row** for the locale (requested → `en` → first available); the `en` row
+  is required at publish so the fallback always resolves. Public/admin responses return `published_*`
+  (with `legal:` tokens intact - delta 2).
 
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
-| `user_id` | uuid | auth user (FK-id only, cross-module - resolved separately) |
-| `document_content_id` | uuid | FK → `legal_document_contents.id` - captures version **and** language |
-| `action_id` | uuid null | groups the rows of one acceptance (accepted content + closure) |
-| `metadata` | jsonb null | caller-supplied context bag stored verbatim - the acceptance's provenance and any external links (e.g. `{ source: 'payment', paymentId, paymentMethodId, ... }`); see note below |
-| `placeholder_values` | jsonb null | app-supplied `{{placeholder}}` substitutions the user saw (e.g. `{ amount: '€10.00' }`) |
-| `tenant_id` | uuid null | scope |
-| `organization_id` | uuid null | scope |
-| `created_at` | timestamptz | |
+## Delta 2 - cross-document references + closure consent
 
-No separate `language` column - the referenced content row already encodes the served language. The
-consented wording is reproduced from the immutable content row (`title` + `body`, tokens intact) with
-`placeholder_values` substituted into `{{...}}` - a `{{token}}` with no stored value is left literal
-(never blanked), values are inserted verbatim and not re-substituted, and a missing content/version row
-degrades to empty fields rather than erroring. The `legal:` tokens in the body are the durable record
-of the incorporated documents.
+### Tokens (in `content`)
+A document body references another legal document with a stable token - never a real URL - as a markdown
+link target `legal:<kind>[:<version>][?lang=<code>]`:
+- `legal:<kind>` - the currently-active version of that kind; `legal:<kind>:<version>` - a pinned exact
+  version (incorporated even after superseded); `?lang=<code>` - a pinned display locale
+  (default-locale fallback if absent). `<kind>` is `[a-z0-9_]+` and the validator forbids `:` and `?`
+  so the token parses unambiguously.
+- The backend **stores and returns the token verbatim**; there is no deeplink config. Each consumer
+  resolves it: API/mobile consumers substitute their own link; content's **own server-rendered public
+  page** resolves `legal:<kind>` to its own route for that kind (e.g. `/privacy`) using local knowledge
+  of its routes and the already-resolved tenant scope - not configuration.
 
-**Consent metadata.** `metadata` is an **open, caller-supplied JSON object** (validated only as an
-object with string keys; no fixed schema), stored verbatim on each row written for the acceptance
-(all rows sharing the `action_id` carry the same metadata, so any row is self-describing). It captures
-*why/where* the consent was taken and links it to the business event that required it - the most
-important case being a **payment authorization**, where the caller passes the payment identity so the
-consent is provably tied to the charge it authorized, e.g.:
+### References + closure
+- `legal_documents.references` (`content`, NEW jsonb `Array<{ kind, version?, locale? }>`): computed at
+  publish/append from the tokens across a version's published locales - never client-set. Every published
+  locale must link the same reference set (`findReferenceDiscrepancies`); an unpinned reference's `kind`
+  must exist, a pinned one's exact `(kind, version)` must exist; a document cannot reference its own kind.
+- `legalDocumentService.resolveClosure(kind, scope, locale?, at?)` returns the accepted document plus its
+  transitive closure (BFS, cycle-safe), each entry resolved to a content row (pinned or active version;
+  pinned or requested locale, with `en` fallback).
 
-```json
-{ "source": "payment", "paymentId": "pi_123", "paymentMethodId": "pm_456", "platform": "stripe" }
-```
+### Consent closure (in `auth`)
+- `consentLogService.record` accepts the resolved closure and writes **one `consent_event` per document**
+  (accepted kind + each referenced kind), all sharing one **`action_id`** (new column) and per-entry
+  idempotency keys derived from the base key (`<base>:<kind>`). Each event snapshots that entry's
+  `document_id`, `document_kind`, `document_version`, `document_content_hash`, and the new
+  `document_locale` (the content row served). A supplied closure must be complete (else the caller is
+  told which documents are missing).
 
-`source` is a free-form string (app-defined: `signup`, `reconsent`, `payment`, `top_up`, …) - the core
-module does not enumerate a closed set, keeping it generic. Metadata is never interpreted by the
-module beyond storage; it is part of the immutable, append-only record.
+## Delta 3 - open consent metadata + off-session pre-check (in `auth`)
 
-## API Contracts
+- **`consent_events.metadata`** (NEW jsonb, **unsealed**): an open caller bag for provenance and links to
+  the business event, e.g. `{ source:'payment', paymentId, paymentMethodId }`. Deliberately **outside**
+  the `cev1` sealed payload (which the base spec forbids from carrying free text), stored beside
+  `ip_address` and **cleared by the erasure-only path** - so it never traps PII under a seal and never
+  affects a seal. `source` stays the sealed constrained tag; `metadata` is the unsealed extra.
+- **Standing-consent check** `consentLogService.isConsentCurrent({ userId, tenantId, consentType, at? })`:
+  reads the user's projection/latest events and reports whether they still hold a current consent for the
+  kind **and its currently-active closure**, each at the current version - **writes nothing**. In the
+  on-session flow, consent is recorded when the intent is minted (that record is the gate); this check is
+  for charges with **no user present** (auto-refill, delayed capture) and for deciding whether to prompt
+  re-consent. Exposed as `POST /api/auth/users/consents/verify` (same guard/scoping as the events route)
+  and resolvable server-side via DI by a payment flow before an off-session charge.
 
-All routes export `openApi` (tag `Legal`). Feature-gated via `metadata.requireFeatures`. Public and
-admin responses return the body **verbatim** (with `legal:<type>[:<version>]` tokens intact) for the
-requested locale, falling back to the `en` content row; consumers resolve the tokens.
+## Delta 4 - any-language input
 
-| Method & path | Auth / feature | Purpose |
-|---------------|----------------|---------|
-| `GET /api/legal/documents` | public | Active version of each type (metadata only), locale-resolved title. Uncached. |
-| `POST /api/legal/documents` | `legal.document.publish` | Publish a version. Body: `{ type, translations: [{ language, title, body }], effectiveFrom? }` (must include the `en` translation; every translation carries a non-empty title and body). Creates the version row + one content row per translation; `references` derived server-side from `legal:<type>[:<version>][?lang=<code>]` tokens in the bodies. |
-| `GET /api/legal/documents/admin?view=current\|all` | `legal.document.view` | Admin listing incl. all content rows (every language) per version. |
-| `GET /api/legal/documents/[type]?language=` | public | Active version detail + referenced-documents tree (bodies verbatim). |
-| `GET /api/legal/documents/[type]/[version]?language=` | public | A specific version (body verbatim). |
-| `POST /api/legal/documents/[type]/[version]/languages` | `legal.document.add_language` | Body: `{ language, title, body }` (both non-empty). Inserts a content row on a current/future version. 4xx on duplicate language, past-version, or reference-discrepancy violations. |
-| `POST /api/legal/consents` | authenticated user | Record consent for the caller. Body: `{ type, consentByType?, language?, placeholderValues?, metadata? }`. `metadata` is an open object stored verbatim on every row of the acceptance (e.g. `{ source: 'payment', paymentId }`). Resolves each accepted/closure document to a content row and appends the acceptance. |
-| `POST /api/legal/consents/verify` | authenticated user | Check without writing whether the user already holds a current consent for `type` and its active closure (`200` current; otherwise reports which documents need (re)consent). For off-session/recurring charges and deciding whether to prompt re-consent - **not** the on-session gate (that is the mint-time record). |
-| `GET /api/legal/consents/admin?userId=` | `legal.consent.view` | A user's recorded consents. Each item reconstructs `renderedContent` (the accepted content row's `body` with `placeholder_values` substituted into `{{...}}`) plus `type`, `title`, `version`, `language`, `source` (`metadata.source`), and `createdAt`. |
+`legal_document_contents.locale` is validated with `isValidIso639` (ISO 639-1, ~184 codes), decoupled
+from the app's served `locales` and from the tenant's `translations.supported_locales`. The default
+locale (`en`) content row remains required at publish so the base spec's render fallback resolves. `?lang`
+targets on `legal:` tokens are likewise ISO 639-1.
 
-Status codes: publish 201/400/401/500; add-language 400 (invalid / discrepancy), 404 (unknown
-version), 409 (duplicate language / past version) - final mapping locked in implementation; consent
-400 (incomplete closure) / 409 (supplied version not effective).
+## Data-model & API deltas (summary)
 
-### Commands
-All three are append-only and **audit-logged but not undoable** (`isUndoable: false`, `buildLog`
-defined, no `undo` handler) - nothing in this module mutates or removes an existing row. See
-§ Audit & Access Logging.
-- `legal.document.publish` - insert version + content rows in one atomic write; references computed;
-  unique-constraint retry on version. `effectiveFrom` defaults to now and cannot be in the past, with
-  a small grace window (~60s) to absorb clock skew and a minute-granularity date picker. Not undoable;
-  correct/supersede by publishing another version.
-- `legal.document.add_language` - insert one content row on a current/future version. Not undoable.
-- `legal.consent.record` - append the acceptance closure (one row per content) under one `actionId`.
-  Not undoable (a recorded consent is a fact).
+- `content`: **drop** `legal_documents.{locales, published_locales, content_hash}`; **add** table
+  `legal_document_contents` (above) and column `legal_documents.references`. Publish and the new
+  `add_language` command write/parse content rows. Public/admin document responses return per-locale
+  `published_*` with tokens intact; `references` exposed read-only. New CLI import maps `<kind>.<locale>.md`
+  files into content rows (one version, many locale rows) exactly as the base spec's importer intended.
+- `auth`: **add** `consent_events.{action_id, document_locale, metadata}`; extend `consentLogService.record`
+  for closures; add `consentLogService.isConsentCurrent` + `POST /api/auth/users/consents/verify`. The
+  `cev1` sealed payload is unchanged (metadata and closure ids are opaque references/enums; `metadata`
+  stays unsealed). Erasure clears `metadata` alongside `ip_address`.
 
-## Audit & Access Logging
+## Integration Coverage (deltas; self-contained fixtures, cleanup in teardown)
 
-Non-undoable does **not** mean un-logged - the two are independent in the command framework. Every
-write is action-logged; every read of the sensitive ledgers is access-logged.
+- **content** — publish a version with two locales; `add_language` a third locale to the published,
+  currently-effective version (row inserted, existing rows untouched, hash per row); rejected on a
+  superseded past version; rejected on a duplicate locale; rejected on a reference discrepancy across
+  locales. References computed from a `legal:<kind>` token; a pinned `legal:<kind>:<version>` recorded with
+  its version; bodies returned verbatim with tokens intact; the server-rendered public page resolves a
+  `legal:privacy` token to the `/privacy` route.
+- **auth** — recording consent for a kind with a reference closure writes one event per document under one
+  `action_id`, each pinning its content row's `document_content_hash` + `document_locale`; a pinned-version
+  reference records the pinned version, a `?lang` reference records the pinned locale (default-locale
+  fallback); `metadata` (`{ source:'payment', paymentId }`) round-trips through the events endpoint and is
+  cleared after `erase-consent-subject` while seals still verify; `POST …/consents/verify` returns current
+  vs needs-re-consent and writes no row.
+- **Unit** — content-row hashing (golden), token parse (`legal:<kind>`, pinned version, `?lang`, `:`/`?` in
+  kind rejected, invalid `lang` rejected), reference discrepancy over locales, closure BFS (cycle-safe,
+  pinned vs active), `isConsentCurrent` (current / moved-on-referenced-version / no-consent), any-language
+  acceptance + `en`-fallback selection.
 
-- **Action logs (writes).** Each command returns `buildLog()` metadata
-  (`{ actionLabel, resourceKind, resourceId, tenantId, organizationId }`); the command bus persists an
-  `ActionLog` row and stamps `actorUserId` from `ctx.auth.sub`. Because these commands are append-only
-  they set `isUndoable: false` and define **no** `undo` handler and no undo snapshot - the action is
-  still recorded, it just cannot be reversed. Resource kinds:
-  - `legal.document` (id = the version's `legal_documents.id`) for `legal.document.publish` and
-    `legal.document.add_language` (the language-add log names the added language in `actionLabel` and
-    can set `relatedResourceKind/Id` = the new `legal_document_contents.id`).
-  - `legal.consent` (id = the accepted `legal_consents.id`, `actorUserId` = the consenting user) for
-    `legal.consent.record`.
-- **Access logs (reads).** The admin endpoints that expose evidence -
-  `GET /api/legal/documents/admin` and especially `GET /api/legal/consents/admin` - call
-  `logCrudAccess` (`@open-mercato/shared/lib/crud/factory`, backed by the `audit_logs` access log) with
-  the returned item ids, so "who viewed whose consent records" is itself auditable. Public document
-  reads are not access-logged (they are unauthenticated and non-sensitive).
-
-This reuses the platform's existing `audit_logs` action/access logging - no new logging surface.
-
-## Data Protection & Retention
-
-A consent record is both personal data and legal evidence, which pulls in two directions; the design
-resolves it as follows.
-
-- **Retained under erasure.** The consent ledger is append-only proof that a user accepted specific
-  wording at a specific time; a right-to-erasure request does **not** hard-delete it (retention for the
-  establishment/exercise/defence of legal claims). This matches how the platform's erasure ledger is
-  itself retained. So on a subject-erasure signal the module keeps the consent skeleton (document
-  version, language, timestamp, `action_id`).
-- **PII surface is minimal by construction.** Every column is an id, enum, or timestamp except two
-  free-form fields - `metadata` and `placeholder_values` - so the ledger stores no plaintext PII of its
-  own and needs no encryption map (justified N/A, like the erasure ledger). Callers SHOULD keep direct
-  identifiers out of those fields (prefer a `paymentId`/reference over a name/email).
-- **Erasure hook (follow-up).** When the platform emits its generic subject-erasure event
-  (`privacy.subject.erased`, declared in core by the erasure design), a subscriber here can pseudonymize
-  the `user_id` link and scrub the two free-form fields while preserving the append-only evidence
-  skeleton. This is noted as a follow-up, not v1 - the OSS module ships the retention stance and the
-  minimal-PII shape that make it possible; it does not subscribe to or hard-require the enterprise
-  erasure module.
-
-## Integration Coverage (required)
-
-Ships with the change (self-contained fixtures created in setup, cleaned up in teardown; no reliance
-on seeded/demo data).
-
-**API paths**
-- `POST /api/legal/documents` → publish; assert version auto-assignment, that content rows are
-  created per translation, and computed `references` from a `legal:<type>` token in a body.
-- `GET /api/legal/documents` and `GET /api/legal/documents/[type]` → active resolution + reference
-  tree + locale fallback (requested language missing → `en` row served); assert the body is returned
-  verbatim with `legal:<type>[:<version>][?lang=<code>]` tokens intact (backend does not rewrite them).
-- `GET /api/legal/documents/admin?view=current|all` → all content rows per version.
-- `POST /api/legal/documents/[type]/[version]/languages` → happy path (inserts a content row);
-  rejects a duplicate language; rejects a past/superseded version; rejects a reference discrepancy.
-- `POST /api/legal/consents` + `GET /api/legal/consents/admin?userId=` → records the closure under one
-  `actionId`, each row bound to a content row; a pinned `legal:<type>:<version>` reference records the
-  pinned version while an unpinned one records the active version, and a `?lang=<code>` reference
-  records the pinned language (falling back to the default locale when that translation is absent);
-  `placeholder_values` holds the
-  app-supplied values on the primary row; supplied `metadata` (e.g. `{ source: 'payment', paymentId }`)
-  is stored verbatim on every row of the acceptance and round-trips through the admin listing; the
-  admin item's `renderedContent` has `{{placeholder}}` values substituted; 400 on incomplete closure,
-  409 on a non-effective supplied version.
-- `POST /api/legal/consents/verify` → 200 when the user already holds a current consent for the type +
-  active closure; reports the documents needing (re)consent when a referenced version has moved on
-  since the user's last consent; writes no `legal_consents` row.
-- Logging: publish and `record-consent` write an `ActionLog` (correct `resourceKind`, `resourceId`,
-  `actorUserId`); `GET /api/legal/consents/admin` writes an access-log entry for the viewed ids.
-
-**UI paths**
-- Legal documents list, publish form (dynamic language rows, no reference checkboxes, read-only
-  incorporated-documents panel), add-translation flow.
-
-**Unit tests**
-- `compute-version` incl. the same-`effectiveFrom`-as-a-future-version tie (new row sorts after and
-  takes a higher label; active resolution serves the newer-created row); `document-references` token
-  parsing (`legal:<type>`, pinned `legal:<type>:<version>`, and `?lang=<code>` variants parsed to
-  `{ type, version?, language? }`; a colon- or question-mark-bearing type rejected; an invalid `lang`
-  code rejected; a plain URL or unrelated link ignored; discrepancy detection over full tuples across
-  content rows); `add-document-language` (duplicate-language rejection, past-version rejection,
-  reference consistency, row inserted); `record-consent` (closure resolution to content rows, pinned
-  vs active version selection, pinned-language selection with default-locale fallback,
-  effective-version check) and `assertConsentCurrent` (user holds current consent for type + active
-  closure → ok; a referenced version moved on since their consent → reported as needing re-consent; no
-  recorded consent → not current; writes nothing); `render-consent-text` (values substituted, unknown `{{token}}` left literal,
-  values not re-substituted); `select-document-content` (row selection + `en` fallback).
-
-## Risks & Impact Review
+## Risks & Impact Review (deltas only; base-spec risks stand)
 
 | Risk | Severity | Area | Mitigation | Residual |
-|------|----------|------|------------|----------|
-| Adding a language changes what a live version serves | Low | serving | It is an INSERT of a new content row; existing rows are immutable; existing consents point at the content row they saw | Low |
-| A consumer renders a `legal:` token literally instead of substituting a link | Low | client contract | Token substitution is a documented client responsibility; the token is human-readable and unambiguous; the incorporated set is also exposed structurally as `references` for clients that prefer it | Low |
-| Author writes a raw URL instead of a `legal:<type>` token | Medium | authoring | Such a link is not detected as a reference; the create form inserts tokens via a helper and the read-only incorporated-documents panel makes a missing reference visible before publish | Low |
-| Reference cycles in the incorporation graph | Low | closure | BFS closure is cycle-safe (`seen` set) | None |
-| Concurrent publishes computing the same version | Low | publish | Unique `(type, version)` + retry loop | None |
-| Version + its content rows written non-atomically | Low | publish | Publish command writes the version and its content rows in one atomic flush/transaction | None |
-| Consent `userId` referencing a deleted auth user | Low | data | FK-id + no ORM relation; admin listing tolerates missing user; append-only evidence retained | Low |
-| Any-language input widens stored language set beyond served UI locales | Low | i18n | `isValidIso639` bounds input to real ISO 639-1 codes; serving falls back to `en` | Low |
+|---|---|---|---|---|
+| Appending a locale mutates a live version's meaning | Low | content | It is an INSERT of a write-once row; existing published rows and their hashes are immutable; consents pin the row they saw | Low |
+| Per-row hashing diverges from the base spec's version-level hash | Low | content | Move the hash to the content row and pin it in the consent snapshot; publish/append are the only writers; golden-vector test | Low |
+| Closure recording writes partial rows | Low | auth | Recorded in the same transaction as the primary event under one `action_id`; idempotency keys per entry make retries safe | Low |
+| `metadata` traps PII under a seal or blocks erasure | Low | auth/GDPR | `metadata` is unsealed (never in `cev1`) and cleared by the erasure path, exactly like `ip_address`; callers advised to keep direct identifiers out | Low |
+| A consumer renders a `legal:` token literally | Low | client contract | Verbatim by design; content's own page resolves it; the incorporated set is also exposed structurally as `references` | Low |
+| Any-language input widens the stored locale set | Low | i18n | `isValidIso639` bounds it to real ISO 639-1; render falls back to `en` | Low |
 
-New contract surfaces (additive): entities/tables `legal_documents`, `legal_document_contents`,
-`legal_consents`; API routes under `/api/legal/*`; DI key `legalDocumentResolver`; ACL features
-`legal.*`; events `legal.document.published`, `legal.document.language_added`,
-`legal.consent.recorded`; commands `legal.document.publish`, `legal.document.add_language`,
-`legal.consent.record`; the `POST /api/legal/consents/verify` pre-check. No existing contract surface
-is modified, so `BACKWARD_COMPATIBILITY.md` deprecation protocol does not apply.
+New contract surfaces (additive on top of the base spec): table `legal_document_contents`; columns
+`legal_documents.references`, `consent_events.{action_id, document_locale, metadata}`; command
+`content.legal_documents.add_language`; `POST /api/auth/users/consents/verify`; `consentLogService`
+gains `resolveClosure` handling and `isConsentCurrent`. No base-spec contract is removed.
 
-## Open questions / decisions log
-- Deeplink resolution is **entirely client-side** (confirmed). The backend stores and returns
-  `legal:<type>[:<version>]` tokens verbatim and holds **no** deeplink config - no base URL, no path
-  prefix, no settings page, no `ModuleConfigService` usage. Each client substitutes tokens into links
-  its own way (web `href`, native navigation, `myapp://`, emailed/PDF URL). Rationale: the backend
-  cannot resolve a token without being told a base URL, and any consumer that knows its base can
-  substitute trivially itself - so a backend resolver adds nothing and would only rot. This reverses
-  the original "user-specified base URL + path prefix" ask, deliberately.
-- Reference links use a fixed `legal:` token scheme (confirmed) rather than a raw URL.
-- Token grammar (confirmed): `legal:<type>[:<version>][?lang=<code>]` - optionally pinning an exact
-  `<version>` (dotted-decimal) and/or a display `<code>` (ISO 639-1). `<type>` MUST NOT contain a colon
-  or a question mark (the type validator forbids `:` and `?`), so the token parses unambiguously (strip
-  a `?lang=` suffix, then split on `:`). A pinned version incorporates that exact version even after it
-  is superseded; a pinned language forces that translation (default-locale fallback if it is absent),
-  overriding the reader's locale for that one reference. `?lang` need not exist at publish time.
-- `placeholder_values` holds **only** app-supplied `{{value}}` substitutions (confirmed). Deeplinks are
-  not frozen into it: the `legal:` token in the immutable body is itself the durable record of the
-  incorporated document, robust to any later client-side change of how the link is rendered.
-- Language granularity: **ISO 639-1** (confirmed) via `isValidIso639`; BCP-47 regional variants
-  (`pt-BR`) are out of scope for now.
-- Consent subject: **auth user** (confirmed).
-- Consent `metadata` is an **open caller-supplied JSON object** (confirmed), stored verbatim on every
-  row of the acceptance, for provenance and linking the consent to the business event that required it
-  (notably a payment: `{ source: 'payment', paymentId, paymentMethodId, ... }`). The core module does
-  not enumerate a closed `source` set or interpret metadata.
-- `body` (and `title`) on a content row are **required, non-empty** (confirmed). There are no
-  metadata-only rows: a title without a body has nothing to serve or consent against.
-- No `published_url` column (confirmed, dropped). The stored per-language content is the canonical,
-  immutable source of a version's wording; an external URL would be a second, un-versioned source that
-  could drift from the recorded wording and weaken the consent proof.
-- Correcting a mistaken **added translation**: a content row is immutable and unique per
-  `(version, language)`, so a typo in an added translation is corrected only by publishing a new
-  version (same rule as the version level). A "supersede a single content row" mechanism is
-  intentionally **not** included - it would complicate content resolution for little gain. Revisit
-  only if operational need appears.
-- Consent **standing-check** (`assertConsentCurrent(userId, type, at?)` / `POST /api/legal/consents/verify`):
-  confirm a user already holds a current consent for a type + its active closure **without recording**.
-  Redundant in the on-session flow (consent is recorded when the payment intent is minted, which is
-  itself the gate); it exists for **off-session/recurring** charges (e.g. auto-refill) and re-consent
-  prompts, where money moves with no user present to consent.
-- Data-protection stance: the consent ledger is retained under right-to-erasure (legal-claims basis);
-  `metadata`/`placeholder_values` are the only free-form fields (keep direct identifiers out); no
-  encryption map needed (justified N/A). A future subscriber to the platform's generic
-  `privacy.subject.erased` event can pseudonymize the `user_id` link and scrub the free-form fields
-  while retaining the append-only evidence skeleton - noted as a follow-up, not v1.
-- Cross-module coupling: other modules **record/verify consent via the command bus** and react to
-  `legal.consent.recorded`, never importing `legal` internals (keeps `legal` isomorphic).
-- Default document types to seed: generic (e.g. `terms_and_conditions`, `privacy_policy`) - final
-  list TBD during implementation.
+## Superseded
 
-## Final Compliance Report
-_To be completed after implementation (validation gate results, migration + snapshot, ACL sync,
-integration-test run)._
+The earlier draft of this file specified a **standalone `legal` core module** with its own
+`legal_documents` / `legal_document_contents` / `legal_consents` tables, a dotted-decimal
+`compute-version`, a `legal.consent.record` command, a client-only deeplink-token scheme with no server
+resolution, and a lightweight retention/erasure note. All of that is **superseded** by the base spec's
+placement (content/directory/auth), integer versioning, DI `consentLogService`, host-based resolution,
+and pseudonym-salt erasure. What survives from the earlier draft - now re-homed as the deltas above - is:
+per-language append-only content rows, `legal:<kind>[:<version>][?lang=<code>]` reference tokens + closure
+consent, open consent `metadata` with payment linkage, the off-session standing-consent check, and
+any-language (ISO 639-1) input.
+
+## Open decisions
+- Append-translation via per-language rows (confirmed).
+- Consent stays a DI-service write, not a command (decided: the ledger is the audit record; the
+  base-spec taxonomy is followed).
+- Delta-spec framing on the merged base spec (confirmed).
 
 ## Changelog
-- 2026-08-20 - Initial spec drafted. Not yet implemented.
+- 2026-08-20 - Reframed as an amendment on the merged `2026-08-18-tenant-legal-documents-and-consent-versioning.md`:
+  keep its placement + GDPR/host/seal/identity design wholesale; add per-language append translations,
+  cross-document reference tokens + closure consent, open consent metadata + off-session pre-check, and
+  any-language input. Superseded the earlier standalone-`legal`-module draft. Not yet implemented.
