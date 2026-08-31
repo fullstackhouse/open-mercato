@@ -56,6 +56,8 @@ export async function GET(req: Request) {
       status: item.status,
       cursor: item.cursor ?? null,
       initialCursor: item.initialCursor ?? null,
+      cursorOrigin: item.cursorOrigin ?? null,
+      cursorSourceRunId: item.cursorSourceRunId ?? null,
       createdCount: item.createdCount,
       updatedCount: item.updatedCount,
       skippedCount: item.skippedCount,

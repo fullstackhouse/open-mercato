@@ -44,6 +44,8 @@ type SyncRunDetail = {
   batchesCompleted: number
   lastError: string | null
   progressJobId: string | null
+  cursorOrigin: 'none' | 'explicit' | 'inherited' | 'self' | null
+  cursorSourceRunId: string | null
   parameters: Record<string, unknown> | null
   progressJob: {
     id: string
@@ -443,6 +445,31 @@ export default function SyncRunDetailPage({ params }: SyncRunDetailPageProps) {
             </CardContent>
           </Card>
         </div>
+
+        {run.cursorOrigin === 'inherited' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('data_sync.runs.detail.cursorOrigin.title', 'Start position')}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                {run.cursorSourceRunId ? (
+                  <>
+                    {t('data_sync.runs.detail.cursorOrigin.continuingRun', 'This run continued where an earlier run stopped, rather than starting from the beginning.')}{' '}
+                    <a
+                      className="font-medium text-foreground underline underline-offset-4"
+                      href={`/backend/data-sync/runs/${run.cursorSourceRunId}`}
+                    >
+                      {t('data_sync.runs.detail.cursorOrigin.viewSourceRun', 'View that run')}
+                    </a>
+                  </>
+                ) : (
+                  t('data_sync.runs.detail.cursorOrigin.continuingSharedCursor', 'This run continued from the saved incremental position for this integration, rather than starting from the beginning.')
+                )}
+              </p>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {run.parameters && Object.keys(run.parameters).length > 0 ? (
           <Card>

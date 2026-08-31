@@ -62,6 +62,8 @@ export async function GET(req: Request, ctx: { params?: Promise<{ id?: string }>
     status: run.status,
     cursor: run.cursor ?? null,
     initialCursor: run.initialCursor ?? null,
+    cursorOrigin: run.cursorOrigin ?? null,
+    cursorSourceRunId: run.cursorSourceRunId ?? null,
     createdCount: run.createdCount,
     updatedCount: run.updatedCount,
     skippedCount: run.skippedCount,

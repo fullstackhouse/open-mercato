@@ -55,6 +55,8 @@ const runFixture = {
   batchesCompleted: 4,
   lastError: null,
   progressJobId: null,
+  cursorOrigin: null,
+  cursorSourceRunId: null,
   progressJob: null,
   triggeredBy: null,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -65,10 +67,10 @@ function logsUrlPage(url: string): string | null {
   return new URL(url, 'http://localhost').searchParams.get('page')
 }
 
-function mockApiResponses(total: number) {
+function mockApiResponses(total: number, runOverrides: Partial<typeof runFixture> = {}) {
   apiCallMock.mockImplementation(async (url: string) => {
     if (url.startsWith('/api/data_sync/runs/')) {
-      return { ok: true, status: 200, result: runFixture }
+      return { ok: true, status: 200, result: { ...runFixture, ...runOverrides } }
     }
     if (url.startsWith('/api/integrations/logs')) {
       return { ok: true, status: 200, result: { items: [], total } }
@@ -202,4 +204,40 @@ describe('SyncRunDetailPage log payload rendering', () => {
     expect(await screen.findByText(/"operationalStatus"/)).toBeInTheDocument()
     expect(await screen.findByText(/"createdCount"/)).toBeInTheDocument()
   })
+})
+
+/**
+ * The operator half of cursor provenance. A run that silently started mid-table is the symptom the
+ * whole change exists to explain, so the page has to say so — and stay quiet when there is nothing
+ * to explain, or the note becomes noise every operator learns to skip.
+ */
+describe('SyncRunDetailPage start position', () => {
+  it('names the run an inherited cursor came from, and links to it', async () => {
+    mockApiResponses(0, { cursorOrigin: 'inherited', cursorSourceRunId: 'run-earlier' })
+    renderWithProviders(<SyncRunDetailPage params={{ id: 'run-1' }} />)
+
+    expect(await screen.findByText(/continued where an earlier run stopped/i)).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /view that run/i })
+    expect(link).toHaveAttribute('href', '/backend/data-sync/runs/run-earlier')
+  })
+
+  it('describes a shared-cursor start without inventing a source run to link to', async () => {
+    mockApiResponses(0, { cursorOrigin: 'inherited', cursorSourceRunId: null })
+    renderWithProviders(<SyncRunDetailPage params={{ id: 'run-1' }} />)
+
+    expect(await screen.findByText(/saved incremental position/i)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /view that run/i })).not.toBeInTheDocument()
+  })
+
+  it.each(['none', 'explicit', 'self', null] as const)(
+    'says nothing when the start position needs no explanation (%s)',
+    async (cursorOrigin) => {
+      mockApiResponses(0, { cursorOrigin, cursorSourceRunId: null })
+      renderWithProviders(<SyncRunDetailPage params={{ id: 'run-1' }} />)
+
+      // Wait for the run to land so this is an assertion about the rendered page, not about timing.
+      await screen.findByText(/example_orders/)
+      expect(screen.queryByText(/rather than starting from the beginning/i)).not.toBeInTheDocument()
+    },
+  )
 })
