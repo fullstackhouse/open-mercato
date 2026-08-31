@@ -6,7 +6,7 @@ import type { ProgressService } from '../../progress/lib/progressService'
 import type { SyncRunService } from '../lib/sync-run-service'
 import { SyncSchedule } from '../data/entities'
 import { startDataSyncRun } from '../lib/start-run'
-import { resolveAdapterForIntegration, resolveStartCursor } from '../lib/start-cursor'
+import { type ResolvedStartCursor, resolveAdapterForIntegration, resolveStartCursorWithOrigin } from '../lib/start-cursor'
 import { normalizeRunParameters } from '../lib/run-parameters'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 
@@ -70,9 +70,9 @@ export default async function handle(job: QueuedJob<ScheduledSyncPayload>, ctx: 
 
   const adapter = resolveAdapterForIntegration(schedule.integrationId)
 
-  const cursor = schedule.fullSync
-    ? null
-    : await resolveStartCursor({
+  const startCursor: ResolvedStartCursor = schedule.fullSync
+    ? { cursor: null, origin: 'none', sourceRunId: null }
+    : await resolveStartCursorWithOrigin({
         syncRunService,
         adapter,
         integrationId: schedule.integrationId,
@@ -116,7 +116,9 @@ export default async function handle(job: QueuedJob<ScheduledSyncPayload>, ctx: 
       integrationId: schedule.integrationId,
       entityType: schedule.entityType,
       direction: schedule.direction,
-      cursor,
+      cursor: startCursor.cursor,
+      cursorOrigin: startCursor.origin,
+      cursorSourceRunId: startCursor.sourceRunId,
       triggeredBy: 'scheduler',
       parameters,
     },

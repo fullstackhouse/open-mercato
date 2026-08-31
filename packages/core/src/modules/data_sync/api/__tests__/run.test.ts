@@ -10,6 +10,7 @@ const mockSyncRunService = {
   findRunningOverlap: jest.fn(),
   resolveCursor: jest.fn(),
   resolveResumeCursor: jest.fn(),
+  resolveResumeCursorWithSource: jest.fn(),
 }
 
 const mockProgressService = {}
@@ -88,6 +89,7 @@ describe('data_sync run route', () => {
     mockSyncRunService.findRunningOverlap.mockResolvedValue(null)
     mockSyncRunService.resolveCursor.mockResolvedValue(null)
     mockSyncRunService.resolveResumeCursor.mockResolvedValue(null)
+    mockSyncRunService.resolveResumeCursorWithSource.mockResolvedValue({ cursor: null, runId: null })
     mockStartDataSyncRun.mockResolvedValue({
       run: { id: '11111111-1111-4111-8111-111111111111' },
       progressJob: { id: '22222222-2222-4222-8222-222222222222' },
@@ -158,9 +160,15 @@ describe('data_sync run route', () => {
       }),
     }))
 
-    expect(mockSyncRunService.resolveResumeCursor).not.toHaveBeenCalled()
+    expect(mockSyncRunService.resolveResumeCursorWithSource).not.toHaveBeenCalled()
     expect(mockStartDataSyncRun).toHaveBeenCalledWith(expect.objectContaining({
-      input: expect.objectContaining({ cursor: 'shared-cursor' }),
+      input: expect.objectContaining({
+        cursor: 'shared-cursor',
+        // The shared row has no run id, which is how the UI later tells "continuing the saved
+        // incremental cursor" from "continuing run X".
+        cursorOrigin: 'inherited',
+        cursorSourceRunId: null,
+      }),
     }))
   })
 
@@ -172,7 +180,10 @@ describe('data_sync run route', () => {
       supportedEntities: ['customers.person'],
       persistsSharedCursor: (entityType: string) => entityType !== 'customers.person',
     })
-    mockSyncRunService.resolveResumeCursor.mockResolvedValueOnce('interrupted-run-cursor')
+    mockSyncRunService.resolveResumeCursorWithSource.mockResolvedValueOnce({
+      cursor: 'interrupted-run-cursor',
+      runId: '33333333-3333-4333-8333-333333333333',
+    })
 
     await postHandler(new Request('http://localhost/api/data_sync/run', {
       method: 'POST',
@@ -185,7 +196,13 @@ describe('data_sync run route', () => {
 
     expect(mockSyncRunService.resolveCursor).not.toHaveBeenCalled()
     expect(mockStartDataSyncRun).toHaveBeenCalledWith(expect.objectContaining({
-      input: expect.objectContaining({ cursor: 'interrupted-run-cursor' }),
+      input: expect.objectContaining({
+        cursor: 'interrupted-run-cursor',
+        // The operator asked for a fresh run and got a stranger run's position. Recording that is
+        // the whole point: an adapter whose cursor encodes scope can refuse it.
+        cursorOrigin: 'inherited',
+        cursorSourceRunId: '33333333-3333-4333-8333-333333333333',
+      }),
     }))
   })
 
@@ -209,9 +226,13 @@ describe('data_sync run route', () => {
     }))
 
     expect(mockSyncRunService.resolveCursor).not.toHaveBeenCalled()
-    expect(mockSyncRunService.resolveResumeCursor).not.toHaveBeenCalled()
+    expect(mockSyncRunService.resolveResumeCursorWithSource).not.toHaveBeenCalled()
     expect(mockStartDataSyncRun).toHaveBeenCalledWith(expect.objectContaining({
-      input: expect.objectContaining({ cursor: null }),
+      input: expect.objectContaining({
+        cursor: null,
+        cursorOrigin: 'none',
+        cursorSourceRunId: null,
+      }),
     }))
   })
 

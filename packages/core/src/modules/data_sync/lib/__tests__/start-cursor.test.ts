@@ -10,7 +10,7 @@ jest.mock('@open-mercato/shared/modules/integrations/types', () => ({
 }))
 
 import { registerDataSyncAdapter } from '../adapter-registry'
-import { resolveAdapterForIntegration, resolveStartCursor } from '../start-cursor'
+import { resolveAdapterForIntegration, resolveStartCursor, resolveStartCursorWithOrigin } from '../start-cursor'
 
 const REGISTRY_KEY = Symbol.for('@open-mercato/data-sync/adapter-registry')
 const SCOPE = { organizationId: 'org-1', tenantId: 'tenant-1' }
@@ -23,6 +23,7 @@ function buildSyncRunService() {
   return {
     resolveCursor: jest.fn(async () => 'shared-cursor'),
     resolveResumeCursor: jest.fn(async () => 'interrupted-run-cursor'),
+    resolveResumeCursorWithSource: jest.fn(async () => ({ cursor: 'interrupted-run-cursor', runId: 'previous-run-id' })),
   } as unknown as SyncRunService
 }
 
@@ -95,7 +96,7 @@ describe('resolveStartCursor for callers that resolve the adapter by integration
     })
 
     expect(cursor).toBe('shared-cursor')
-    expect(syncRunService.resolveResumeCursor).not.toHaveBeenCalled()
+    expect(syncRunService.resolveResumeCursorWithSource).not.toHaveBeenCalled()
   })
 
   it('resumes from the run row for an entity type that opted out', async () => {
@@ -130,6 +131,79 @@ describe('resolveStartCursor for callers that resolve the adapter by integration
     })
 
     expect(cursor).toBe('shared-cursor')
-    expect(syncRunService.resolveResumeCursor).not.toHaveBeenCalled()
+    expect(syncRunService.resolveResumeCursorWithSource).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Provenance is the reason this resolver exists in the shape it does. Both branches inherit a
+ * position the caller never named, so both report `inherited` — but only the previous-run branch can
+ * name a run, and that asymmetry is what the run detail page and a scope-encoding adapter read.
+ */
+describe('resolveStartCursorWithOrigin', () => {
+  beforeEach(() => {
+    clearGlobalRegistry()
+    jest.clearAllMocks()
+    mockGetIntegration.mockReturnValue({ providerKey: 'backfill-provider' })
+  })
+
+  afterEach(clearGlobalRegistry)
+
+  it('reports a shared-row cursor as inherited with no source run', async () => {
+    const syncRunService = buildSyncRunService()
+    registerDataSyncAdapter(buildAdapter({ persistsSharedCursor: () => true }))
+
+    const resolved = await resolveStartCursorWithOrigin({
+      syncRunService,
+      adapter: resolveAdapterForIntegration('sync_backfill'),
+      integrationId: 'sync_backfill',
+      entityType: 'catalog.product',
+      direction: 'import',
+      scope: SCOPE,
+    })
+
+    expect(resolved).toEqual({ cursor: 'shared-cursor', origin: 'inherited', sourceRunId: null })
+  })
+
+  it('reports a resumed cursor as inherited and names the run it came from', async () => {
+    const syncRunService = buildSyncRunService()
+    registerDataSyncAdapter(buildAdapter({
+      persistsSharedCursor: (entityType: string) => entityType !== 'catalog.product',
+    }))
+
+    const resolved = await resolveStartCursorWithOrigin({
+      syncRunService,
+      adapter: resolveAdapterForIntegration('sync_backfill'),
+      integrationId: 'sync_backfill',
+      entityType: 'catalog.product',
+      direction: 'import',
+      scope: SCOPE,
+    })
+
+    expect(resolved).toEqual({
+      cursor: 'interrupted-run-cursor',
+      origin: 'inherited',
+      sourceRunId: 'previous-run-id',
+    })
+  })
+
+  it('reports no cursor as none rather than inherited', async () => {
+    const syncRunService = {
+      resolveCursor: jest.fn(async () => null),
+      resolveResumeCursor: jest.fn(async () => null),
+      resolveResumeCursorWithSource: jest.fn(async () => ({ cursor: null, runId: null })),
+    } as unknown as SyncRunService
+    registerDataSyncAdapter(buildAdapter({ persistsSharedCursor: () => true }))
+
+    const resolved = await resolveStartCursorWithOrigin({
+      syncRunService,
+      adapter: resolveAdapterForIntegration('sync_backfill'),
+      integrationId: 'sync_backfill',
+      entityType: 'catalog.product',
+      direction: 'import',
+      scope: SCOPE,
+    })
+
+    expect(resolved).toEqual({ cursor: null, origin: 'none', sourceRunId: null })
   })
 })

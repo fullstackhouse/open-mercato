@@ -2,6 +2,7 @@ import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import { findAndCountWithDecryption, findOneWithDecryption, findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { escapeLikePattern } from '@open-mercato/shared/lib/db/escapeLikePattern'
+import type { CursorOrigin } from './adapter'
 import { SyncCursor, SyncRun } from '../data/entities'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -112,6 +113,8 @@ export function createSyncRunService(em: EntityManager) {
       entityType: string
       direction: 'import' | 'export'
       cursor?: string | null
+      cursorOrigin?: CursorOrigin | null
+      cursorSourceRunId?: string | null
       triggeredBy?: string | null
       progressJobId?: string | null
       jobId?: string | null
@@ -124,6 +127,8 @@ export function createSyncRunService(em: EntityManager) {
         status: 'pending',
         cursor: input.cursor,
         initialCursor: input.cursor,
+        cursorOrigin: input.cursorOrigin ?? null,
+        cursorSourceRunId: input.cursorSourceRunId ?? null,
         triggeredBy: input.triggeredBy,
         progressJobId: input.progressJobId,
         jobId: input.jobId,
@@ -374,6 +379,26 @@ export function createSyncRunService(em: EntityManager) {
      * already passed.
      */
     async resolveResumeCursor(integrationId: string, entityType: string, direction: 'import' | 'export', scope: SyncScope): Promise<string | null> {
+      const { cursor } = await this.resolveResumeCursorWithSource(integrationId, entityType, direction, scope)
+      return cursor
+    },
+
+    /**
+     * {@link resolveResumeCursor} plus the id of the run the cursor came from.
+     *
+     * The run id is what lets a start path record provenance: a cursor resolved here was inherited
+     * from a specific earlier run that the operator never named, and naming it is the difference
+     * between "this run started mid-table for no visible reason" and "this run is continuing run X".
+     *
+     * `runId` is null exactly when `cursor` is null — there is no run to point at when nothing is
+     * resumable.
+     */
+    async resolveResumeCursorWithSource(
+      integrationId: string,
+      entityType: string,
+      direction: 'import' | 'export',
+      scope: SyncScope,
+    ): Promise<{ cursor: string | null; runId: string | null }> {
       const [run] = await findWithDecryption(
         em,
         SyncRun,
@@ -388,8 +413,9 @@ export function createSyncRunService(em: EntityManager) {
         { orderBy: { createdAt: 'DESC' }, limit: 1 },
         scope,
       )
-      if (!run || run.status === 'completed') return null
-      return run.cursor ?? null
+      if (!run || run.status === 'completed') return { cursor: null, runId: null }
+      const cursor = run.cursor ?? null
+      return { cursor, runId: cursor === null ? null : run.id }
     },
 
     /**

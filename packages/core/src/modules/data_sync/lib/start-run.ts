@@ -1,4 +1,5 @@
 import type { ProgressService } from '../../progress/lib/progressService'
+import type { CursorOrigin } from './adapter'
 import type { SyncRunService } from './sync-run-service'
 import { getSyncQueue } from './queue'
 import { DATA_SYNC_EXPORT_QUEUE, DATA_SYNC_IMPORT_QUEUE } from './queue-policy'
@@ -14,6 +15,18 @@ export type StartDataSyncRunInput = {
   entityType: string
   direction: 'import' | 'export'
   cursor?: string | null
+  /**
+   * Where `cursor` came from. Omitting it means the caller chose the cursor itself, so it defaults to
+   * `'explicit'` when a cursor is present and `'none'` when it is not.
+   *
+   * That default is deliberately the honest one for a direct caller: a provider flow that computed a
+   * cursor did name it, and inferring `'inherited'` would put a label on a value the caller never
+   * inherited. Callers that resolve a cursor from prior state MUST pass `'inherited'` themselves —
+   * `resolveStartCursorWithOrigin` returns exactly what to pass.
+   */
+  cursorOrigin?: CursorOrigin
+  /** The run `cursor` was inherited from, when it came from a run. See {@link StartDataSyncRunInput.cursorOrigin}. */
+  cursorSourceRunId?: string | null
   triggeredBy?: string | null
   batchSize?: number
   parameters?: Record<string, unknown> | null
@@ -64,6 +77,8 @@ export async function startDataSyncRun(params: {
       entityType: input.entityType,
       direction: input.direction,
       cursor: input.cursor ?? null,
+      cursorOrigin: input.cursorOrigin ?? (input.cursor == null ? 'none' : 'explicit'),
+      cursorSourceRunId: input.cursorSourceRunId ?? null,
       triggeredBy: input.triggeredBy ?? scope.userId ?? null,
       parameters: input.parameters ?? null,
       progressJobId: progressJob?.id ?? null,

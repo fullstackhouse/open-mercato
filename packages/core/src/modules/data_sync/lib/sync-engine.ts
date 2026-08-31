@@ -8,6 +8,7 @@ import { refreshCoverageSnapshot } from '../../query_index/lib/coverage'
 import { emitDataSyncEvent } from '../events'
 import type { DataSyncAdapter, DataMapping, ExportBatch, ImportBatch, RunParameterValue } from './adapter'
 import { getDataSyncAdapter, resolveProviderKey } from './adapter-registry'
+import { deliveredCursorOrigin } from './cursor-origin'
 import type { SyncRunService } from './sync-run-service'
 import { SyncRunOwnershipConflictError } from './sync-run-service'
 import { forEachBatch } from './batch-stream'
@@ -619,6 +620,7 @@ export function createSyncEngine(deps: EngineDeps) {
             adapter.streamImport({
               entityType: run.entityType,
               cursor: run.cursor ?? undefined,
+              cursorOrigin: deliveredCursorOrigin(run),
               batchSize,
               credentials,
               mapping,
@@ -846,6 +848,7 @@ export function createSyncEngine(deps: EngineDeps) {
             adapter.streamExport({
               entityType: run.entityType,
               cursor: run.cursor ?? undefined,
+              cursorOrigin: deliveredCursorOrigin(run),
               batchSize,
               credentials,
               mapping,

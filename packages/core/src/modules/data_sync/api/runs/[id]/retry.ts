@@ -9,7 +9,7 @@ import type { SyncRunService } from '../../../lib/sync-run-service'
 import { retrySyncSchema } from '../../../data/validators'
 import { startDataSyncRun } from '../../../lib/start-run'
 import { normalizeRunParameters } from '../../../lib/run-parameters'
-import { resolveAdapterForIntegration, resolveStartCursor } from '../../../lib/start-cursor'
+import { type ResolvedStartCursor, resolveAdapterForIntegration, resolveStartCursorWithOrigin } from '../../../lib/start-cursor'
 import {
   runCrudMutationGuardAfterSuccess,
   validateCrudMutationGuard,
@@ -118,16 +118,23 @@ export async function POST(req: Request, ctx: { params?: Promise<{ id?: string }
     ? normalizedParameters.values
     : null
 
-  const cursor = parsedBody.data.fromBeginning
-    ? null
-    : previous.cursor ?? await resolveStartCursor({
-      syncRunService,
-      adapter: retryAdapter,
-      integrationId: previous.integrationId,
-      entityType: previous.entityType,
-      direction: previous.direction,
-      scope,
-    })
+  // Three cases, and they are genuinely different provenance despite all arriving through "Retry".
+  // Resuming the previous run's own position is explicit — the operator asked for this run to
+  // continue that one. But a run that never committed a batch has no position to resume, and the
+  // fallback below inherits exactly like a fresh dashboard start does. Labelling every retry
+  // 'explicit' would make the discriminator a second thing to distrust.
+  const startCursor: ResolvedStartCursor = parsedBody.data.fromBeginning
+    ? { cursor: null, origin: 'none', sourceRunId: null }
+    : previous.cursor != null
+      ? { cursor: previous.cursor, origin: 'explicit', sourceRunId: previous.id }
+      : await resolveStartCursorWithOrigin({
+        syncRunService,
+        adapter: retryAdapter,
+        integrationId: previous.integrationId,
+        entityType: previous.entityType,
+        direction: previous.direction,
+        scope,
+      })
 
   const { run, progressJob } = await startDataSyncRun({
     syncRunService,
@@ -140,7 +147,9 @@ export async function POST(req: Request, ctx: { params?: Promise<{ id?: string }
       integrationId: previous.integrationId,
       entityType: previous.entityType,
       direction: previous.direction,
-      cursor,
+      cursor: startCursor.cursor,
+      cursorOrigin: startCursor.origin,
+      cursorSourceRunId: startCursor.sourceRunId,
       triggeredBy: auth.sub,
       batchSize: 100,
       parameters: retryParameters,

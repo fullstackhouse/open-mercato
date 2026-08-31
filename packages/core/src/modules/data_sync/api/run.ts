@@ -11,7 +11,7 @@ import { runSyncSchema } from '../data/validators'
 import { startDataSyncRun } from '../lib/start-run'
 import { getDataSyncAdapter } from '../lib/adapter-registry'
 import { normalizeRunParameters } from '../lib/run-parameters'
-import { resolveStartCursor } from '../lib/start-cursor'
+import { type ResolvedStartCursor, resolveStartCursorWithOrigin } from '../lib/start-cursor'
 import {
   runCrudMutationGuardAfterSuccess,
   validateCrudMutationGuard,
@@ -122,9 +122,12 @@ export async function POST(req: Request) {
       return NextResponse.json(guardResult.body, { status: guardResult.status })
     }
 
-    const cursor = parsed.data.fullSync
-      ? null
-      : await resolveStartCursor({
+    // A non-full start reuses whatever position prior state left behind, which is the intended
+    // incremental behaviour but is invisible to the operator who pressed Run. Record where the
+    // cursor came from so the adapter can judge it and the run detail page can explain it.
+    const startCursor: ResolvedStartCursor = parsed.data.fullSync
+      ? { cursor: null, origin: 'none', sourceRunId: null }
+      : await resolveStartCursorWithOrigin({
         syncRunService,
         adapter,
         integrationId: parsed.data.integrationId,
@@ -144,7 +147,9 @@ export async function POST(req: Request) {
         integrationId: parsed.data.integrationId,
         entityType: parsed.data.entityType,
         direction: parsed.data.direction,
-        cursor,
+        cursor: startCursor.cursor,
+        cursorOrigin: startCursor.origin,
+        cursorSourceRunId: startCursor.sourceRunId,
         triggeredBy: parsed.data.triggeredBy ?? auth.sub,
         batchSize: parsed.data.batchSize,
         parameters: Object.keys(normalizedParameters.values).length > 0

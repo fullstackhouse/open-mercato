@@ -1,10 +1,11 @@
 import { OptionalProps } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy'
+import type { CursorOrigin } from '../lib/adapter'
 
 @Entity({ tableName: 'sync_runs' })
 @Index({ properties: ['integrationId', 'entityType', 'status', 'organizationId', 'tenantId'] })
 export class SyncRun {
-  [OptionalProps]?: 'status' | 'cursor' | 'initialCursor' | 'createdCount' | 'updatedCount' | 'skippedCount' | 'failedCount' | 'batchesCompleted' | 'lastError' | 'progressJobId' | 'jobId' | 'triggeredBy' | 'parameters' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'status' | 'cursor' | 'initialCursor' | 'cursorOrigin' | 'cursorSourceRunId' | 'createdCount' | 'updatedCount' | 'skippedCount' | 'failedCount' | 'batchesCompleted' | 'lastError' | 'progressJobId' | 'jobId' | 'triggeredBy' | 'parameters' | 'createdAt' | 'updatedAt' | 'deletedAt'
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
@@ -25,6 +26,25 @@ export class SyncRun {
 
   @Property({ name: 'initial_cursor', type: 'text', nullable: true })
   initialCursor?: string | null
+
+  /**
+   * Where {@link initialCursor} came from. Written once at run creation, never mutated — it is a
+   * fact about how the run started, not about where it has got to. Null on runs written before
+   * provenance shipped, which the engine reports to adapters as an absent origin rather than a guess.
+   */
+  @Property({ name: 'cursor_origin', type: 'text', nullable: true })
+  cursorOrigin?: CursorOrigin | null
+
+  /**
+   * The run {@link initialCursor} was taken from, when it came from a run at all. Null for a cursor
+   * read from the shared `sync_cursors` row and for runs that started from nothing.
+   *
+   * Deliberately a bare uuid rather than a foreign key, matching `progress_job_id`: a run row is an
+   * append-only operational record, and a FK would make run-retention deletion order-dependent for a
+   * column read only to render a link.
+   */
+  @Property({ name: 'cursor_source_run_id', type: 'uuid', nullable: true })
+  cursorSourceRunId?: string | null
 
   @Property({ name: 'created_count', type: 'int', default: 0 })
   createdCount: number = 0

@@ -30,6 +30,36 @@ export interface DataMapping {
   matchField?: string
 }
 
+/**
+ * Where the cursor an adapter is being handed actually came from.
+ *
+ * A cursor alone cannot answer this. A fresh dashboard start that silently resumed the last
+ * incomplete run arrives byte-for-byte identical to a Retry that was told to resume, because both
+ * carry a cursor and the previous run's parameters. For an adapter whose cursor encodes SCOPE —
+ * filters, id/date bounds, dry-run flags — and not just a position, the difference decides whether
+ * the run is correct: an inherited cursor imposes a stranger run's window, and the run finishes
+ * `completed` having skipped everything outside it.
+ *
+ * - `none` — no cursor; start from the beginning.
+ * - `explicit` — the caller supplied this cursor deliberately: a Retry resuming the previous run's
+ *   own position, or a provider flow that computed one.
+ * - `inherited` — core resolved it from prior state the caller never named: the shared
+ *   `sync_cursors` row, or the last incomplete run.
+ * - `self` — this run's OWN committed progress, handed back after a queue redelivery.
+ *
+ * `self` exists so that refusing an inherited cursor does not also refuse a legitimate resume. The
+ * engine hands over `run.cursor`, not `run.initialCursor`, so once a batch has committed the cursor
+ * is the adapter's own output whatever the run started from. Without `self`, an adapter that
+ * rejected `inherited` would restart from the top on every worker hiccup.
+ *
+ * An absent field means a run created before provenance shipped, or a caller that supplied nothing.
+ * Adapters that ignore this field behave exactly as they do today.
+ *
+ * `inherited` does not say WHICH prior state it came from. Read the run's `cursorSourceRunId` for
+ * that: set for the previous-run case, null when it came from the shared `sync_cursors` row.
+ */
+export type CursorOrigin = 'none' | 'explicit' | 'inherited' | 'self'
+
 export interface StreamImportInput {
   entityType: string
   cursor?: string
@@ -66,6 +96,13 @@ export interface StreamImportInput {
    * aborting here stops the generator, not anything already queued elsewhere.
    */
   signal?: AbortSignal
+  /**
+   * Provenance of {@link StreamImportInput.cursor} on THIS delivery. See {@link CursorOrigin}.
+   *
+   * Absent when the run predates provenance, so treat it as "unknown" rather than as any particular
+   * origin.
+   */
+  cursorOrigin?: CursorOrigin
 }
 
 export interface ImportItem {
@@ -111,6 +148,8 @@ export interface StreamExportInput {
   parameters?: Record<string, RunParameterValue>
   /** Aborted when the run is cancelled — see {@link StreamImportInput.signal}. */
   signal?: AbortSignal
+  /** Provenance of the cursor on this delivery — see {@link StreamImportInput.cursorOrigin}. */
+  cursorOrigin?: CursorOrigin
 }
 
 export interface ExportItemResult {
