@@ -8,6 +8,7 @@ const mockEnqueue = jest.fn()
 const mockSyncRunService = {
   findRunningOverlap: jest.fn(),
   resolveCursor: jest.fn(),
+  resolveResumeCursorWithSource: jest.fn(),
   createRun: jest.fn(),
 }
 
@@ -80,6 +81,7 @@ describe('data-sync scheduled worker', () => {
     mockIntegrationStateService.isEnabled.mockResolvedValue(true)
     mockSyncRunService.findRunningOverlap.mockResolvedValue(null)
     mockSyncRunService.resolveCursor.mockResolvedValue('cursor-1')
+    mockSyncRunService.resolveResumeCursorWithSource.mockResolvedValue({ cursor: null, runId: null })
     mockSyncRunService.createRun.mockImplementation(async (input: { progressJobId?: string | null }) => ({
       id: 'run-1',
       progressJobId: input.progressJobId ?? null,
@@ -107,6 +109,10 @@ describe('data-sync scheduled worker', () => {
     expect(createRunInput.progressJobId).toBe('progress-1')
     expect(createRunInput.triggeredBy).toBe('scheduler')
     expect(createRunInput.cursor).toBe('cursor-1')
+    // A schedule has no operator watching it choose a start position, so recording that the
+    // position was inherited is the only trace of why the run began where it did.
+    expect(createRunInput.cursorOrigin).toBe('inherited')
+    expect(createRunInput.cursorSourceRunId).toBeNull()
   })
 
   it('enqueues the import job with a tenant/organization-scoped payload', async () => {
@@ -228,6 +234,8 @@ describe('data-sync scheduled worker', () => {
     expect(mockGetSyncQueue).toHaveBeenCalledWith('data-sync-export')
     const createRunInput = mockSyncRunService.createRun.mock.calls[0][0]
     expect(createRunInput.cursor).toBeNull()
+    expect(createRunInput.cursorOrigin).toBe('none')
+    expect(createRunInput.cursorSourceRunId).toBeNull()
   })
 
   it('skips disabled schedules without creating a run', async () => {

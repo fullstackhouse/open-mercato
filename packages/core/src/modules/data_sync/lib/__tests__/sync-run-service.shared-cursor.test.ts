@@ -225,6 +225,67 @@ describe('SyncRunService.resolveResumeCursor', () => {
   })
 })
 
+/**
+ * The run id is what turns "this run started mid-table" into "this run is continuing run X" on the
+ * detail page, and it is the half of provenance the shared-cursor branch cannot supply.
+ */
+describe('SyncRunService.resolveResumeCursorWithSource', () => {
+  beforeEach(() => {
+    ;(findOneWithDecryption as jest.Mock).mockReset()
+    ;(findWithDecryption as jest.Mock).mockReset().mockResolvedValue([])
+  })
+
+  it('names the run a resumed cursor came from', async () => {
+    const em = buildFakeEm()
+    ;(findWithDecryption as jest.Mock).mockResolvedValue([
+      { id: 'run-earlier', status: 'failed', cursor: 'interrupted-cursor' },
+    ])
+
+    const service = createSyncRunService(em as any)
+
+    await expect(service.resolveResumeCursorWithSource('sync_backfill', 'catalog.product', 'import', SCOPE))
+      .resolves.toEqual({ cursor: 'interrupted-cursor', runId: 'run-earlier' })
+  })
+
+  it('returns no run when the latest run completed', async () => {
+    const em = buildFakeEm()
+    ;(findWithDecryption as jest.Mock).mockResolvedValue([
+      { id: 'run-done', status: 'completed', cursor: 'finished-walk-cursor' },
+    ])
+
+    const service = createSyncRunService(em as any)
+
+    await expect(service.resolveResumeCursorWithSource('sync_backfill', 'catalog.product', 'import', SCOPE))
+      .resolves.toEqual({ cursor: null, runId: null })
+  })
+
+  /**
+   * An interrupted run that never committed anything has no position to hand over, so naming it
+   * would point an operator at a run that contributed nothing to where this one starts.
+   */
+  it('returns no run when the interrupted run holds no cursor', async () => {
+    const em = buildFakeEm()
+    ;(findWithDecryption as jest.Mock).mockResolvedValue([
+      { id: 'run-empty', status: 'failed', cursor: null },
+    ])
+
+    const service = createSyncRunService(em as any)
+
+    await expect(service.resolveResumeCursorWithSource('sync_backfill', 'catalog.product', 'import', SCOPE))
+      .resolves.toEqual({ cursor: null, runId: null })
+  })
+
+  it('returns no run when the entity type has never run', async () => {
+    const em = buildFakeEm()
+    ;(findWithDecryption as jest.Mock).mockResolvedValue([])
+
+    const service = createSyncRunService(em as any)
+
+    await expect(service.resolveResumeCursorWithSource('sync_backfill', 'catalog.product', 'import', SCOPE))
+      .resolves.toEqual({ cursor: null, runId: null })
+  })
+})
+
 describe('SyncRunService.resetResumePosition', () => {
   beforeEach(() => {
     ;(findOneWithDecryption as jest.Mock).mockReset()
