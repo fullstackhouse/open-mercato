@@ -163,7 +163,7 @@ caller of the fence in-tree; external callers passing a bare number in that slot
 | # | Failure scenario | Severity | Affected area | Mitigation | Residual risk |
 |---|---|---|---|---|---|
 | 1 | A reset deletes the shared row for an opted-out entity type, which does not exist, and the next incremental run resumes from a stale mid-walk cursor — re-importing only the tail | High | Adapter reset flows | `resetResumePosition` ships and the one in-tree reset flow calls it; documented as a MUST in the module `AGENTS.md` and the framework docs | A third-party reset flow that deletes `SyncCursor` directly and does not call it stays exposed. Nothing in code forces the pairing |
-| 2 | `resolveResumeCursor` resumes from a `paused` or `cancelled` run whose window differs from what the caller now intends (e.g. a narrowed backfill), so the new run inherits the old run's scan window | Medium | Opted-out entity types | `fullSync` starts from `null`; a `completed` latest run also yields `null`, so only a genuinely interrupted run is inherited | Real. Resuming an interrupted run is the intended behaviour, but "interrupted with a different window" is indistinguishable from "interrupted with the same window" without a window fingerprint on the run row |
+| 2 | `resolveResumeCursor` resumes from a `paused` or `cancelled` run whose window differs from what the caller now intends (e.g. a narrowed backfill), so the new run inherits the old run's scan window | Medium | Opted-out entity types | `fullSync` starts from `null`; a `completed` latest run also yields `null`, so only a genuinely interrupted run is inherited. `.ai/specs/2026-08-31-data-sync-cursor-provenance.md` adds `cursorOrigin` + `cursorSourceRunId`, so an adapter can tell an inherited cursor from an explicit one and refuse the former | Reduced to the adapter's own judgement. Provenance makes the two cases distinguishable without a window fingerprint, but core still cannot tell "interrupted with a different window" from "interrupted with the same window" — an adapter that wants that distinction must encode it in its own cursor |
 | 3 | An adapter's `persistsSharedCursor` disagrees between the write path (engine) and the read path (start paths) — e.g. two provider-key resolutions drift | Medium | All opted-out entity types | Both paths resolve the adapter through the single `resolveAdapterForIntegration` in `adapter-registry.ts` | Low; a non-deterministic predicate (reading mutable state) could still disagree between calls |
 | 4 | An external caller passes a bare number as `commitBatchProgress`'s fifth argument after the fence moved into the options object | Low | External adapters | TypeScript rejects it at compile time | Only untyped/`any` call sites are affected, and they would have to be fencing manually |
 | 5 | An opted-out entity type accumulates run rows and `resolveResumeCursor` sorts by `created_at`, which the `SyncRun` index does not cover | Low | Query performance | The leading indexed columns narrow the scan and only one row is fetched per run start | Negligible at realistic run-history sizes; worth revisiting if run retention grows large per entity type |
@@ -216,6 +216,10 @@ interleave is what this change is about, and the unit tests reproduce it.
 ## Changelog
 
 - 2026-08-12 — implemented.
+- 2026-08-31 — Risk #2's mitigation and residual risk updated: cursor provenance
+  (`.ai/specs/2026-08-31-data-sync-cursor-provenance.md`) makes an inherited cursor distinguishable
+  from an explicit one at the adapter, which is a lighter answer than the window fingerprint this
+  risk originally called for.
 - 2026-08-13 — merged `develop`; folded the ownership fence and the shared-cursor flag into one
   `CursorCommitOptions` object; added `resetResumePosition` and wired the Akeneo reset flow to it;
   deduplicated provider-key resolution into `adapter-registry.ts`; added start-cursor and reset
