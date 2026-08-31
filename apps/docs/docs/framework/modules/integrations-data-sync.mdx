@@ -267,6 +267,58 @@ await em.nativeDelete(SyncCursor, { integrationId, entityType, direction: 'impor
 when nothing was interrupted, so it is safe to call unconditionally, including for entity types that
 do keep the shared row.
 
+## Cursor provenance
+
+Both resolutions above hand the adapter a position the operator never named. That is the intended
+incremental behaviour, and it is invisible: pressing **Run** means *"continue whatever ran last"*.
+
+For a cursor that is purely a position, that is fine. For a cursor that encodes **scope** — filters,
+date or id bounds, a dry-run flag — it is not. A fresh, unfiltered run that inherits a failed run's
+date window walks only that window and still finishes `completed`, having skipped everything outside
+it. And the adapter cannot tell that apart from a Retry that was deliberately told to resume, because
+both arrive carrying a cursor and the previous run's parameters.
+
+So the engine says where the cursor came from:
+
+```ts
+async *streamImport(input: StreamImportInput) {
+  if (input.cursorOrigin === 'inherited') {
+    // This position came from a run nobody in this request asked for. Our cursor pins a scope,
+    // so continuing from it would silently narrow the walk.
+    throw new Error('[internal] refusing an inherited cursor; start a full sync instead')
+  }
+  // ...
+}
+```
+
+| `cursorOrigin` | Meaning |
+|---|---|
+| `none` | No cursor. Start from the beginning. |
+| `explicit` | The caller named this cursor — a Retry resuming the previous run's own position, or a provider flow that computed one. |
+| `inherited` | Core resolved it from prior state the caller never named: the shared `sync_cursors` row, or the last incomplete run. |
+| `self` | This run's own committed progress, handed back after a queue redelivery. |
+
+The field is absent for runs created before provenance shipped, so adapters that ignore it — and
+adapters reading older runs — behave exactly as before.
+
+**`self` is why refusing `inherited` is safe.** The engine hands over `run.cursor`, not
+`initialCursor`, so once a batch has committed, the position is the adapter's own output whatever the
+run started from. A redelivered job would otherwise re-enter the adapter with the run's start-time
+label still attached, and an adapter refusing `inherited` would restart from the top on every worker
+hiccup. `self` is derived from `batchesCompleted`, so the run row records where the run *started*
+while the adapter is told what it is *being handed*.
+
+`inherited` does not say which prior state it came from. `sync_runs.cursor_source_run_id` — returned
+as `cursorSourceRunId` by both run read APIs — names the run for the previous-run case and is `null`
+when the position came from the shared row. The run detail page uses exactly that split to tell an
+operator either *"continued where an earlier run stopped"*, with a link, or *"continued from the
+saved incremental position"*.
+
+Adapters aside, any code that starts a run should label what it resolved. Use
+`resolveStartCursorWithOrigin` rather than the deprecated `resolveStartCursor`, and pass its
+`origin` / `sourceRunId` through to `startDataSyncRun`. A caller that omits them is taken at its
+word: `explicit` when it supplied a cursor, `none` when it did not.
+
 ## Provider-owned environment preconfiguration
 
 New integration providers should not require manual admin setup after every fresh install when deployment already knows the credentials and defaults. The provider package should own that bootstrap path itself.
