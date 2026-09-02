@@ -60,6 +60,14 @@ guard only ever narrows, since core's checks still run first, but it duplicates 
 framework already models elsewhere, it silently misses every attachment endpoint added later, and it
 has to be re-derived by every application with the same need.
 
+The single-request contract leaks inside core too, which is the clearest evidence that "name your
+target at upload time" is the wrong shape: AI chat uploads invent a target, posting
+`entityId: 'ai-chat-draft'` with a minted per-batch UUID as `recordId`
+(`packages/ui/src/ai/upload-adapter.ts:16`; documented in
+`apps/docs/docs/framework/ai-assistant/attachments.mdx:42`), and the CrudForm attachment field
+renders `recordId ?? 'pending'` on create (`attachments/fields/attachment.tsx:98`). Neither caller
+has a target yet; both fake one because the API demands it.
+
 ### The four gaps in core
 
 #### 1. Attachment write routes do not run the mutation-guard registry
@@ -77,9 +85,19 @@ routes — `communication_channels` wraps it in
 `warranty_claims` module calls `runRouteMutationGuards` from a dozen routes. Opting in from a
 hand-written route is an established pattern.
 
+The closest precedent is an attachment write route itself:
+`warranty_claims/api/portal/attachments/route.ts:130` loads the target claim, verifies ownership, and
+calls `runRouteMutationGuards` with the claim as `resourceKind`/`resourceId` — exactly the shape this
+spec proposes, already shipping in core.
+
 The `attachments` module opts into neither guards nor API interceptors. There is no
 `packages/core/src/modules/attachments/data/guards.ts`, and no call to `runRouteMutationGuards`
 anywhere under the module.
+
+**So gap 1 is compliance debt, not novel design.** `packages/core/AGENTS.md` → API Routes already
+mandates that custom write routes wire the mutation-guard contract; `attachments` simply does not.
+Phase 1 brings one module into line with a rule the repository already states and other modules
+already follow — it does not ask maintainers to accept a new mechanism.
 
 **Consequence.** Any app needing per-target rules on attachments must reimplement route matching
 outside the framework, and every endpoint added to the module later silently escapes those rules.
@@ -151,13 +169,95 @@ If deliberate, it deserves a line in the routing docs. If not, it should be tigh
 
 ## Proposed Solution
 
-### Phase 1 — Run mutation guards from attachment write routes
+### Phase 1 — Guard every attachment write by its target
 
-Add `packages/core/src/modules/attachments/lib/routeMutationGuard.ts`, a small module-local helper in
-the shape of the `communication_channels` one, and call it from every write route **after** the
-target is parsed and **before** the write:
+#### 1a. The dispatch collision, and the `surface` discriminator
 
-| Route | `resourceKind` | `resourceId` | `operation` |
+The registry selects guards on a **single key**: `matchesEntity(guard.targetEntity,
+input.resourceKind)` (`mutation-guard-registry.ts:102`). `makeCrudRoute` puts the *entity being
+written* in `resourceKind` (`factory.ts:1051`, derived from the ORM entity name).
+
+If attachment writes put the **target** entity in that same field, the two meanings collide: a guard
+declaring `targetEntity: 'auth:user'` to mean "who may attach a file to a user" also fires on every
+ordinary update of a user record, and a guard meaning "who may edit this user" fires on attachment
+writes aimed at it. Under the naive design, an app guard reading
+`resourceKind === 'auth:user' && resourceId !== userId → 403` would block an administrator editing
+another user's profile through plain user CRUD.
+
+**Fix — an additive optional discriminator.** Extend the shared registry types:
+
+```ts
+// packages/shared/src/lib/crud/mutation-guard-registry.ts
+export type MutationSurface = 'crud' | 'attachments'
+
+export interface MutationGuardInput {
+  // …existing fields…
+  /** Which write surface raised this mutation. Defaults to 'crud'. */
+  surface?: MutationSurface
+}
+
+export interface MutationGuard {
+  // …existing fields…
+  /** Surfaces this guard applies to. Omitted = every surface (today's semantics). */
+  surfaces?: MutationSurface[]
+}
+```
+
+Dispatch gains one filter: a guard declaring `surfaces` runs only for those surfaces; a guard
+omitting it keeps firing everywhere, so **every existing guard is unaffected** — the optimistic-lock
+floor and the `customer_accounts` domain rules included. Both fields are optional additions to
+existing types, which `BACKWARD_COMPATIBILITY.md` classifies as compatible.
+
+**Payload sniffing is explicitly rejected** as the alternative. Distinguishing the two meanings by
+inspecting `mutationPayload` for attachment-shaped keys makes dispatch depend on request content,
+fails silently when a payload shape changes, and cannot be typed. The discriminator is declared by
+the caller that knows the answer.
+
+> **Note — this takes the spec beyond the attachments module.** The `surface` discriminator is a
+> change to `packages/shared`, i.e. to a contract surface. It is additive and optional, but the
+> claim "no framework changes" no longer holds and the API Contracts table records it.
+
+#### 1b. Where the guard is invoked
+
+Guard calls go behind one module-local helper, `lib/attachmentMutationGuard.ts`, whose signature is
+**target-shaped, not route-shaped**:
+
+```ts
+assertAttachmentTargetWritable({
+  container, req, auth,
+  target: { entityId, recordId },
+  operation: 'create' | 'update' | 'delete',
+  payload,
+})
+```
+
+Nothing in that contract names a route, so the call site can move without the contract changing —
+which matters because the staged-uploads follow-up relocates it (see *Forward compatibility* below).
+
+> **Open point for maintainers.** The review asks for enforcement inside `attachmentService` rather
+> than at route call sites, so a future route cannot forget it. That is the right end state, but
+> **the service is not a choke point today**: `POST /api/attachments` writes directly
+> (`em.create(Attachment, …)` at `api/route.ts:552`, `tx.persist(att).flush()` at `:572`), transfer
+> uses `em.persist(records).flush()` (`api/transfer/route.ts:75`), library delete uses
+> `em.remove(record).flush()` (`api/library/[id]/route.ts:255`), and the only consumer of
+> `attachmentService` in the repo is `packages/documents` through a port. Routing the four write
+> paths through the service is a prerequisite refactor of a 762-line route file that this spec does
+> not currently scope.
+>
+> **On the related question of the upload seam:** this spec deliberately keeps the guard at the
+> upload path as it exists today, rather than aiming it at the future `attach` mutation. The guard
+> contract is location-independent, the Phase 3 organization-scope fix is a live bug that should not
+> wait on a spec with six unresolved questions, and the relocation is mechanical once staged uploads
+> land. Shipping protection sooner wins.
+>
+> This spec is written for the **interim shape**: the helper above, called from the write paths,
+> target-shaped so relocation is mechanical. The alternative — do the service refactor inside this
+> spec — is viable but roughly doubles Phase 1 and touches code the staged-uploads spec will rewrite
+> anyway. Maintainer's call; the guard contract is identical either way.
+
+Call sites and their target resolution:
+
+| Write path | `resourceKind` | `resourceId` | `operation` |
 | --- | --- | --- | --- |
 | `POST /api/attachments` | form `entityId` | form `recordId` | `create` |
 | `DELETE /api/attachments` | loaded record's `entityId` | loaded record's `recordId` | `delete` |
@@ -172,7 +272,10 @@ Design points:
   image by another name; a guard that only sees the destination lets an editor strip an
   organization's logo by moving it away. Run the guard once per end.
 - **The delete routes resolve the target from the stored row**, not from the request, so a caller
-  cannot mis-declare it.
+  cannot mis-declare it. This is the direct fix for a real vulnerability class: Vikunja
+  GHSA-jfmm-mjcp-8wq2 (CVSS 8.1) — *"the permission check validates access to the task specified in
+  the URL, but the handler loads a different attachment that may belong to a task in another
+  project"*.
 - **The upload's guard runs before the blob is written and before quota is reserved**, so a refusal
   leaves no orphaned storage or reservation.
 - **Guards see the payload.** Pass the parsed non-file form fields (and the transfer body) as
@@ -200,6 +303,56 @@ write routes to assemble the registry by hand (`getAllMutationGuardInstances()` 
 `bridgeLegacyGuard()` + `runMutationGuards()`) and never mentions `runRouteMutationGuards`, which
 does exactly that in one call and also resolves `userFeatures`. That omission is why every adopter
 so far has written its own local wrapper. Update the section to point at the helper.
+
+**This is the write-side twin of an existing read-side primitive.** `AttachmentTargetAccessService`
+(`attachments/lib/target-access-service.ts`, DI-registered as `attachmentTargetAccessService` in
+`di.ts:19`, consumed by `warranty_claims` in `ai-tools.ts` and `api/ai/assess/route.ts`) already
+answers "may this caller reach that target?" for reads via `canAccessLinkedTarget`. Writes have no
+equivalent. Phase 1 supplies it through the registry rather than by growing a second bespoke service.
+
+#### 1c. The guard convention this spec establishes
+
+This is Open Mercato's **first cross-module guard usage** — existing guards are either infrastructure
+(the optimistic-lock floor) or a module policing its own entity — so the convention set here is the
+one every later module copies. State it explicitly:
+
+- **Guards are module-scoped.** Each module ships policy for **its own** entities in its own
+  `data/guards.ts`: `auth` guards `auth:user`, `customers` guards `customers:deal`. A module never
+  ships policy about another module's entities.
+- **`targetEntity: '*'` is reserved for infrastructure** (locking, auditing) — never for domain
+  policy. An app-wide guard switch-boarding over every entity is an anti-pattern: with a hundred
+  modules using attachments it becomes one file containing a hundred modules' rules, which is
+  exactly the unbounded growth this convention exists to prevent.
+- **The blessed primary path for domain flows**, once staged uploads land, is the owning module's
+  own mutation calling the attach operation — which authorizes with that module's RBAC and then runs
+  the same guard dispatch. The generic endpoint plus guards is the **safety net** for generic UI and
+  for user-defined custom entities, which have no module to host an attach endpoint.
+
+#### 1d. What this seam cannot express
+
+Guards **only narrow**. They cannot grant, so "authorize by relationship alone, with no feature at
+all" — a caller holding no `attachments.upload` still being allowed to set their own avatar — stays
+inexpressible here. The realistic cases are covered by granting `attachments.upload` broadly (to
+`employee`, per Phase 2) and letting guards narrow from there; a relationship-only grant needs a
+module-owned route, the shape `warranty_claims` already uses for its portal attachment endpoint.
+
+A tri-state `allow | deny | abstain` policy registry would lift the limitation and was rejected: it
+forces feature checks out of declarative route metadata into handler bodies, which is where
+authorization decisions become invisible to review.
+
+#### 1e. Forward compatibility with staged uploads
+
+The maintainer direction is that a follow-up spec introduces two-phase upload (first-class unattached
+blobs, then an `attach` mutation), matching Stripe, Slack, Shopify and Rails ActiveStorage. Under
+that design **the upload call site moves to the `attach` mutation** — but the guard contract
+(`resourceKind` / `resourceId` / `operation` / `surface`) is location-independent, which is why 1b
+specifies a target-shaped helper. Everything else in this spec — the feature split, organization
+unification, and the delete/transfer guard sites — carries over unchanged.
+
+Two-phase does not remove the target check; it **relocates** it (Slack's `files.completeUploadExternal`
+fails with `posting_to_channel_denied`; Stripe attaches evidence by updating the dispute). So this
+spec is not an alternative to the industry pattern — it builds the authorization seam that pattern
+needs, at the only place the target is currently known.
 
 ### Phase 2 — Split the ACL features
 
@@ -273,6 +426,13 @@ segment comparison in the routing docs, or tighten it to a case-sensitive compar
 release of deprecation notice. Tightening is a FROZEN-surface change (routing behaviour) and needs
 its own spec if chosen.
 
+**Independently of which way that goes**, the routing docs should state that authorization logic
+keyed on a request URL **MUST** resolve the route through the framework's own `matchRoutePattern`
+rather than matching path strings itself. URL-shape-keyed authorization sitting outside the router is
+precisely what gets bypassed — cf. Next.js GHSA-f82v-jwr5-mffw (CVSS 9.1), where middleware-layer
+authorization was bypassed wholesale. That guidance is useful whether or not the comparison changes,
+and it is the part that protects applications today.
+
 ## Architecture
 
 ```
@@ -281,43 +441,60 @@ POST /api/attachments
   parse multipart → entityId, recordId, fieldKey, file
   createRequestContainer()
   orgId = resolveAttachmentOrganizationId(container, auth, req)            ← Phase 3 (everywhere)
-  runAttachmentMutationGuards({ resourceKind: entityId,                    ← Phase 1
-                                resourceId: recordId,
-                                operation: 'create',
-                                mutationPayload: formFields })
+  assertAttachmentTargetWritable({ target: { entityId, recordId },         ← Phase 1
+                                   operation: 'create',
+                                   surface: 'attachments',
+                                   payload: formFields })
     └─ registry: guards from every module's data/guards.ts
        + bridgeLegacyGuard(container)
-       filtered by matchesEntity(targetEntity, entityId), operation, features
+       filtered by matchesEntity(targetEntity, entityId), operation,
+                   surface, features
   assert target within orgId scope                                         ← Phase 3
   quota reserve → storage write → row insert → crud side effects
   runAfterSuccess()
 ```
 
-An application expressing the avatar / organization-logo rule then ships one file:
+Policy lives with the module that owns the entity — **one guard per owned entity, never one
+switchboard over all of them**. The module owning user records ships:
 
 ```ts
-// apps/<app>/src/modules/<module>/data/guards.ts
+// <module owning auth:user>/data/guards.ts
 export const guards: MutationGuard[] = [
   {
-    id: 'app.attachment-target',
-    targetEntity: '*',
+    id: 'auth.user-attachment-target',
+    targetEntity: 'auth:user',
+    surfaces: ['attachments'],          // ← does not fire on ordinary user CRUD
     operations: ['create', 'update', 'delete'],
     priority: 20,
-    async validate({ resourceKind, resourceId, userId, organizationId }) {
-      if (resourceKind === 'auth:user' && resourceId !== userId)
-        return { ok: false, status: 403, message: 'Not your record' }
-      if (resourceKind === 'directory:organization')
-        return (await isAdminOf(userId, resourceId, organizationId))
-          ? { ok: true }
-          : { ok: false, status: 403, message: 'Not an admin of this organization' }
-      return { ok: true }
+    async validate({ resourceId, userId }) {
+      return resourceId === userId
+        ? { ok: true }
+        : { ok: false, status: 403, message: 'Not your record' }
     },
   },
 ]
 ```
 
-and deletes its dispatcher wiring, its route-matching table, its per-request body cache and its
-manifest-drift unit test.
+and, independently, the module owning organizations ships its own guard for
+`targetEntity: 'directory:organization'`. Neither knows about the other; adding a hundred modules
+adds a hundred small guards, not one growing file.
+
+Without `surfaces: ['attachments']` this guard would also fire on every ordinary update of a user
+record and lock administrators out of profile editing — see Phase 1a.
+
+An application adopting this deletes its dispatcher wiring, its route-matching table, its
+per-request body cache and its manifest-drift unit test.
+
+## Alternatives Considered
+
+| Alternative | Why not |
+| --- | --- |
+| **Owner-module attach endpoints only, no guards** | Right as the *primary* path and adopted as such (Phase 1c), but insufficient alone: user-defined custom entities have no module to host an endpoint, the shared attachment UI is generic over all entities, and the frozen generic endpoint stays alive either unguarded (the Vikunja IDOR class) or admin-locked (the under-grant this spec exists to fix). |
+| **A dedicated `AttachmentTargetPolicy` interface** | Collision-free by construction, but duplicates ~90% of the registry (matching, priority, feature gating, after-success), adds a second frozen contract surface with the same job, and contradicts the standing mandate in `packages/core/AGENTS.md` to wire custom write routes through the guard contract. |
+| **Payload sniffing instead of a `surface` field** | Makes dispatch depend on request content, fails silently when a payload shape changes, cannot be typed, and hides the decision from review. The caller knows which surface it is; it should say so. |
+| **Tri-state `allow \| deny \| abstain` policy registry** | Would lift the deny-only limitation (Phase 1d), but forces feature checks out of declarative route metadata into handler bodies, making authorization decisions invisible where reviewers look for them. |
+| **Central policy engine / ReBAC (Zanzibar-style)** | Wrong weight class for one module's target check; introduces a new subsystem, its own consistency model and a migration for every existing guard. |
+| **Two-phase upload now, instead of this spec** | Two-phase relocates the target check rather than removing it, so it needs this seam regardless. Sequenced the other way there is exactly one behaviour change ever (the Phase 3 organization fix, required under any design) and the staged-upload work lands additively on top. |
 
 ## Data Models
 
@@ -334,6 +511,7 @@ already carry everything the guards need.
 | `POST /api/attachments/transfer` | guard runs on both ends; scope from selected org | additive + behaviour change |
 | `/api/attachments/partitions` | write methods move to `attachments.partitions.manage` (legacy `attachments.manage` still accepted for one minor) | additive |
 | `attachments.upload`, `attachments.delete`, `attachments.partitions.manage` | new ACL feature ids | ADDITIVE-ONLY, per contract |
+| `MutationGuardInput.surface`, `MutationGuard.surfaces` (`packages/shared`) | new optional fields on the guard registry types; omitting them preserves today's fire-on-every-surface dispatch | additive optional fields on existing types — compatible per `BACKWARD_COMPATIBILITY.md`; **this spec therefore changes a shared contract surface, not only the attachments module** |
 
 ## Risks & Impact Review
 
@@ -343,7 +521,8 @@ already carry everything the guards need.
 | R2 | Phase 2 narrowing locks an operator out because their role holds only the legacy `attachments.manage` | High | RBAC | Legacy id keeps working on every route for ≥1 minor; `attachments.*` wildcard grants cover the new ids; `setup.ts` reconciler adds them | An app that hard-coded the exact grant list and disabled seeding must update |
 | R3 | Guard added to the upload path after the blob is written would orphan storage/quota on refusal | High | storage/quota | Guard call placed before quota reservation and driver write; integration test asserts no row **and** no stored object after a refusal | — |
 | R4 | Transfer guarded on one end only lets a caller strip a privileged image by moving it away | High | authorization | Guard runs for both source and destination record ids; integration test for the move-away case | — |
-| R5 | A future attachment write route is added without a guard call, silently escaping app rules | Medium | maintainability | Route-level helper is the only sanctioned write path; unit test enumerates write routes from the generated manifest and fails if one has no guard call. **Not hypothetical:** #3312 reports the same omission in `sync_excel`, in a route that also creates an attachment | A route added outside the module still escapes; the general fix is the follow-up below |
+| R5 | A future attachment write route is added without a guard call, silently escaping app rules | Medium | maintainability | The target-shaped helper is the only sanctioned write path; unit test enumerates write routes from the generated manifest and fails if one has no guard call. **Not hypothetical:** #3312 reports the same omission in `sync_excel`, in a route that also creates an attachment. Moving enforcement inside `attachmentService` would retire this risk structurally rather than by test — see the open point in Phase 1b | Until the service is a genuine choke point, the manifest test is the only backstop |
+| R8 | A guard written for the `crud` surface fires on attachment writes (or vice versa), blocking legitimate edits | High | authorization | The `surface` discriminator (Phase 1a); guards that omit `surfaces` keep today's semantics, so the risk exists only for guards that opt in and mis-declare; unit test asserts an `auth:user` attachment guard does **not** fire on plain user CRUD | — |
 | R6 | Guard resolution adds a per-upload RBAC lookup (`resolveRouteUserFeatures`) | Low | performance | One lookup per request, already paid by every CRUD route; skipped entirely when no guard matches the entity | — |
 | R7 | Phase 3 widens what a library route can see (selected org may differ from home org) | Medium | tenancy | `resolveOrganizationScopeForRequest` is RBAC-validated — the selection is rejected if inaccessible; integration test asserts a cross-tenant selection is refused | — |
 
@@ -358,7 +537,10 @@ Unit (`packages/core/src/modules/attachments/api/__tests__/`):
 - legacy `attachments.manage` still authorizes each newly-split route;
 - `resolveAclDependencyDiagnostics` reports no `unknownReferences` for the module's own ids (#2152);
 - `selfOwnedUserAttachmentGuard` permits a user's own `auth:user` record and refuses a foreign one,
-  and is absent from the registry unless explicitly registered.
+  and is absent from the registry unless explicitly registered;
+- a guard declaring `surfaces: ['attachments']` fires on an attachment write against `auth:user` and
+  does **not** fire on an ordinary `auth:user` CRUD update — and a guard omitting `surfaces` fires on
+  both, proving the discriminator is backwards compatible.
 
 Integration (`packages/core/src/modules/attachments/__integration__/`):
 - a guard refusing `auth:user` for a foreign record produces `403` on upload, delete, library delete
@@ -379,8 +561,12 @@ Integration (`packages/core/src/modules/attachments/__integration__/`):
 ### Beyond attachments
 
 The defect is not attachment-specific: `makeCrudRoute` enforces the registry, a hand-written write
-route enforces it only if its author remembered. Core carries roughly 270 hand-written write routes
-and three modules currently call the registry. #3312 is the same omission in `sync_excel`.
+route enforces it only if its author remembered. Counting `route.ts` files under
+`packages/core/src/modules` that export a `POST`/`PUT`/`PATCH`/`DELETE` handler: **269 such files,
+of which 35 reference the guard registry**, spread over six modules (`warranty_claims` 16,
+`communication_channels` 13, `sales` 2, `eudr` 2, `push_notifications` 1, `configs` 1) — attachments
+zero. (Counts differ with scope: including every workspace package raises the denominator. The
+method above is stated so the figure can be reproduced.) #3312 is the same omission in `sync_excel`.
 
 A general fix is deliberately **not** in this spec — the mechanism already exists and is sound, so
 what is missing is enforcement, and enforcement touches every one of those routes. That belongs in
@@ -407,6 +593,20 @@ module's own routes.
 
 - 2026-08-31 — Spec drafted from an application-level report of the gap, grounded against
   `packages/core/src/modules/attachments` at commit `7f871e603`. Not yet implemented.
+- 2026-09-01 — Maintainer review round (fork PR #117). Fixed a design defect: attachment writes and
+  ordinary CRUD writes collided on `resourceKind`, so Phase 1a adds the additive optional `surface` /
+  `surfaces` discriminator to the shared registry types — which takes this spec beyond the
+  attachments module onto a shared contract surface. Phase 1 restructured: target-shaped helper
+  (relocatable when staged uploads land), the module-scoped guard convention this spec establishes as
+  precedent, the deny-only limitation named, forward-compatibility with two-phase upload, and the
+  read-side twin `AttachmentTargetAccessService`. Architecture example rewritten from an app-wide
+  `'*'` switchboard to per-entity module-owned guards. Added "Alternatives considered"; strengthened
+  Phase 4 with the "URL-keyed authz must use `matchRoutePattern`" mandate; cited Vikunja
+  GHSA-jfmm-mjcp-8wq2 and Next.js GHSA-f82v-jwr5-mffw; added the in-repo evidence that the
+  single-request contract leaks (`ai-chat-draft`, `recordId ?? 'pending'`); added risk R8; corrected
+  the registry-adoption count from "three modules" to 35 files across six modules, with the counting
+  method stated. Open point recorded for maintainers: enforcement inside `attachmentService` requires
+  a prerequisite refactor, since the service is not a choke point today.
 - 2026-09-01 — Surveyed open upstream issues/PRs and added "Related upstream work" (#4717, #2152,
   #3312, #5726). Phase 2 absorbs #2152's `dependsOn` declarations and acceptance criteria; Phase 1
   gains the opt-in `selfOwnedUserAttachmentGuard` and an `AGENTS.md` fix pointing custom write
