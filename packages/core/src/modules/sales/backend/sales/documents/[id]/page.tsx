@@ -4284,6 +4284,12 @@ export default function SalesDocumentDetailPage({
     if (activeTab === 'items') {
       return (
         <SalesDocumentItemsSection
+          // Remounted when the mode flips, because leaving `external` rewrites
+          // every line's net, gross, tax and discount on the server. The section
+          // loads its lines once per `documentId` and that id does not change
+          // here, so without a new key the rows keep the pre-switch figures while
+          // the totals card beside them already shows the recomputed ones.
+          key={`items:${amountsAreExternal ? 'external' : 'computed'}`}
           documentId={record.id}
           kind={kind}
           currencyCode={record.currencyCode ?? null}
