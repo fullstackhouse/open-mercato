@@ -122,6 +122,10 @@ function buildHarness(options: { orders?: Row[]; lines?: Row[]; adjustments?: Ro
     commit: async () => undefined,
     rollback: async () => undefined,
     getReference: (_entity: unknown, id: unknown) => ({ id }),
+    // Reached only by the undo path that finds the order still present: it drops
+    // the old line rows and evicts them from the identity map before writing the
+    // snapshot's back.
+    getUnitOfWork: () => ({ unsetIdentity: () => undefined }),
   }
 
   encryptionMocks.findOneWithDecryption.mockImplementation(async () => order)
@@ -570,6 +574,49 @@ describe('undo — the mode and the amounts move together', () => {
     const [line] = persistedLines(restore.persisted)
     expect(line.amountsMode).toBe('external')
     expect(num(line.totalNetAmount)).toBeCloseTo(12.98, 4)
+  })
+
+  it('puts the mode back on a row the undo does not have to re-create', async () => {
+    // The case above restores into an empty harness, so `restoreOrderGraph` takes
+    // its `if (!order)` branch and sets the mode while creating the row. Undoing a
+    // mode switch never does: the order still exists, so the restore runs through
+    // `applyOrderSnapshot` instead. The lines are deleted and re-created either
+    // way, so an order left behind on `computed` is the mixed document § 1 forbids
+    // — and the next write to any sibling line would rebuild the header the undo
+    // just restored.
+    const { ctx } = buildHarness({
+      orders: [storedExternalOrder()],
+      lines: [storedExternalLine(LINE_ONE_ID, 1)],
+    })
+
+    const prepared = (await commandRegistry.get('sales.orders.update')!.prepare?.(
+      { id: ORDER_ID, amountsMode: 'computed' } as never,
+      ctx,
+    )) as { before?: unknown }
+
+    // The row as the switch leaves it: mode dropped, header rebuilt from the line.
+    const switched = storedExternalOrder({
+      totalsMode: 'computed',
+      grandTotalNetAmount: '12.98',
+      grandTotalGrossAmount: '15.97',
+    })
+    const restore = buildHarness({
+      orders: [switched],
+      lines: [storedExternalLine(LINE_ONE_ID, 1, { amountsMode: 'computed' })],
+    })
+
+    await commandRegistry.get('sales.orders.update')!.undo?.({
+      logEntry: { payload: { undo: { before: prepared.before } } },
+      ctx: restore.ctx,
+    } as never)
+
+    // Asserted on the stored row itself: this path mutates the order in place
+    // rather than persisting a new one, so `persistedOrder` would not see it.
+    expect(switched.totalsMode).toBe('external')
+    expect(num(switched.grandTotalGrossAmount)).toBeCloseTo(31.92, 4)
+
+    const [line] = persistedLines(restore.persisted)
+    expect(line.amountsMode).toBe('external')
   })
 })
 

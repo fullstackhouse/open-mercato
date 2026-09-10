@@ -4130,6 +4130,14 @@ function applyOrderSnapshot(
     ? cloneJson(snapshot.totalsSnapshot)
     : null;
   order.lineItemCount = snapshot.lineItemCount;
+  // Restored with the amounts above, never separately. The header the snapshot
+  // carries is only meaningful under the mode that produced it: put it back on a
+  // document that has since flipped to `computed` and the badge, the line editor
+  // and the next sibling write all disagree with the figures now stored — and
+  // that write recalculates them away. The line rows restore `amountsMode` on
+  // the same principle, so leaving this out is also what makes a mixed document,
+  // which § 1's invariant forbids.
+  order.totalsMode = snapshot.totalsMode ?? "computed";
 }
 
 async function restoreQuoteGraph(
