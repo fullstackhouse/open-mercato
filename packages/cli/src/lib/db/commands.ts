@@ -456,13 +456,13 @@ export async function dischargeQueryIndexReindexRequests(
   if (!applied.length || !isMigrationReindexEnabled()) return
 
   try {
-    const entityTypes = await collectQueryIndexReindexEntityTypes(applied, {
+    const declared = await collectQueryIndexReindexEntityTypes(applied, {
       importModule: dynamicImportProvider,
       onWarn: (message) => console.warn(message),
     })
-    if (!entityTypes.length) return
+    if (!declared.entityTypes.length) return
 
-    await requestQueryIndexReindex(entityTypes, {
+    await requestQueryIndexReindex(declared.entityTypes, {
       createContainer: async () => {
         const { createRequestContainer } = await import('@open-mercato/shared/lib/di/container')
         return (await createRequestContainer()) as any
@@ -471,6 +471,27 @@ export async function dischargeQueryIndexReindexRequests(
         if (!QUIET_MODE) console.log(message)
       },
       onWarn: (message) => console.warn(message),
+    }, {
+      target: declared.target,
+      // Resolved from the projection table rather than the module list: a `'*'` declaration means
+      // "whatever this install actually indexes", which the enabled-module set over-states.
+      resolveAllEntityTypes: async () => {
+        const { createRequestContainer } = await import('@open-mercato/shared/lib/di/container')
+        const container = await createRequestContainer()
+        try {
+          const em = container.resolve('em') as { getKysely: () => any }
+          const rows = await em.getKysely()
+            .selectFrom('entity_indexes')
+            .select('entity_type')
+            .distinct()
+            .execute()
+          return (rows as Array<{ entity_type?: unknown }>)
+            .map((row) => (typeof row.entity_type === 'string' ? row.entity_type : null))
+            .filter((entityType): entityType is string => !!entityType)
+        } finally {
+          if (typeof (container as any)?.dispose === 'function') await (container as any).dispose()
+        }
+      },
     })
   } catch (error) {
     console.warn(

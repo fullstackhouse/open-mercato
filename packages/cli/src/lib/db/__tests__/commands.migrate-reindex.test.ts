@@ -5,13 +5,13 @@ import { MikroORM } from '@mikro-orm/core'
 import { dbMigrate } from '../commands'
 import type { ModuleEntry, PackageResolver } from '../../resolver'
 
-const collectQueryIndexReindexEntityTypes = jest.fn<Promise<string[]>, [any, any]>()
-const requestQueryIndexReindex = jest.fn<Promise<{ requested: string[]; queued: boolean }>, [any, any]>()
+const collectQueryIndexReindexEntityTypes = jest.fn<Promise<{ entityTypes: string[]; target: 'all' | 'search' }>, [any, any]>()
+const requestQueryIndexReindex = jest.fn<Promise<{ requested: string[]; queued: boolean }>, [any, any, any]>()
 const isMigrationReindexEnabled = jest.fn<boolean, []>()
 
 jest.mock('../migration-reindex', () => ({
   collectQueryIndexReindexEntityTypes: (...args: any[]) => collectQueryIndexReindexEntityTypes(...(args as [any, any])),
-  requestQueryIndexReindex: (...args: any[]) => requestQueryIndexReindex(...(args as [any, any])),
+  requestQueryIndexReindex: (...args: any[]) => requestQueryIndexReindex(...(args as [any, any, any])),
   isMigrationReindexEnabled: () => isMigrationReindexEnabled(),
 }))
 
@@ -96,7 +96,7 @@ describe('dbMigrate discharges query-index reindex declarations', () => {
     requestQueryIndexReindex.mockReset()
     isMigrationReindexEnabled.mockReset()
     isMigrationReindexEnabled.mockReturnValue(true)
-    collectQueryIndexReindexEntityTypes.mockResolvedValue(['customers:customer_dictionary_entry'])
+    collectQueryIndexReindexEntityTypes.mockResolvedValue({ entityTypes: ['customers:customer_dictionary_entry'], target: 'all' })
     requestQueryIndexReindex.mockResolvedValue({
       requested: ['customers:customer_dictionary_entry'],
       queued: true,

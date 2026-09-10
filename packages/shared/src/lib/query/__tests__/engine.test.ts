@@ -1,13 +1,11 @@
 import { BasicQueryEngine } from '../engine'
 import { SortDir } from '../types'
 import { registerModules } from '../../i18n/server'
-import { clearSearchTokenPresenceCache } from '../../search/availability'
 import { clearEncryptedLikeFieldsCache, clearColumnExistsCache, columnExistsCacheSize } from '../engine'
 
 // The token-presence answer is cached process-wide (TTL); without clearing it,
 // probe-count assertions would observe hits from earlier tests in this file.
 beforeEach(() => {
-  clearSearchTokenPresenceCache()
   clearEncryptedLikeFieldsCache()
   clearColumnExistsCache()
 })
@@ -434,7 +432,7 @@ describe('BasicQueryEngine (Kysely)', () => {
     expect(hasEqualityFilter).toBe(true)
   })
 
-  test('customFieldSources equality filters stay exact when search tokens are available', async () => {
+  test('customFieldSources equality filters stay exact when search is active', async () => {
     const fakeDb = createFakeKysely({
       customer_entities: [],
       customer_people: [],
@@ -447,7 +445,7 @@ describe('BasicQueryEngine (Kysely)', () => {
       ],
     })
     const engine = new BasicQueryEngine({} as any, () => fakeDb as any)
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('customers:customer_entity', {
       tenantId: 't1',
@@ -466,9 +464,9 @@ describe('BasicQueryEngine (Kysely)', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    // When search tokens are available, equality filters on joined fields should stay exact
-    // (not use tokenized matching) and route through EXISTS subquery
-    expect(applySearchTokensSpy).not.toHaveBeenCalled()
+    // Equality filters on joined fields stay exact (not routed through trigram containment)
+    // and go through the EXISTS subquery
+    expect(applySearchTrigramsSpy).not.toHaveBeenCalled()
     const baseCall = fakeDb._calls.find((b: any) => b._ops.table === 'customer_entities')
     expect(baseCall).toBeTruthy()
     // The join subquery that the parent whereExists wraps MUST still target customer_people
@@ -492,7 +490,7 @@ describe('BasicQueryEngine (Kysely)', () => {
       ],
     })
     const engine = new BasicQueryEngine({} as any, () => fakeDb as any)
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('customers:customer_entity', {
       tenantId: 't1',
@@ -511,7 +509,7 @@ describe('BasicQueryEngine (Kysely)', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    expect(applySearchTokensSpy).not.toHaveBeenCalled()
+    expect(applySearchTrigramsSpy).not.toHaveBeenCalled()
     const baseCall = fakeDb._calls.find((b: any) => b._ops.table === 'customer_entities')
     expect(baseCall).toBeTruthy()
     const existsFilter = baseCall._ops.wheres.find((w: any) => Array.isArray(w) && w[0] === 'exists')
@@ -524,14 +522,10 @@ describe('BasicQueryEngine (Kysely)', () => {
     expect(hasEqualityFilter).toBe(true)
   })
 
-  test('uses search tokens for index document fields on base entities', async () => {
-    const fakeDb = createFakeKysely({
-      todos: [],
-      search_tokens: [{ one: 1 }],
-      'information_schema.tables': [{ table_name: 'search_tokens' }],
-    })
+  test('uses trigram containment for index document fields on base entities', async () => {
+    const fakeDb = createFakeKysely({ todos: [] })
     const engine = new BasicQueryEngine({} as any, () => fakeDb as any)
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('example:todo', {
       tenantId: 't1',
@@ -543,16 +537,7 @@ describe('BasicQueryEngine (Kysely)', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    const calls = fakeDb._calls as Array<{ _ops: { table: string; wheres: unknown[][] } }>
-    const tableProbe = calls.find((call) =>
-      call._ops.table === 'information_schema.tables' &&
-      call._ops.wheres.some((where) => where[0] === 'table_name' && where[2] === 'search_tokens'))
-    expect(tableProbe).toBeTruthy()
-    const tokenProbe = calls.find((call) =>
-      call._ops.table === 'search_tokens' &&
-      call._ops.wheres.some((where) => where[0] === 'entity_type' && where[2] === 'example:todo'))
-    expect(tokenProbe).toBeTruthy()
-    expect(applySearchTokensSpy).toHaveBeenCalledWith(
+    expect(applySearchTrigramsSpy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         entity: 'example:todo',
@@ -562,18 +547,15 @@ describe('BasicQueryEngine (Kysely)', () => {
     )
   })
 
-  test('bypasses search-token filtering when automatic scope is explicitly disabled', async () => {
+  test('bypasses trigram filtering when automatic scope is explicitly disabled', async () => {
     const fakeDb = createFakeKysely({
       todos: [],
-      'information_schema.tables': [
-        { table_name: 'search_tokens' },
-      ],
       'information_schema.columns': [
         { table_name: 'todos', column_name: 'search_text' },
       ],
     })
     const engine = new BasicQueryEngine({} as any, () => fakeDb as any)
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('example:todo', {
       tenantId: 't1',
@@ -585,9 +567,7 @@ describe('BasicQueryEngine (Kysely)', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    const calls = fakeDb._calls as Array<{ _ops: { table: string } }>
-    expect(calls.some((call) => call._ops.table === 'search_tokens')).toBe(false)
-    expect(applySearchTokensSpy).not.toHaveBeenCalled()
+    expect(applySearchTrigramsSpy).not.toHaveBeenCalled()
     const baseCall = fakeDb._calls.find((builder: any) => builder._ops.table === 'todos')
     expect(baseCall?._ops.wheres).toContainEqual(['todos.search_text', 'ilike', '%avision%'])
   })
@@ -1206,37 +1186,19 @@ describe('BasicQueryEngine (Kysely)', () => {
     ])
   })
 
-  describe('search_tokens coverage probe (#4723 parity)', () => {
+  describe('trigram search needs no availability probe', () => {
     type ProbeDbLog = { _calls: Array<{ _ops: { table: string } }> }
-
-    const countProbes = (fakeDb: ProbeDbLog): number =>
-      fakeDb._calls.filter((call) => call._ops.table === 'search_tokens').length
 
     const buildEngine = (fakeDb: unknown): BasicQueryEngine => new BasicQueryEngine(
       {} as ConstructorParameters<typeof BasicQueryEngine>[0],
       (() => fakeDb) as unknown as NonNullable<ConstructorParameters<typeof BasicQueryEngine>[1]>,
     )
 
-    const buildDb = () => createFakeKysely({
-      users: [],
-      'information_schema.tables': [{ table_name: 'search_tokens' }],
-    })
-
-    test('is skipped when the query carries no like/ilike filter', async () => {
-      const fakeDb = buildDb()
-      const engine = buildEngine(fakeDb)
-
-      await engine.query('auth:user', {
-        tenantId: 't1',
-        organizationId: 'org1',
-        filters: { is_active: { $eq: true } },
-      })
-
-      expect(countProbes(fakeDb)).toBe(0)
-    })
-
-    test('still runs when the query actually searches', async () => {
-      const fakeDb = buildDb()
+    test('a searching query probes neither search_tokens nor information_schema for it', async () => {
+      // The token path needed a table probe plus a per-scope presence probe before it dared emit
+      // a predicate. The trigram column lives on the row the engine already reads, so both are
+      // gone — an un-filled row is simply not found until the queued reindex reaches it.
+      const fakeDb = createFakeKysely({ users: [] })
       const engine = buildEngine(fakeDb)
 
       await engine.query('auth:user', {
@@ -1245,7 +1207,9 @@ describe('BasicQueryEngine (Kysely)', () => {
         filters: { email: { $ilike: '%abc%' } },
       })
 
-      expect(countProbes(fakeDb)).toBeGreaterThan(0)
+      const probes = (fakeDb as unknown as ProbeDbLog)._calls
+        .filter((call) => call._ops.table === 'search_tokens')
+      expect(probes).toHaveLength(0)
     })
   })
 })
@@ -1302,39 +1266,28 @@ describe('BasicQueryEngine entity-extension joins', () => {
 })
 
 describe('BasicQueryEngine like/ilike routing by column encryption', () => {
-  // The gate is opt-in: OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS defaults to false and the
-  // legacy rewrite-everything behavior stays. These cases flip it on; the last one pins the
-  // default off.
-  beforeEach(() => {
-    process.env.OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS = 'true'
-  })
-  afterEach(() => {
-    delete process.env.OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS
-  })
-
-  // The token rewrite exists because ILIKE against ciphertext cannot match. On a plaintext
-  // column SQL ILIKE is exact, and the rewrite silently changes the result set: tokenization
-  // splits on non-alphanumerics and drops tokens shorter than minTokenLength, so a
-  // document-number search like "ZK 1/2026" degrades to the tokens {202, 2026} and matches
-  // every record from that year instead of the one document.
-  const fakeDbWithTokens = () => createFakeKysely({
+  // This engine is the fallback for entities the query index does not cover, so a PLAINTEXT base
+  // column keeps exact SQL ILIKE: it is exact, needs no projection row, and is the only thing that
+  // can answer a search on an entity with no `entity_indexes` rows at all. An encrypted column has
+  // no such option (ILIKE against ciphertext matches nothing) and takes the trigram path.
+  // `OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS`, which used to select between these, is gone —
+  // what it switched on is now simply the behaviour.
+  const fakeDbForSearch = () => createFakeKysely({
     customer_entities: [],
-    search_tokens: [{ one: 1 }],
-    'information_schema.tables': [{ table_name: 'search_tokens' }],
     'information_schema.columns': [
       { table_name: 'customer_entities', column_name: 'tenant_id' },
       { table_name: 'customer_entities', column_name: 'display_name' },
     ],
   })
 
-  test('a plaintext base column keeps exact SQL ILIKE even when tokens are available', async () => {
-    const fakeDb = fakeDbWithTokens()
+  test('a plaintext base column keeps exact SQL ILIKE', async () => {
+    const fakeDb = fakeDbForSearch()
     const engine = new BasicQueryEngine(
       {} as any,
       () => fakeDb as any,
       () => ({ getEncryptedFieldNames: async () => [] }) as any,
     )
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('customers:customer_entity', {
       tenantId: 't1',
@@ -1343,7 +1296,7 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    expect(applySearchTokensSpy).not.toHaveBeenCalled()
+    expect(applySearchTrigramsSpy).not.toHaveBeenCalled()
     const baseCall = fakeDb._calls.find((b: any) => b._ops.table === 'customer_entities')
     expect(baseCall).toBeTruthy()
     const ilikeWhere = baseCall._ops.wheres.some(
@@ -1352,13 +1305,13 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
     expect(ilikeWhere).toBe(true)
   })
 
-  test('an encrypted base column still routes through search tokens', async () => {
+  test('an encrypted base column routes through trigram containment', async () => {
     const engine = new BasicQueryEngine(
       {} as any,
-      () => fakeDbWithTokens() as any,
+      () => fakeDbForSearch() as any,
       () => ({ getEncryptedFieldNames: async () => ['display_name'] }) as any,
     )
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('customers:customer_entity', {
       tenantId: 't1',
@@ -1367,15 +1320,15 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    expect(applySearchTokensSpy).toHaveBeenCalled()
+    expect(applySearchTrigramsSpy).toHaveBeenCalled()
   })
 
   test('no service + encryption disabled: nothing is ciphertext, ILIKE stays exact', async () => {
     process.env.TENANT_DATA_ENCRYPTION = 'no'
     try {
-      const fakeDb = fakeDbWithTokens()
+      const fakeDb = fakeDbForSearch()
       const engine = new BasicQueryEngine({} as any, () => fakeDb as any)
-      const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+      const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
       await engine.query('customers:customer_entity', {
         tenantId: 't1',
@@ -1384,7 +1337,7 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
         page: { page: 1, pageSize: 10 },
       })
 
-      expect(applySearchTokensSpy).not.toHaveBeenCalled()
+      expect(applySearchTrigramsSpy).not.toHaveBeenCalled()
       const baseCall = fakeDb._calls.find((b: any) => b._ops.table === 'customer_entities')
       const ilikeWhere = baseCall._ops.wheres.some(
         (w: any) => Array.isArray(w) && String(w[0]).includes('display_name') && w[1] === 'ilike' && w[2] === '%avision%',
@@ -1395,11 +1348,11 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
     }
   })
 
-  test('no service + encryption enabled: the map is unknown, the token rewrite is kept', async () => {
+  test('no service + encryption enabled: the map is unknown, the trigram rewrite is kept', async () => {
     // A swallowed DI failure looks exactly like "no service". Guessing "plaintext" here would
     // run ILIKE against ciphertext (zero rows, silently) -- so the gate stays inert instead.
-    const engine = new BasicQueryEngine({} as any, () => fakeDbWithTokens() as any)
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const engine = new BasicQueryEngine({} as any, () => fakeDbForSearch() as any)
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('customers:customer_entity', {
       tenantId: 't1',
@@ -1408,20 +1361,20 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    expect(applySearchTokensSpy).toHaveBeenCalled()
+    expect(applySearchTrigramsSpy).toHaveBeenCalled()
   })
 
-  test('a camelCase encryption-map entry still routes its column through tokens', async () => {
+  test('a camelCase encryption-map entry still routes its column through trigrams', async () => {
     // Encryption maps may declare `displayName` while the filter carries the column name
     // `display_name` (TenantDataEncryptionService resolves both). A raw name comparison would
     // misread that ciphertext column as plaintext and run ILIKE against ciphertext -- zero rows,
     // silently. The gate must match across name shapes.
     const engine = new BasicQueryEngine(
       {} as any,
-      () => fakeDbWithTokens() as any,
+      () => fakeDbForSearch() as any,
       () => ({ getEncryptedFieldNames: async () => ['displayName'] }) as any,
     )
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
+    const applySearchTrigramsSpy = jest.spyOn(engine as any, 'applySearchTrigrams')
 
     await engine.query('customers:customer_entity', {
       tenantId: 't1',
@@ -1430,29 +1383,7 @@ describe('BasicQueryEngine like/ilike routing by column encryption', () => {
       page: { page: 1, pageSize: 10 },
     })
 
-    expect(applySearchTokensSpy).toHaveBeenCalled()
-  })
-
-  test('with the flag off (default) the token rewrite is kept even for plaintext columns', () => {
-    delete process.env.OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS
-    const fakeDb = fakeDbWithTokens()
-    const engine = new BasicQueryEngine(
-      {} as any,
-      () => fakeDb as any,
-      () => ({ getEncryptedFieldNames: async () => [] }) as any,
-    )
-    const applySearchTokensSpy = jest.spyOn(engine as any, 'applySearchTokens')
-
-    return engine
-      .query('customers:customer_entity', {
-        tenantId: 't1',
-        fields: ['id'],
-        filters: { display_name: { $ilike: '%avision%' } },
-        page: { page: 1, pageSize: 10 },
-      })
-      .then(() => {
-        expect(applySearchTokensSpy).toHaveBeenCalled()
-      })
+    expect(applySearchTrigramsSpy).toHaveBeenCalled()
   })
 })
 

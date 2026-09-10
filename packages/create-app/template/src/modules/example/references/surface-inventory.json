@@ -1444,7 +1444,7 @@
     {
       "capabilityId": "search.module-config",
       "title": "Module search configuration",
-      "description": "`SearchModuleConfig` for one entity: `buildSource` text chunks with `checksumSource`, `formatResult` presenter, `resolveUrl` deep link, per-entity `aclFeatures`, and a `fieldPolicy` whose `searchable` whitelist carries only plaintext columns while the encrypted column is `excluded`. Token search over the encrypted column still works, because `search_tokens` rows are built from the DECRYPTED index doc and are not gated by this policy.",
+      "description": "`SearchModuleConfig` for one entity: `buildSource` text chunks with `checksumSource`, `formatResult` presenter, `resolveUrl` deep link, per-entity `aclFeatures`, and a `fieldPolicy` whose `searchable` whitelist carries only plaintext columns while the encrypted column is `excluded`. Search over the encrypted column still works, because the row's `search_trgm` set is built from the DECRYPTED index doc and is not gated by this policy.",
       "coverageKind": "example",
       "referenceStatus": "canonical",
       "readStatus": "readable",
@@ -1483,7 +1483,7 @@
     {
       "capabilityId": "search.encrypted-column-list-filter",
       "title": "List filtering over an encrypted column through the token index",
-      "description": "Text search over the encrypted `notes` column uses a plain `$ilike`, the SAME shape as the plaintext `title` filter. The query engine intercepts like/ilike and rewrites it into a hashed `search_tokens` lookup when the column is encrypted and search is active (`packages/shared/src/lib/query/engine.ts` → `applyFilterOp`), applying the tenant/organization scope itself via `applySearchTokens`; the index stores hashes of the DECRYPTED value because the indexer runs `decryptIndexDocForSearch` before tokenizing. The lesson this row teaches is that a module must NOT hand-roll an id narrowing for an encrypted column — that duplicates platform behaviour and re-derives a scope the platform already applies. When search is off the engine warns via `warnOnCiphertextLikeFallback` rather than silently matching nothing.",
+      "description": "Text search over the encrypted `notes` column uses a plain `$ilike`, the SAME shape as the plaintext `title` filter. The query engine intercepts like/ilike and rewrites it into keyed trigram containment over `entity_indexes.search_trgm` when the column is encrypted and search is active (`packages/shared/src/lib/query/engine.ts` → `applyFilterOp`), applying the tenant/organization scope itself via `applySearchTrigrams` and rechecking the candidates against the decrypted rows; the index stores hashes of the DECRYPTED value because the indexer runs `decryptIndexDocForSearch` first. The lesson this row teaches is that a module must NOT hand-roll an id narrowing for an encrypted column — that duplicates platform behaviour and re-derives a scope the platform already applies. When search is off the engine warns via `warnOnCiphertextLikeFallback` rather than silently matching nothing.",
       "coverageKind": "example",
       "referenceStatus": "canonical",
       "readStatus": "readable",

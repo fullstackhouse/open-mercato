@@ -17,15 +17,19 @@ const mockSearchTokenWhere = jest.fn().mockImplementation(() => searchTokenQuery
 const mockSearchTokenHaving = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
 const mockSearchTokenGroupBy = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
 const mockSearchTokenSelect = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
+const mockSearchTokenLimit = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
 const searchTokenQueryBuilder: any = {
   select: mockSearchTokenSelect,
   where: mockSearchTokenWhere,
   groupBy: mockSearchTokenGroupBy,
   having: mockSearchTokenHaving,
+  limit: mockSearchTokenLimit,
   execute: mockSearchTokenExecute,
 }
+// The search lookup now reads the trigram column on the projection row; the mock keeps the
+// builder name so the assertions below stay legible about which lookup is which.
 const mockSelectFrom = jest.fn((table: string) => {
-  if (table === 'search_tokens') return searchTokenQueryBuilder
+  if (table === 'entity_indexes') return searchTokenQueryBuilder
   throw new Error(`Unexpected selectFrom ${table}`)
 })
 const mockKysely = { selectFrom: mockSelectFrom }
@@ -274,7 +278,7 @@ describe('GET /api/auth/users', () => {
     expect(mockEm.findAndCount).not.toHaveBeenCalled()
   })
 
-  test('resolves search terms via search_tokens (email column is encrypted) and scopes tokens by tenant', async () => {
+  test('resolves search terms via the trigram index (email column is encrypted) and scopes by tenant', async () => {
     const matchedUserId = '423e4567-e89b-12d3-a456-426614174001'
     mockSearchTokenExecute.mockResolvedValueOnce([{ entity_id: matchedUserId }])
     mockEm.findAndCount.mockResolvedValueOnce([
@@ -294,7 +298,7 @@ describe('GET /api/auth/users', () => {
     const body = await response.json()
 
     expect(response.status).toBe(200)
-    expect(mockSelectFrom).toHaveBeenCalledWith('search_tokens')
+    expect(mockSelectFrom).toHaveBeenCalledWith('entity_indexes')
     const entityTypeCall = mockSearchTokenWhere.mock.calls.find(
       (call: unknown[]) => call[0] === 'entity_type' && call[1] === '=' && call[2] === 'auth:user',
     )
@@ -369,11 +373,12 @@ describe('GET /api/auth/users', () => {
     const body = await response.json()
 
     expect(response.status).toBe(200)
-    expect(mockSelectFrom).toHaveBeenCalledWith('search_tokens')
-    const displayNameFieldCall = mockSearchTokenWhere.mock.calls.find((call: unknown[]) => {
-      return call[0] === 'field' && call[1] === '=' && call[2] === 'name'
-    })
-    expect(displayNameFieldCall).toBeDefined()
+    expect(mockSelectFrom).toHaveBeenCalledWith('entity_indexes')
+    // No per-field predicate: the trigram set is per record, so the caller's `fields` only
+    // selects which readings of the term apply when the entity declares field kinds.
+    expect(mockSearchTokenWhere.mock.calls.some((call: unknown[]) => call[0] === 'field')).toBe(false)
+    expect(mockSearchTokenWhere.mock.calls.some((call: unknown[]) =>
+      call[0] === 'entity_type' && call[2] === 'auth:user')).toBe(true)
     const where = mockEm.findAndCount.mock.calls[0][1] as { $and: Array<Record<string, unknown>> }
     expect(where.$and).toEqual(expect.arrayContaining([
       { deletedAt: null },
@@ -498,7 +503,7 @@ describe('GET /api/auth/users', () => {
     expect(body).toEqual({ items: [], total: 0, totalPages: 1, isSuperAdmin: false })
   })
 
-  test('returns empty result when search_tokens yield no matches', async () => {
+  test('returns empty result when the trigram index yields no matches', async () => {
     mockSearchTokenExecute.mockResolvedValueOnce([])
 
     const response = await GET(makeRequest('/api/auth/users?search=nobody%40example.com'))
@@ -509,7 +514,7 @@ describe('GET /api/auth/users', () => {
     expect(mockEm.findAndCount).not.toHaveBeenCalled()
   })
 
-  test('superadmin search does not apply tenant scope on search_tokens', async () => {
+  test('superadmin search does not apply tenant scope on the trigram lookup', async () => {
     mockGetAuthFromRequest.mockResolvedValueOnce({
       sub: 'user-1',
       tenantId: null,

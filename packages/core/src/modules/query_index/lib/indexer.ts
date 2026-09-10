@@ -10,7 +10,7 @@ import {
 } from '@open-mercato/shared/lib/crud/custom-field-definition-index'
 import { type Kysely, type Transaction, sql } from 'kysely'
 import { createLogger } from '@open-mercato/shared/lib/logger'
-import { replaceSearchTokensForRecord, deleteSearchTokensForRecord } from './search-tokens'
+import { buildSearchTrigramHashes } from './search-trigrams'
 import { attachAggregateSearchField } from './document'
 
 const logger = createLogger('query_index').child({ component: 'indexer' })
@@ -254,7 +254,15 @@ function scopeEntityIndexes<QB extends { where: (...args: any[]) => QB }>(
 
 export async function upsertIndexRow(
   em: EntityManager,
-  args: { entityType: string; recordId: string; organizationId?: string | null; tenantId?: string | null; searchTokenDoc?: Record<string, unknown> | null; deferSearchTokens?: boolean; trx?: QueryIndexExecutor }
+  args: {
+    entityType: string
+    recordId: string
+    organizationId?: string | null
+    tenantId?: string | null
+    /** Pre-decrypted index document; recomputed here when the caller has none. */
+    searchTokenDoc?: Record<string, unknown> | null
+    trx?: QueryIndexExecutor
+  }
 ): Promise<UpsertIndexResult> {
   const db = (em as any).getKysely()
   const executor = args.trx ?? db
@@ -269,22 +277,8 @@ export async function upsertIndexRow(
 
   const doc = await buildIndexDoc(em, args)
   if (!doc) {
-    // When the caller defers token work it owns the matching token cleanup; the
-    // projection-row removal below stays synchronous so list reads converge immediately.
-    if (!args.deferSearchTokens) {
-      try {
-        await reindexSearchTokensForRecord(em, {
-          entityType: args.entityType,
-          recordId: args.recordId,
-          organizationId: args.organizationId ?? null,
-          tenantId: args.tenantId ?? null,
-          doc: null,
-          trx: args.trx,
-        })
-      } catch (error) {
-        if (args.trx) throw error
-      }
-    }
+    // Nothing to clean up beside the row itself: the trigram set lives ON the projection row, so
+    // deleting the row deletes the search index for the record in the same statement.
     if (existed) {
       await scopeEntityIndexes(
         executor.deleteFrom('entity_indexes' as any) as any,
@@ -293,6 +287,8 @@ export async function upsertIndexRow(
     }
     return { doc: null, existed, wasDeleted, created: false, revived: false }
   }
+
+  const searchTrgm = await buildSearchTrigramsForRecord(em, { ...args, doc })
 
   const payload = {
     entity_type: args.entityType,
@@ -303,6 +299,7 @@ export async function upsertIndexRow(
     index_version: 1,
     updated_at: sql`now()`,
     deleted_at: null,
+    ...(searchTrgm ? { search_trgm: trigramArraySql(searchTrgm) } : {}),
   }
 
   // Prefer modern upsert keyed by coalesced org id when available; fallback to update-then-insert
@@ -318,6 +315,7 @@ export async function upsertIndexRow(
           index_version: 1,
           updated_at: sql`now()`,
           deleted_at: null,
+          ...(searchTrgm ? { search_trgm: trigramArraySql(searchTrgm) } : {}),
         } as any))
       .execute()
   } catch {
@@ -340,73 +338,59 @@ export async function upsertIndexRow(
 
   const created = !existed
   const revived = existed && wasDeleted
-  // The search-token rebuild (DELETE + chunked INSERT) is the heavy tail of indexing.
-  // Callers that defer it (the upsert subscriber) run `reindexSearchTokensForRecord`
-  // asynchronously after this projection update so write latency stays bounded.
-  if (!args.deferSearchTokens) {
-    try {
-      await reindexSearchTokensForRecord(em, {
-        entityType: args.entityType,
-        recordId: args.recordId,
-        organizationId: args.organizationId ?? null,
-        tenantId: args.tenantId ?? null,
-        doc,
-        searchTokenDoc: args.searchTokenDoc ?? null,
-        trx: args.trx,
-      })
-    } catch (error) {
-      if (args.trx) throw error
-    }
-  }
   return { doc, existed, wasDeleted, created, revived }
 }
 
+/** `array[…]::int4[]`, or `null::int4[]` for the empty set so the column round-trips as `{}`. */
+export function trigramArraySql(hashes: readonly number[]) {
+  if (!hashes.length) return sql`'{}'::int4[]`
+  return sql`array[${sql.join(hashes.map((hash) => sql`${hash}`), sql`, `)}]::int4[]`
+}
+
 /**
- * Rebuilds (or clears, when `doc` is null) the search-token rows for a single record.
- * This is the asynchronous-friendly tail of `upsertIndexRow`: it does not touch the
- * `entity_indexes` projection that list endpoints read, so it can run out-of-band
- * without making query-index reads inconsistent.
+ * The trigram set for one record, built from the DECRYPTED document.
+ *
+ * Written with the row, not deferred: it is one array rather than a delete plus thousands of
+ * inserts, so read-your-writes for list search costs nothing worth deferring. A decryption
+ * failure is not fatal — the row is still worth writing — but the record then carries whatever
+ * the ciphertext trigrams to, which is why the failure is logged rather than swallowed.
  */
-export async function reindexSearchTokensForRecord(
+async function buildSearchTrigramsForRecord(
   em: EntityManager,
   args: {
     entityType: string
     recordId: string
     organizationId?: string | null
     tenantId?: string | null
-    doc: Record<string, any> | null
+    doc: Record<string, any>
     searchTokenDoc?: Record<string, unknown> | null
-    trx?: QueryIndexExecutor
   },
-): Promise<void> {
-  const db = (em as any).getKysely()
-  if (!args.doc) {
-    await deleteSearchTokensForRecord(db, {
-      entityType: args.entityType,
-      recordId: args.recordId,
-      organizationId: args.organizationId ?? null,
-      tenantId: args.tenantId ?? null,
-    }, { trx: args.trx })
-    return
+): Promise<number[] | null> {
+  let searchDoc: Record<string, unknown> = args.searchTokenDoc ?? args.doc
+  if (!args.searchTokenDoc) {
+    try {
+      const encryption = resolveTenantEncryptionService(em as any)
+      const dekKeyCache = new Map<string | null, string | null>()
+      searchDoc = await decryptIndexDocForSearch(
+        args.entityType,
+        args.doc,
+        { tenantId: args.tenantId ?? null, organizationId: args.organizationId ?? null },
+        encryption,
+        dekKeyCache,
+      )
+    } catch (error) {
+      logger.warn('Failed to decrypt index document for search trigrams', {
+        entityType: args.entityType,
+        recordId: args.recordId,
+        err: error,
+      })
+    }
   }
-  const tokenDoc = args.searchTokenDoc ?? (() => {
-    const encryption = resolveTenantEncryptionService(em as any)
-    const dekKeyCache = new Map<string | null, string | null>()
-    return decryptIndexDocForSearch(
-      args.entityType,
-      args.doc,
-      { tenantId: args.tenantId ?? null, organizationId: args.organizationId ?? null },
-      encryption,
-      dekKeyCache,
-    )
-  })()
-  await replaceSearchTokensForRecord(db, {
+  return buildSearchTrigramHashes({
     entityType: args.entityType,
-    recordId: args.recordId,
-    organizationId: args.organizationId ?? null,
     tenantId: args.tenantId ?? null,
-    doc: await tokenDoc,
-  }, { trx: args.trx })
+    doc: searchDoc,
+  })
 }
 
 export async function markDeleted(
@@ -423,16 +407,7 @@ export async function markDeleted(
   const wasActive = !!existing && existing.deleted_at == null
 
   if (existing) {
-    try {
-      await deleteSearchTokensForRecord(db, {
-        entityType: args.entityType,
-        recordId: args.recordId,
-        organizationId: args.organizationId ?? null,
-        tenantId: args.tenantId ?? null,
-      }, { trx: args.trx })
-    } catch (error) {
-      if (args.trx) throw error
-    }
+    // The trigram set is a column on this row, so removing the row removes it.
     await scopeEntityIndexes(
       executor.deleteFrom('entity_indexes' as any) as any,
       args,

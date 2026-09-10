@@ -24,6 +24,84 @@ most of the patterns listed below in a user's codebase.
 
 ## 0.7.0 → 0.7.1 (unreleased)
 
+### List search moved from `search_tokens` to keyed trigram hashes on the projection row
+
+`search_tokens` is **dropped**. List search — the `like`/`ilike` rewrite in both query engines,
+the direct-route lookups, and global search's `tokens` strategy — now reads a keyed trigram hash
+set stored as `entity_indexes.search_trgm` (`int4[]`, one GIN index). Spec:
+[`.ai/specs/2026-09-10-trigram-hash-list-search.md`](.ai/specs/2026-09-10-trigram-hash-list-search.md).
+
+**What you get.** `text` fields match by word prefix as before, and every field additionally
+matches a literal substring: `ZK 1/2026` now finds that document instead of every document from
+2026, and the last six digits of a phone match. Fragments are hashed per tenant with the
+`LOOKUP_HASH_PEPPER` chain instead of an unkeyed SHA-256 shared across tenants.
+
+**The upgrade gap.** The migration adds the column and queues one `query_index.reindex --target
+search` per entity type that has projection rows, off the deploy's critical path. **Until that
+job reaches a row, list search does not find that row.** New and updated records are searchable
+immediately. Check what is left with:
+
+```bash
+mercato query_index status
+```
+
+and drive it yourself with:
+
+```bash
+mercato query_index reindex --target search           # every indexed entity type
+mercato query_index reindex --entity customers:customer_entity --target search
+```
+
+Installs running `OM_MIGRATION_REINDEX=off` get no queued fill and MUST run the command above.
+
+**Rolling back** is a revert plus the down migration, which recreates `search_tokens` empty; the
+old code's `reindex` then refills it. Until it completes, the old code's search on encrypted
+fields is blind — the same window a fresh token reindex always had.
+
+**Environment variables removed** (token-only; `resolveSearchConfig` no longer reads them):
+
+| Removed | Why |
+|---|---|
+| `OM_SEARCH_MIN_LEN` | A trigram is three characters; the minimum is a constant. |
+| `OM_SEARCH_ENABLE_PARTIAL` | Prefix expansion is gone with the token rows. |
+| `OM_SEARCH_HASH_ALGO` | Hashing is HMAC-SHA256 truncated to `int4`, keyed per tenant. |
+| `OM_SEARCH_STORE_RAW_TOKENS` | No plaintext is ever stored. |
+| `OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS` | What it switched on is now the behaviour. |
+| `OM_SEARCH_MAX_TOKENS_PER_FIELD`, `OM_SEARCH_MAX_TOKENS_PER_RECORD` | Row count no longer scales with prefixes. |
+| `OM_SEARCH_TOKEN_PRESENCE_CACHE_MS` | The availability probe it cached no longer exists. |
+
+**Environment variable added:** `OM_SEARCH_RECHECK_MAX_ROWS` (default `1000`) — above this many
+trigram candidates the response reports `totalIsApproximate: true` and only the returned page is
+verified exactly. `OM_SEARCH_ENABLED`, `OM_SEARCH_FIELD_BLOCKLIST`, `OM_SEARCH_MAX_FIELD_CHARS`
+and `OM_SEARCH_DEBUG` are unchanged.
+
+**Code that must change:**
+
+- Raw SQL against `search_tokens` breaks at the migration. There is no bridge; the table is gone.
+- `tokenizeText` / `hashToken` (`@open-mercato/shared/lib/search/tokenize`) are removed. The
+  module is now `@open-mercato/shared/lib/search/normalize`, exporting `normalizeText`; the
+  matching primitives live in `@open-mercato/shared/lib/search/trigram`.
+- `createSearchTokenAvailability` and `clearSearchTokenPresenceCache`
+  (`@open-mercato/shared/lib/search/availability`) are removed with the probe. `isSearchFilterOp`
+  and `hasSearchFilter` keep their names and behaviour.
+- `findEntityIdsBySearchTokens` keeps its signature as a `@deprecated` alias delegating to
+  `findEntityIdsBySearchTrigrams` (`@open-mercato/shared/lib/search/trigramLookup`). Its `fields`
+  argument no longer narrows the SQL — the hash set is per record, not per field — and only
+  selects which readings of the term apply when the entity declares field kinds.
+- `TokenSearchStrategy` keeps its `SearchStrategyId` (`tokens`) and its search behaviour. Its
+  `index` / `bulkIndex` / `delete` / `purge` are now no-ops: the trigram set is written by
+  `query_index`'s own indexer in the same statement as the document.
+- `@open-mercato/core/modules/query_index/lib/search-tokens` is removed
+  (`replaceSearchTokensForRecord`, `replaceSearchTokensForBatch`, `deleteSearchTokensForRecord`,
+  `buildSearchTokenRows`). `upsertIndexRow` no longer takes `deferSearchTokens`, and
+  `reindexSearchTokensForRecord` is gone — there is nothing left to defer.
+- `UpsertIndexBatchResult.searchTokenFailures` is `@deprecated` and always `0`.
+
+**Optional:** declare per-field search semantics on a module's `search.ts`
+(`SearchFieldPolicy.kinds`) so phones, tax ids and e-mail addresses are cleaned and matched the
+way an operator types them. Entities without a declaration keep today's field selection with
+`text` semantics.
+
 ### Sales line `discount_amount` is now read as a line total, and the percentage wins (#3757)
 
 `sales_order_lines.discount_amount` and `sales_quote_lines.discount_amount` have always been

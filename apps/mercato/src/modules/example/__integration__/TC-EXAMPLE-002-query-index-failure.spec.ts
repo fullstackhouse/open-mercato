@@ -40,8 +40,8 @@ test.describe('TC-EXAMPLE-002: always-consistent index failures stay loud and si
     const token = await getAuthToken(request, 'admin')
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
     const title = `QA forced index failure ${suffix}`
-    const functionName = `qa_fail_search_tokens_${suffix}`
-    const triggerName = `qa_fail_search_tokens_${suffix}`
+    const functionName = `qa_fail_index_write_${suffix}`
+    const triggerName = `qa_fail_index_write_${suffix}`
     const db = new Client({ connectionString })
     let todoId: string | null = null
     let triggerInstalled = false
@@ -53,13 +53,13 @@ test.describe('TC-EXAMPLE-002: always-consistent index failures stay loud and si
         begin
           if new.entity_type = 'example:todo'
              and exists (select 1 from todos where id::text = new.entity_id and title = '${title}') then
-            raise exception 'TC-EXAMPLE-002 forced search_tokens failure';
+            raise exception 'TC-EXAMPLE-002 forced index write failure';
           end if;
           return new;
         end;
         $$;
         create trigger "${triggerName}"
-          before insert on search_tokens
+          before insert on entity_indexes
           for each row execute function "${functionName}"();
       `)
       triggerInstalled = true
@@ -100,13 +100,8 @@ test.describe('TC-EXAMPLE-002: always-consistent index failures stay loud and si
          where entity_type = 'example:todo' and entity_id = $1`,
         [todoId],
       ) as QueryRows<{ count: string }>
-      const tokenRows = await db.query(
-        `select count(*)::text as count from search_tokens
-         where entity_type = 'example:todo' and entity_id = $1`,
-        [todoId],
-      ) as QueryRows<{ count: string }>
+      // The trigram set is a column on that same row, so its absence is the same assertion.
       expect(Number(indexedRows.rows[0]?.count ?? 0)).toBe(0)
-      expect(Number(tokenRows.rows[0]?.count ?? 0)).toBe(0)
 
       const errorRows = await db.query(
         `select count(*)::text as count from indexer_error_logs
@@ -138,7 +133,7 @@ test.describe('TC-EXAMPLE-002: always-consistent index failures stay loud and si
       ).toBe(false)
     } finally {
       if (triggerInstalled) {
-        await db.query(`drop trigger if exists "${triggerName}" on search_tokens`).catch(() => undefined)
+        await db.query(`drop trigger if exists "${triggerName}" on entity_indexes`).catch(() => undefined)
       }
       await db.query(`drop function if exists "${functionName}"()`).catch(() => undefined)
       await deleteEntityIfExists(request, token, '/api/example/todos', todoId)

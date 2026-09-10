@@ -1,48 +1,23 @@
 import {
   DEFAULT_SEARCH_MAX_FIELD_CHARS,
-  DEFAULT_SEARCH_MAX_TOKENS_PER_FIELD,
-  DEFAULT_SEARCH_MAX_TOKENS_PER_RECORD,
-  DEFAULT_SEARCH_MIN_TOKEN_LENGTH,
-  isSearchFieldBlocklisted,
+  DEFAULT_SEARCH_RECHECK_MAX_ROWS,
   resolveSearchConfig,
+  resolveSearchFieldLimits,
   resolveSearchMinTokenLength,
-  resolveSearchTokenLimits,
+  isSearchFieldBlocklisted,
 } from '../config'
+import { TRIGRAM_LENGTH } from '../normalize'
 
 describe('resolveSearchMinTokenLength', () => {
-  const originalValue = process.env.OM_SEARCH_MIN_LEN
-
-  afterEach(() => {
-    if (originalValue === undefined) {
-      delete process.env.OM_SEARCH_MIN_LEN
-    } else {
-      process.env.OM_SEARCH_MIN_LEN = originalValue
-    }
-  })
-
-  it('returns the default when OM_SEARCH_MIN_LEN is unset', () => {
-    delete process.env.OM_SEARCH_MIN_LEN
-    expect(resolveSearchMinTokenLength()).toBe(DEFAULT_SEARCH_MIN_TOKEN_LENGTH)
-  })
-
-  it('parses a positive integer', () => {
-    process.env.OM_SEARCH_MIN_LEN = '4'
-    expect(resolveSearchMinTokenLength()).toBe(4)
-  })
-
-  it('falls back to the default for non-numeric values', () => {
-    process.env.OM_SEARCH_MIN_LEN = 'abc'
-    expect(resolveSearchMinTokenLength()).toBe(DEFAULT_SEARCH_MIN_TOKEN_LENGTH)
-  })
-
-  it('falls back to the default for values below the floor', () => {
-    process.env.OM_SEARCH_MIN_LEN = '0'
-    expect(resolveSearchMinTokenLength()).toBe(DEFAULT_SEARCH_MIN_TOKEN_LENGTH)
-  })
-
-  it('keeps resolveSearchConfig().minTokenLength in sync', () => {
+  it('is the trigram length, not a knob', () => {
+    // `OM_SEARCH_MIN_LEN` is gone: a trigram is three characters, so nothing shorter can be
+    // indexed or searched however the operator configures the install.
     process.env.OM_SEARCH_MIN_LEN = '5'
-    expect(resolveSearchConfig().minTokenLength).toBe(resolveSearchMinTokenLength())
+    try {
+      expect(resolveSearchMinTokenLength()).toBe(TRIGRAM_LENGTH)
+    } finally {
+      delete process.env.OM_SEARCH_MIN_LEN
+    }
   })
 })
 
@@ -113,12 +88,8 @@ describe('OM_SEARCH_FIELD_BLOCKLIST parsing', () => {
   })
 })
 
-describe('search token limits', () => {
-  const variableNames = [
-    'OM_SEARCH_MAX_FIELD_CHARS',
-    'OM_SEARCH_MAX_TOKENS_PER_FIELD',
-    'OM_SEARCH_MAX_TOKENS_PER_RECORD',
-  ] as const
+describe('search field limits', () => {
+  const variableNames = ['OM_SEARCH_MAX_FIELD_CHARS', 'OM_SEARCH_RECHECK_MAX_ROWS'] as const
   const originalValues = Object.fromEntries(variableNames.map((name) => [name, process.env[name]]))
 
   afterEach(() => {
@@ -132,88 +103,26 @@ describe('search token limits', () => {
   it('uses safe defaults when limits are unset', () => {
     for (const name of variableNames) delete process.env[name]
 
-    expect(resolveSearchTokenLimits(resolveSearchConfig())).toEqual({
-      maxFieldChars: DEFAULT_SEARCH_MAX_FIELD_CHARS,
-      maxTokensPerField: DEFAULT_SEARCH_MAX_TOKENS_PER_FIELD,
-      maxTokensPerRecord: DEFAULT_SEARCH_MAX_TOKENS_PER_RECORD,
-    })
+    const config = resolveSearchConfig()
+    expect(resolveSearchFieldLimits(config)).toEqual({ maxFieldChars: DEFAULT_SEARCH_MAX_FIELD_CHARS })
+    expect(config.recheckMaxRows).toBe(DEFAULT_SEARCH_RECHECK_MAX_ROWS)
   })
 
-  it('accepts zero to disable individual limits', () => {
-    for (const name of variableNames) process.env[name] = '0'
+  it('accepts zero to disable the field bound', () => {
+    process.env.OM_SEARCH_MAX_FIELD_CHARS = '0'
 
-    expect(resolveSearchTokenLimits(resolveSearchConfig())).toEqual({
-      maxFieldChars: 0,
-      maxTokensPerField: 0,
-      maxTokensPerRecord: 0,
-    })
+    expect(resolveSearchFieldLimits(resolveSearchConfig())).toEqual({ maxFieldChars: 0 })
   })
 
-  it('normalizes invalid custom config values to defaults', () => {
-    expect(resolveSearchTokenLimits({
-      enabled: true,
-      minTokenLength: 3,
-      enablePartials: true,
-      hashAlgorithm: 'sha256',
-      storeRawTokens: false,
-      blocklistedFields: [],
-      maxFieldChars: Number.NaN,
-      maxTokensPerField: -1,
-      maxTokensPerRecord: 4.8,
-    })).toEqual({
-      maxFieldChars: DEFAULT_SEARCH_MAX_FIELD_CHARS,
-      maxTokensPerField: DEFAULT_SEARCH_MAX_TOKENS_PER_FIELD,
-      maxTokensPerRecord: 4,
-    })
+  it('normalizes an invalid custom config value to the default', () => {
+    expect(resolveSearchFieldLimits({ ...resolveSearchConfig(), maxFieldChars: -5 }))
+      .toEqual({ maxFieldChars: DEFAULT_SEARCH_MAX_FIELD_CHARS })
+  })
+
+  it('reads OM_SEARCH_RECHECK_MAX_ROWS', () => {
+    process.env.OM_SEARCH_RECHECK_MAX_ROWS = '25'
+
+    expect(resolveSearchConfig().recheckMaxRows).toBe(25)
   })
 })
 
-describe('isSearchFieldBlocklisted', () => {
-  const baseConfig = {
-    enabled: true,
-    minTokenLength: 3,
-    enablePartials: true,
-    hashAlgorithm: 'sha256' as const,
-    storeRawTokens: false,
-  }
-
-  it('matches global entries by substring for any entity type', () => {
-    const config = { ...baseConfig, blocklistedFields: ['password'], entityBlocklistedFields: {} }
-    expect(isSearchFieldBlocklisted('password_hash', 'customers:person', config)).toBe(true)
-    expect(isSearchFieldBlocklisted('password_hash', null, config)).toBe(true)
-    expect(isSearchFieldBlocklisted('display_name', 'customers:person', config)).toBe(false)
-  })
-
-  it('applies an entity-scoped entry only to its own entity type', () => {
-    const config = {
-      ...baseConfig,
-      blocklistedFields: [],
-      entityBlocklistedFields: { 'customers:customer_interaction': ['body'] },
-    }
-    expect(isSearchFieldBlocklisted('body', 'customers:customer_interaction', config)).toBe(true)
-    expect(isSearchFieldBlocklisted('body', 'customers:person', config)).toBe(false)
-    expect(isSearchFieldBlocklisted('body', null, config)).toBe(false)
-  })
-
-  it('compares entity types case-insensitively', () => {
-    const config = {
-      ...baseConfig,
-      blocklistedFields: [],
-      entityBlocklistedFields: { 'customers:customer_interaction': ['body'] },
-    }
-    expect(isSearchFieldBlocklisted('BODY', ' Customers:Customer_Interaction ', config)).toBe(true)
-  })
-
-  it('ignores inherited Object.prototype keys when looking up an entity type', () => {
-    const config = { ...baseConfig, blocklistedFields: [], entityBlocklistedFields: {} }
-    expect(isSearchFieldBlocklisted('body', 'constructor', config)).toBe(false)
-    expect(isSearchFieldBlocklisted('body', 'toString', config)).toBe(false)
-    expect(isSearchFieldBlocklisted('body', '__proto__', config)).toBe(false)
-  })
-
-  it('tolerates a config without the per-entity map', () => {
-    const config = { ...baseConfig, blocklistedFields: ['secret'] }
-    expect(isSearchFieldBlocklisted('client_secret', 'customers:person', config)).toBe(true)
-    expect(isSearchFieldBlocklisted('body', 'customers:person', config)).toBe(false)
-  })
-})

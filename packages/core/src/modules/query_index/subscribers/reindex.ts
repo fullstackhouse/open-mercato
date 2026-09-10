@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { recordIndexerError } from '@open-mercato/shared/lib/indexers/error-log'
 import { recordIndexerLog } from '@open-mercato/shared/lib/indexers/status-log'
 import { reindexEntity } from '../lib/reindexer'
+import { reindexSearchTrigrams } from '../lib/search-reindex'
 import type { VectorIndexService } from '@open-mercato/search/vector'
 import type { ProgressService } from '@open-mercato/core/modules/progress/lib/progressService'
 import { resolveQueryIndexReindexScope } from '../lib/subscriber-scope'
@@ -33,6 +34,10 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
   const partitionIndex = Number.isFinite(payload?.partitionIndex) ? Math.max(0, Math.trunc(payload.partitionIndex)) : undefined
   const resetCoverage = typeof payload?.resetCoverage === 'boolean' ? payload.resetCoverage : undefined
   const requestedByUserId = typeof payload?.requestedByUserId === 'string' ? payload.requestedByUserId : null
+  // `search` recomputes only `entity_indexes.search_trgm` from the stored document; it never
+  // reads the source table and never rewrites `doc`. That is what the upgrade fill queued by
+  // `db migrate` asks for, and what keeps it off the deploy's critical path.
+  const target: 'all' | 'search' = payload?.target === 'search' ? 'search' : 'all'
 
   const progressTenantId = typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : null
   const progressOrganizationId = typeof organizationId === 'string' && organizationId.length > 0 ? organizationId : null
@@ -144,10 +149,22 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
           partitionCount: partitionCount ?? null,
           partitionIndex: partitionIndex ?? null,
           resetCoverage: resetCoverage ?? null,
+          target,
         },
       },
     )
-    const result = await reindexEntity(em, {
+    const result = target === 'search'
+      ? await reindexSearchTrigrams(em, {
+          entityType,
+          tenantId,
+          organizationId,
+          batchSize,
+          force: forceFull,
+          onProgress: (info) => {
+            void updateProgress(info)
+          },
+        })
+      : await reindexEntity(em, {
       entityType,
       tenantId,
       organizationId,
@@ -179,8 +196,9 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
         details: {
           processed: result.processed,
           total: result.total,
-          tenantScopes: result.tenantScopes,
-          scopes: result.scopes,
+          target,
+          tenantScopes: 'tenantScopes' in result ? result.tenantScopes : undefined,
+          scopes: 'scopes' in result ? result.scopes : undefined,
         },
       },
     )

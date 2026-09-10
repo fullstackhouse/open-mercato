@@ -1,5 +1,4 @@
 import { recordIndexerError } from '@open-mercato/shared/lib/indexers/error-log'
-import { replaceSearchTokensForBatch } from '../lib/search-tokens'
 import {
   upsertIndexBatch,
   assertIndexBatchWritesLanded,
@@ -11,13 +10,7 @@ jest.mock('@open-mercato/shared/lib/indexers/error-log', () => ({
   recordIndexerError: jest.fn(async () => undefined),
 }))
 
-jest.mock('../lib/search-tokens', () => ({
-  replaceSearchTokensForBatch: jest.fn(async () => undefined),
-  isSearchDebugEnabled: () => false,
-}))
-
 const mockRecordIndexerError = recordIndexerError as jest.MockedFunction<typeof recordIndexerError>
-const mockReplaceSearchTokens = replaceSearchTokensForBatch as jest.MockedFunction<typeof replaceSearchTokensForBatch>
 
 type InsertCall = { table: string; onConflict: boolean; values: any }
 
@@ -141,7 +134,6 @@ const SCOPE = { orgId: 'org-1', tenantId: 'tenant-1' }
 describe('upsertIndexBatch write accounting (GSM-266)', () => {
   beforeEach(() => {
     jest.clearAllMocks()
-    mockReplaceSearchTokens.mockResolvedValue(undefined as never)
   })
 
   it('reports every row written on the happy bulk path', async () => {
@@ -190,10 +182,6 @@ describe('upsertIndexBatch write accounting (GSM-266)', () => {
       expect.anything(),
       expect.objectContaining({ handler: 'query_index:reindex-batch:row', recordId: '2' }),
     )
-    expect(mockReplaceSearchTokens).toHaveBeenCalledWith(
-      expect.anything(),
-      [expect.objectContaining({ recordId: '1' }), expect.objectContaining({ recordId: '3' })],
-    )
   })
 
   it('counts a row as written when a concurrent insert race resolves via the update retry', async () => {
@@ -240,25 +228,20 @@ describe('upsertIndexBatch write accounting (GSM-266)', () => {
 
     const bulkInsert = fake.inserts.find((call) => call.onConflict)
     expect(bulkInsert?.values.map((row: any) => row.entity_id)).toEqual(['1', '3'])
-    expect(mockReplaceSearchTokens).toHaveBeenCalledWith(
-      expect.anything(),
-      [expect.objectContaining({ recordId: '1' }), expect.objectContaining({ recordId: '3' })],
-    )
   })
 
-  it('reports a search token failure without failing the indexed rows', async () => {
-    const fake = createFakeDb()
-    mockReplaceSearchTokens.mockRejectedValueOnce(new Error('token write failed'))
+  it('writes the trigram set in the same statement as the document', () => {
+    // The search index is a column on the row, so it cannot fail — or land — separately from it.
+    // `searchTokenFailures` survives only as a deprecated always-zero field.
+    return (async () => {
+      const fake = createFakeDb()
 
-    const result = await upsertIndexBatch(fake.db, 'example:todo', makeRows(['1', '2']), SCOPE)
+      const result = await upsertIndexBatch(fake.db, 'example:todo', makeRows(['1', '2']), SCOPE)
 
-    expect(result.written).toBe(2)
-    expect(result.failedRecordIds).toEqual([])
-    expect(result.searchTokenFailures).toBe(1)
-    expect(mockRecordIndexerError).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ source: 'fulltext' }),
-    )
+      expect(result.searchTokenFailures).toBe(0)
+      const bulkInsert = fake.inserts.find((call) => call.onConflict)
+      expect(bulkInsert?.values.every((row: any) => 'search_trgm' in row)).toBe(true)
+    })()
   })
 
   it('returns an empty result for an empty batch', async () => {

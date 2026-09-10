@@ -64,7 +64,7 @@ describe('collectQueryIndexReindexEntityTypes', () => {
       { importModule: async (filePath) => modules[filePath], fileExists },
     )
 
-    expect(collected).toEqual(['customers:customer_dictionary_entry', 'workflows:workflow_definition'])
+    expect(collected).toEqual({ entityTypes: ['customers:customer_dictionary_entry', 'workflows:workflow_definition'], target: 'all' })
   })
 
   it('warns and keeps going when a migration file cannot be imported', async () => {
@@ -81,7 +81,7 @@ describe('collectQueryIndexReindexEntityTypes', () => {
       },
     )
 
-    expect(collected).toEqual(['dictionaries:dictionary_entry'])
+    expect(collected).toEqual({ entityTypes: ['dictionaries:dictionary_entry'], target: 'all' })
     expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('customers/broken'))
   })
 
@@ -100,7 +100,7 @@ describe('collectQueryIndexReindexEntityTypes', () => {
       },
     )
 
-    expect(collected).toEqual(['customers:deal'])
+    expect(collected).toEqual({ entityTypes: ['customers:deal'], target: 'all' })
     expect(onWarn).toHaveBeenCalledTimes(1)
     const warning = onWarn.mock.calls[0][0] as string
     expect(warning).toContain('customers/typo')
@@ -115,7 +115,7 @@ describe('collectQueryIndexReindexEntityTypes', () => {
       { importModule, fileExists: () => false },
     )
 
-    expect(collected).toEqual([])
+    expect(collected).toEqual({ entityTypes: [], target: 'all' })
     expect(importModule).not.toHaveBeenCalled()
   })
 })
@@ -147,10 +147,28 @@ describe('requestQueryIndexReindex', () => {
     expect(emitEvent).toHaveBeenNthCalledWith(
       1,
       'query_index.reindex',
-      { entityType: 'customers:customer_dictionary_entry', allowAllTenants: true, force: false },
+      { entityType: 'customers:customer_dictionary_entry', allowAllTenants: true, force: false, target: 'all' },
       { persistent: true },
     )
     expect(dispose).toHaveBeenCalled()
+  })
+
+  it('resolves the every-entity wildcard against the projection table and passes the target through', async () => {
+    const emitEvent = jest.fn().mockResolvedValue(undefined)
+
+    const result = await requestQueryIndexReindex(
+      ['*'],
+      { createContainer: async () => ({ resolve: () => ({ emitEvent }) }) },
+      { target: 'search', resolveAllEntityTypes: async () => ['customers:deal', 'sales:sales_order'] },
+    )
+
+    expect(result).toEqual({ requested: ['customers:deal', 'sales:sales_order'], queued: true })
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      'query_index.reindex',
+      { entityType: 'customers:deal', allowAllTenants: true, force: false, target: 'search' },
+      { persistent: true },
+    )
   })
 
   it('does nothing when no migration declared a reindex', async () => {

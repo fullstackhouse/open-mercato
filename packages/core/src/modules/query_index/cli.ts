@@ -22,6 +22,7 @@ import {
   type AnyRow,
 } from './lib/batch'
 import { reindexEntity, DEFAULT_REINDEX_PARTITIONS } from './lib/reindexer'
+import { countRowsMissingTrigrams, listIndexedEntityTypes, reindexSearchTrigrams } from './lib/search-reindex'
 import { purgeIndexScope } from './lib/purge'
 import { refreshCoverageSnapshot } from './lib/coverage'
 import { flattenSystemEntityIds } from '@open-mercato/shared/lib/entities/system-entities'
@@ -730,6 +731,16 @@ const reindex: ModuleCli = {
     const resetCoverageFlag = flagEnabled(args, 'resetCoverage')
     const skipResetCoverageFlag = flagEnabled(args, 'skipResetCoverage', 'noResetCoverage')
     const skipPurge = flagEnabled(args, 'skipPurge', 'noPurge')
+    // `--target search` recomputes only `entity_indexes.search_trgm` from the stored document. It
+    // is the manual form of the fill `db migrate` queues after the trigram migration, and the one
+    // to reach for after rotating `LOOKUP_HASH_PEPPER` — a full reindex would rewrite every `doc`
+    // to change a column that is derived from it.
+    const targetOption = (stringOption(args, 'target') ?? 'all').trim().toLowerCase()
+    if (targetOption !== 'all' && targetOption !== 'search') {
+      console.error(`Unknown --target "${targetOption}"; expected "all" or "search".`)
+      return
+    }
+    const searchOnly = targetOption === 'search'
 
     const container = await createRequestContainer()
     const baseEm = (container.resolve('em') as EntityManager)
@@ -761,6 +772,26 @@ const reindex: ModuleCli = {
     }
 
     try {
+      if (searchOnly) {
+        const targets = entity ? [entity] : await listIndexedEntityTypes(baseEm)
+        if (!targets.length) {
+          console.log('No indexed entity types found; nothing to rebuild.')
+          return
+        }
+        for (const entityType of targets) {
+          const stats = await reindexSearchTrigrams(baseEm, {
+            entityType,
+            tenantId,
+            organizationId: orgId,
+            batchSize,
+            force,
+          })
+          console.log(
+            `Rebuilt search trigrams for ${entityType}: ${stats.processed.toLocaleString()} / ${stats.total.toLocaleString()} row(s)`,
+          )
+        }
+        return
+      }
       if (entity) {
         await recordIndexerLog(
           { em: baseEm },
@@ -1091,6 +1122,35 @@ const reindex: ModuleCli = {
   },
 }
 
+/**
+ * Reports how many projection rows the trigram fill has not reached yet.
+ *
+ * The read path deliberately has no availability probe — the search predicate is always emitted,
+ * and an un-filled row is simply not found until the queued reindex reaches it. This is the
+ * operator-run scan that answers "how much of the upgrade is left", instead of a per-request check
+ * every list load would pay for.
+ */
+const status: ModuleCli = {
+  command: 'status',
+  async run() {
+    const container = await createRequestContainer()
+    try {
+      const em = container.resolve<EntityManager>('em')
+      const missing = await countRowsMissingTrigrams(em)
+      if (!missing.length) {
+        console.log('Search trigrams: every projection row is filled.')
+        return
+      }
+      console.log('Rows missing search trigrams (run `mercato query_index reindex --target search`):')
+      for (const row of missing) {
+        console.log(`  ${row.entityType}: ${row.missing.toLocaleString()}`)
+      }
+    } finally {
+      if (typeof (container as any)?.dispose === 'function') await (container as any).dispose()
+    }
+  },
+}
+
 const purge: ModuleCli = {
   command: 'purge',
   async run(rest) {
@@ -1189,4 +1249,4 @@ const purge: ModuleCli = {
   },
 }
 
-export default [rebuild, rebuildAll, reindex, purge]
+export default [rebuild, rebuildAll, reindex, purge, status]

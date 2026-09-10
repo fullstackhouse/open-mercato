@@ -42,7 +42,7 @@ There are exactly four conditions, all in `packages/core/src/modules/query_index
 | Condition | Profiler `reason` | Notes |
 | --- | --- | --- |
 | The base table does not exist | `missing_base` | |
-| `opts.omitAutomaticTenantOrgScope === true` | `omit_automatic_tenant_org_scope` | The caller owns scoping. `BasicQueryEngine` still handles `cf:*` filters/sorts, but `search_tokens` fulltext, the JSONB index path, and the vector-search branch are bypassed |
+| `opts.omitAutomaticTenantOrgScope === true` | `omit_automatic_tenant_org_scope` | The caller owns scoping. `BasicQueryEngine` still handles `cf:*` filters/sorts, but the trigram search predicate, the JSONB index path, and the vector-search branch are bypassed |
 | No index rows exist for the entity type | `no_index_rows` | Only evaluated when the query wants custom fields |
 | A coverage gap was detected and `FORCE_QUERY_INDEX_ON_PARTIAL_INDEXES` is off | `partial_index` | Additionally requires the entity to have at least one active custom-field definition. See [Partial coverage](#partial-coverage) |
 
@@ -71,7 +71,7 @@ The supported set is exactly eleven (`packages/shared/src/lib/query/types.ts`):
 An operator outside that list does **not** raise. It is dropped during filter compilation, and the `default:` branches in both engines are permissive — the predicate is either skipped or compiled to `true`. The practical effect is that a filter you expected to narrow the result set may not narrow it at all. Validate operator names at the API boundary; do not rely on the engine to reject them.
 :::
 
-`like`/`ilike` are re-routed to hashed `search_tokens` lookups when search is active. If the tokenizer yields no hashes for the pattern, the predicate is skipped.
+`like`/`ilike` are re-routed to keyed trigram containment over `entity_indexes.search_trgm` when search is active, then rechecked against the decrypted rows the engine returns. If the term shapes into no trigram (under three characters once cleaned), the predicate is skipped — except on a column known to be encrypted, where it fails closed instead.
 
 ## Partial coverage
 

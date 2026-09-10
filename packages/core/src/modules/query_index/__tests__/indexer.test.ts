@@ -1,4 +1,5 @@
-import { buildIndexDoc, upsertIndexRow, markDeleted, reindexSearchTokensForRecord } from '../../query_index/lib/indexer'
+import { buildIndexDoc, upsertIndexRow, markDeleted } from '../../query_index/lib/indexer'
+import { hashTrigram, trigramsOfValue } from '@open-mercato/shared/lib/search/trigram'
 import { resolveTenantEncryptionService } from '@open-mercato/shared/lib/encryption/customFieldValues'
 import type { AggregateSearchOptions } from '../lib/document'
 
@@ -340,114 +341,19 @@ describe('Indexer', () => {
       searchTokenDoc: { title: 'Plain Title' },
     })
 
-    const tokenInserts = fake.inserts.filter((entry) => entry.table === 'search_tokens')
-    expect(tokenInserts.length).toBeGreaterThan(0)
-    const tokenPayloads = tokenInserts.flatMap((entry) => {
-      if (Array.isArray(entry.payload)) return entry.payload
-      return entry.payload ? [entry.payload] : []
-    })
-    expect(tokenPayloads).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        entity_type: 'example:todo',
-        entity_id: '1',
-        field: 'title',
-      }),
-    ]))
-  })
-
-  test('upsertIndexRow with deferSearchTokens updates the projection but skips token writes', async () => {
-    const fake = createFakeKysely({
-      baseTable: 'todos',
-      baseRows: [{ id: '1', title: 'x' }],
-      cfValues: [],
-    })
-    const em: any = { getKysely: () => fake.db }
-
-    await upsertIndexRow(em, {
-      entityType: 'example:todo',
-      recordId: '1',
-      organizationId: 'org1',
-      tenantId: 't1',
-      searchTokenDoc: { title: 'Plain Title' },
-      deferSearchTokens: true,
-    })
-
+    // The trigram set rides along on the projection row, built from the DECRYPTED document the
+    // caller supplied — there is no second table and no second statement.
     const projectionInserts = fake.inserts.filter((entry) => entry.table === 'entity_indexes')
     expect(projectionInserts.length).toBeGreaterThan(0)
-    const tokenInserts = fake.inserts.filter((entry) => entry.table === 'search_tokens')
-    const tokenDeletes = fake.deletes.filter((entry) => entry.table === 'search_tokens')
-    expect(tokenInserts.length).toBe(0)
-    expect(tokenDeletes.length).toBe(0)
-  })
-
-  test('reindexSearchTokensForRecord writes tokens for a provided doc', async () => {
-    const fake = createFakeKysely({ baseTable: 'todos', baseRows: [{ id: '1', title: 'x' }], cfValues: [] })
-    const em: any = { getKysely: () => fake.db }
-
-    await reindexSearchTokensForRecord(em, {
-      entityType: 'example:todo',
-      recordId: '1',
-      organizationId: 'org1',
-      tenantId: 't1',
-      doc: { id: '1', title: 'x' },
-      searchTokenDoc: { title: 'Plain Title' },
-    })
-
-    const tokenInserts = fake.inserts.filter((entry) => entry.table === 'search_tokens')
-    expect(tokenInserts.length).toBeGreaterThan(0)
-  })
-
-  test('reindexSearchTokensForRecord reuses an injected transaction for token replacement', async () => {
-    const fake = createFakeKysely({ baseTable: 'todos', baseRows: [{ id: '1', title: 'x' }], cfValues: [] })
-    const em: any = { getKysely: () => fake.db }
-
-    await reindexSearchTokensForRecord(em, {
-      entityType: 'example:todo',
-      recordId: '1',
-      organizationId: 'org1',
-      tenantId: 't1',
-      doc: { id: '1', title: 'x' },
-      searchTokenDoc: { title: 'Plain Title' },
-      trx: fake.db,
-    })
-
-    expect(fake.transactions).toHaveLength(0)
-    expect(fake.inserts.some((entry) => entry.table === 'search_tokens')).toBe(true)
-  })
-
-  test('reindexSearchTokensForRecord clears tokens when doc is null', async () => {
-    const fake = createFakeKysely({ baseTable: 'todos', baseRows: [], cfValues: [] })
-    const em: any = { getKysely: () => fake.db }
-
-    await reindexSearchTokensForRecord(em, {
-      entityType: 'example:todo',
-      recordId: '1',
-      organizationId: 'org1',
-      tenantId: 't1',
-      doc: null,
-    })
-
-    const tokenDeletes = fake.deletes.filter((entry) => entry.table === 'search_tokens')
-    expect(tokenDeletes.length).toBeGreaterThan(0)
-    const tokenInserts = fake.inserts.filter((entry) => entry.table === 'search_tokens')
-    expect(tokenInserts.length).toBe(0)
-  })
-
-  test('reindexSearchTokensForRecord reuses an injected transaction for token deletion', async () => {
-    const fake = createFakeKysely({ baseTable: 'todos', baseRows: [], cfValues: [] })
-    const em: any = { getKysely: () => fake.db }
-
-    await reindexSearchTokensForRecord(em, {
-      entityType: 'example:todo',
-      recordId: '1',
-      organizationId: 'org1',
-      tenantId: 't1',
-      doc: null,
-      trx: fake.db,
-    })
-
-    expect(fake.transactions).toHaveLength(0)
-    expect(fake.deletes.some((entry) => entry.table === 'search_tokens')).toBe(true)
+    const payload = Array.isArray(projectionInserts[0].payload)
+      ? projectionInserts[0].payload[0]
+      : projectionInserts[0].payload
+    expect(payload).toHaveProperty('search_trgm')
+    const emitted = JSON.stringify((payload.search_trgm as any).toOperationNode())
+    for (const trigram of trigramsOfValue('text', 'Plain Title')) {
+      expect(emitted).toContain(String(hashTrigram(trigram, 't1')))
+    }
+    expect(fake.inserts.some((entry) => entry.table === 'search_tokens')).toBe(false)
   })
 
   test('upsertIndexRow removes index row when base row missing', async () => {
@@ -467,7 +373,7 @@ describe('Indexer', () => {
     expect(flatArgs).toEqual(expect.arrayContaining(['entity_id', 'x']))
   })
 
-  test('upsertIndexRow reuses an injected transaction for projection and token writes', async () => {
+  test('upsertIndexRow reuses an injected transaction for the projection write', async () => {
     const fake = createFakeKysely({
       baseTable: 'todos',
       baseRows: [{ id: '1', title: 'x' }],
@@ -486,7 +392,6 @@ describe('Indexer', () => {
 
     expect(fake.transactions).toHaveLength(0)
     expect(fake.inserts.some((entry) => entry.table === 'entity_indexes')).toBe(true)
-    expect(fake.inserts.some((entry) => entry.table === 'search_tokens')).toBe(true)
   })
 
   test('markDeleted removes index row', async () => {
@@ -502,7 +407,7 @@ describe('Indexer', () => {
     expect(del.table).toBe('entity_indexes')
   })
 
-  test('markDeleted reuses an injected transaction for projection and token deletion', async () => {
+  test('markDeleted reuses an injected transaction and needs no separate search cleanup', async () => {
     const fake = createFakeKysely({
       baseTable: 'todos',
       baseRows: [],
@@ -514,7 +419,8 @@ describe('Indexer', () => {
     await markDeleted(em, { entityType: 'example:todo', recordId: '1', organizationId: 'org1', trx: fake.db })
 
     expect(fake.transactions).toHaveLength(0)
-    expect(fake.deletes.some((entry) => entry.table === 'search_tokens')).toBe(true)
+    // Deleting the projection row deletes its trigram set with it.
+    expect(fake.deletes.some((entry) => entry.table === 'search_tokens')).toBe(false)
     expect(fake.deletes.some((entry) => entry.table === 'entity_indexes')).toBe(true)
   })
 })

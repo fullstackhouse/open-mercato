@@ -5,10 +5,9 @@ import { join } from 'node:path'
  * Hot-path index guard (#2966).
  *
  * Two of the platform's hottest read paths used to run sequential scans:
- * TokenSearchStrategy filters search_tokens by (token_hash IN ..., tenant_id)
- * on every keystroke, and RBAC scans user_roles by user_id on every ACL cache
- * miss and by role_id on user-list/role-mutation paths — Postgres does not
- * auto-index FK columns.
+ * TokenSearchStrategy filters `entity_indexes.search_trgm` by trigram containment on every
+ * keystroke, and RBAC scans user_roles by user_id on every ACL cache miss and by role_id on
+ * user-list/role-mutation paths — Postgres does not auto-index FK columns.
  *
  * This test pins the fix at all three declaration sites so a refactor cannot
  * silently drop one of them: the entity `@Index` decorator, the migration SQL,
@@ -41,24 +40,26 @@ function readAllMigrationSql(module: string): string {
 }
 
 describe('hot-path indexes (#2966)', () => {
-  describe('search_tokens (tenant_id, token_hash)', () => {
-    it('declares the index on the SearchToken entity', () => {
+  describe('entity_indexes.search_trgm (GIN)', () => {
+    // `search_tokens` and its four indexes are gone with the trigram migration; the hot path they
+    // guarded is now one GIN index over the trigram set on the projection row.
+    it('declares the trigram column on the EntityIndexRow entity', () => {
       const source = readEntities('query_index')
-      expect(source).toContain(
-        "@Index({ name: 'search_tokens_tenant_token_hash_idx', properties: ['tenantId', 'tokenHash'] })",
-      )
+      expect(source).toContain("@Property({ name: 'search_trgm', type: 'integer[]', nullable: true })")
+      expect(source).not.toContain("tableName: 'search_tokens'")
     })
 
-    it('creates the index concurrently in a query_index migration', () => {
+    it('creates the GIN index concurrently and drops the token table in a query_index migration', () => {
       const sql = readAllMigrationSql('query_index')
       expect(sql).toContain(
-        'create index concurrently if not exists "search_tokens_tenant_token_hash_idx" on "search_tokens" ("tenant_id", "token_hash")',
+        'create index concurrently "entity_indexes_search_trgm_idx" on "entity_indexes" using gin ("search_trgm")',
       )
+      expect(sql).toContain('drop table if exists "search_tokens"')
     })
 
     it('records the index in the query_index schema snapshot', () => {
-      expect(readSnapshotIndexNames('query_index', 'search_tokens')).toContain(
-        'search_tokens_tenant_token_hash_idx',
+      expect(readSnapshotIndexNames('query_index', 'entity_indexes')).toContain(
+        'entity_indexes_search_trgm_idx',
       )
     })
   })

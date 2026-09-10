@@ -70,8 +70,10 @@ describe('reindexEntity entity-type guard (issue #2705)', () => {
     expect(selectedTables).toEqual([])
   })
 
-  it('still rejects the search_tokens table guard for registered tokens', async () => {
-    const { em, selectedTables } = makeEm({ SearchToken: 'search_tokens' })
+  it('rejects an entity id with no registered ORM table, such as the removed search_token', async () => {
+    // `search_tokens` and its entity are gone with the trigram migration, so this id now falls
+    // through the ordinary "unregistered entity type" refusal rather than a table-name special case.
+    const { em, selectedTables } = makeEm({ Todo: 'todos' })
 
     const result = await reindexEntity(em, { entityType: 'query_index:search_token', tenantId: 't1', organizationId: 'o1' })
 

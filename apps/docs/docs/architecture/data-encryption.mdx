@@ -113,13 +113,13 @@ compares a plaintext pattern against ciphertext. There is no error and no partia
 empty page that looks exactly like "nothing matched", so the feature ships green and the regression
 surfaces months later in production.
 
-**Use the token index instead.** `search_tokens` stores hashes of the *plaintext*, so it keeps
+**Use the trigram index instead.** `entity_indexes.search_trgm` stores per-tenant keyed hashes of the *plaintext*'s trigrams, so it keeps
 matching after encryption is enabled:
 
 ```ts
-import { findEntityIdsBySearchTokens } from '@open-mercato/shared/lib/search/tokenLookup'
+import { findEntityIdsBySearchTrigrams } from '@open-mercato/shared/lib/search/trigramLookup'
 
-const match = await findEntityIdsBySearchTokens({
+const match = await findEntityIdsBySearchTrigrams({
   db: em.getKysely<any>(),
   entityType: E.customers.customer_entity,
   query: term,

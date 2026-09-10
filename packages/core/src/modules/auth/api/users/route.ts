@@ -333,7 +333,7 @@ export async function GET(req: Request) {
   }
   const trimmedSearch = typeof search === 'string' ? search.trim() : ''
   if (trimmedSearch) {
-    // Email is encrypted at rest, so plaintext search must go through search_tokens.
+    // Email is encrypted at rest, so plaintext search must go through the trigram index.
     const tenantScope: string | null | undefined = isSuperAdmin ? (effectiveTenantId ?? undefined) : auth.tenantId ?? null
     const searchFilters: any[] = []
 

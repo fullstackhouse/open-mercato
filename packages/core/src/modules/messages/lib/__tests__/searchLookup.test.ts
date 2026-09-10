@@ -1,6 +1,4 @@
 import { findMessageIdsBySearchTokens } from '../searchLookup'
-import { tokenizeText } from '@open-mercato/shared/lib/search/tokenize'
-import { resolveSearchConfig } from '@open-mercato/shared/lib/search/config'
 
 type KyselyCall = {
   method: string
@@ -18,8 +16,7 @@ function createKyselyMock(rows: Array<{ entity_id: string }>) {
     }
   builder.select = passthrough('select')
   builder.where = passthrough('where')
-  builder.groupBy = passthrough('groupBy')
-  builder.having = passthrough('having')
+  builder.limit = passthrough('limit')
   builder.execute = jest.fn(async () => rows)
 
   const db = {
@@ -58,7 +55,7 @@ describe('findMessageIdsBySearchTokens', () => {
     expect(result).toBeNull()
   })
 
-  it('returns empty array when query produces no searchable tokens', async () => {
+  it('returns empty array when the query shapes into no trigram', async () => {
     const { db } = createKyselyMock([])
     const em = createEm(db)
     const result = await findMessageIdsBySearchTokens({
@@ -70,7 +67,7 @@ describe('findMessageIdsBySearchTokens', () => {
     expect(result).toEqual([])
   })
 
-  it('queries search_tokens with hashed tokens and the messages:message scope', async () => {
+  it('queries the projection row\'s trigram column with the messages:message scope', async () => {
     const rows = [{ entity_id: 'msg-1' }, { entity_id: 'msg-2' }]
     const { db, calls, tableNameRef } = createKyselyMock(rows)
     const em = createEm(db)
@@ -81,22 +78,18 @@ describe('findMessageIdsBySearchTokens', () => {
       organizationId: 'org-1',
     })
     expect(result).toEqual(['msg-1', 'msg-2'])
-    expect(tableNameRef.value).toBe('search_tokens')
+    expect(tableNameRef.value).toBe('entity_indexes')
 
     const whereCalls = calls.filter((call) => call.method === 'where')
     expect(whereCalls).toContainEqual({ method: 'where', args: ['entity_type', '=', 'messages:message'] })
     expect(whereCalls).toContainEqual({ method: 'where', args: ['organization_id', '=', 'org-1'] })
 
-    const fieldFilter = whereCalls.find((call) => call.args[0] === 'field' && call.args[1] === 'in')
-    expect(fieldFilter?.args[2]).toEqual(['subject', 'body', 'external_name'])
-
-    const hashFilter = whereCalls.find((call) => call.args[0] === 'token_hash' && call.args[1] === 'in')
-    const expected = tokenizeText('Hello', resolveSearchConfig()).hashes
-    expect(hashFilter?.args[2]).toEqual(expected)
-
-    const havingCall = calls.find((call) => call.method === 'having')
-    expect(havingCall).toBeDefined()
-    expect(compileSql(havingCall?.args[0])).toContain('count(distinct token_hash) >=')
+    // The hash set is per record, not per field, so the caller's field list no longer narrows the
+    // SQL — it only selects which readings of the term apply when the entity declares field kinds.
+    expect(whereCalls.some((call) => call.args[0] === 'field')).toBe(false)
+    // And no aggregate: containment answers the whole predicate on the row being scanned.
+    expect(calls.some((call) => call.method === 'having' || call.method === 'groupBy')).toBe(false)
+    expect(whereCalls.filter((call) => call.args.length === 1).length).toBeGreaterThanOrEqual(2)
   })
 
   it('uses a null-safe tenant filter and scopes organization_id for shared-org requests', async () => {

@@ -121,12 +121,28 @@ const listSchema = z
 
 type ListQuery = z.infer<typeof listSchema>
 
-function buildFilters(query: ListQuery, numberColumn: string, kind: DocumentKind) {
+function buildFilters(
+  query: ListQuery,
+  numberColumn: string,
+  kind: DocumentKind,
+  searchFields: readonly string[],
+) {
   const filters: Record<string, unknown> = {}
   if (query.id) filters.id = { $eq: query.id }
   if (query.search && query.search.trim().length > 0) {
     const term = buildIlikeTerm(query.search.trim())
-    filters[numberColumn] = { $ilike: term }
+    // Several fields are OR-ed so a desk operator can find an order by whatever they have to
+    // hand — the number, the customer's name, a phone. Each leaf is answered by the projection
+    // row's trigram set, so an extra searchable field costs one more containment probe.
+    //
+    // Written under `$and` rather than `$or`: `filters.$or` is a single key that the channel
+    // branch below also claims, and the second writer would silently drop the first one's
+    // predicate. `$and` nests, so the two survive together.
+    if (searchFields.length > 1) {
+      filters.$and = [{ $or: searchFields.map((field) => ({ [field]: { $ilike: term } })) }]
+    } else {
+      filters[searchFields[0] ?? numberColumn] = { $ilike: term }
+    }
   }
   if (query.customerId) {
     filters.customer_entity_id = { $eq: query.customerId }
@@ -373,8 +389,16 @@ async function ensureNumberEditPermission(
   }
 }
 
-export function buildDocumentCrudOptions(binding: DocumentBinding) {
+/**
+ * @param options.searchFields Fields `?search=` is applied to. Defaults to the document number
+ *   alone, so behaviour is unchanged until a module opts in.
+ */
+export function buildDocumentCrudOptions(
+  binding: DocumentBinding,
+  options?: { searchFields?: string[] },
+) {
   const numberColumn = binding.numberField === 'orderNumber' ? 'order_number' : 'quote_number'
+  const searchFields = options?.searchFields?.length ? options.searchFields : [numberColumn]
   const createSchema = binding.kind === 'order' ? orderCreateSchema : quoteCreateSchema
 
   const routeMetadata = {
@@ -479,7 +503,7 @@ export function buildDocumentCrudOptions(binding: DocumentBinding) {
       entityId: binding.entityId,
       fields: (query: ListQuery) => resolveListFields(query),
       sortFieldMap: buildSortMap(numberColumn),
-      buildFilters: async (query: any) => buildFilters(query, numberColumn, binding.kind),
+      buildFilters: async (query: any) => buildFilters(query, numberColumn, binding.kind, searchFields),
       decorateCustomFields: { entityIds: [binding.entityId] },
       joins: [
         {

@@ -1,6 +1,6 @@
 import { recordIndexerError } from '@open-mercato/shared/lib/indexers/error-log'
 import { isReadProjectionAlwaysConsistent } from '@open-mercato/shared/lib/data/consistency'
-import { upsertIndexRow, reindexSearchTokensForRecord, type UpsertIndexResult } from '../lib/indexer'
+import { upsertIndexRow, type UpsertIndexResult } from '../lib/indexer'
 import { applyCoverageAdjustments, createCoverageAdjustments } from '../lib/coverage'
 import {
   loadQueryIndexRowScope,
@@ -56,7 +56,6 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
           organizationId,
           tenantId,
           searchTokenDoc,
-          deferSearchTokens: false,
           trx,
         })
         if (!suppressCoverage) {
@@ -111,15 +110,16 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
       }
       return
     }
-    // Update the projection row synchronously so list reads (`customValues`) are
-    // consistent the moment the write returns; defer the heavy search-token rebuild.
+    // Update the projection row synchronously so list reads (`customValues`) are consistent the
+    // moment the write returns. The trigram set rides along in the same statement — it is one
+    // array, not the DELETE-plus-thousands-of-INSERTs the token rebuild was, so there is nothing
+    // heavy left to defer and list search is read-your-writes again.
     const result = await upsertIndexRow(em, {
       entityType,
       recordId,
       organizationId,
       tenantId,
       searchTokenDoc,
-      deferSearchTokens: true,
     })
     if (!suppressCoverage) {
       const doc = result.doc
@@ -168,14 +168,12 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
         } catch {}
       }
     }
-    // Defer the heavy, eventually-consistent tail: search-token rebuild + vectorize +
-    // fulltext indexing. The data engine awaits this subscriber for projection
-    // consistency, so this work runs fire-and-forget to keep write latency bounded.
+    // Defer the eventually-consistent tail: vectorize + fulltext indexing. The data engine awaits
+    // this subscriber for projection consistency, so this work runs fire-and-forget to keep write
+    // latency bounded.
     const deferredScope = { entityType, recordId, organizationId, tenantId }
-    const resolvedDoc = result.doc
     void (async () => {
       try {
-        await reindexSearchTokensForRecord(em, { ...deferredScope, doc: resolvedDoc, searchTokenDoc })
         const bus = ctx.resolve<any>('eventBus')
         await bus.emitEvent('query_index.vectorize_one', deferredScope)
         await bus.emitEvent('search.index_record', { entityId: entityType, recordId, organizationId, tenantId })
@@ -184,7 +182,7 @@ export default async function handle(payload: any, ctx: { resolve: <T=any>(name:
           { em },
           {
             source: 'query_index',
-            handler: 'event:query_index.upsert_one:search_tokens',
+            handler: 'event:query_index.upsert_one:deferred',
             error,
             entityType,
             recordId,

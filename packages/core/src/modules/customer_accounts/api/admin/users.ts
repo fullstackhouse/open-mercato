@@ -14,8 +14,7 @@ import { isOwnedCompanyEntity } from '@open-mercato/core/modules/customer_accoun
 import { lookupHashCandidates } from '@open-mercato/shared/lib/encryption/aes'
 import { E } from '#generated/entities.ids.generated'
 import { resolveSearchConfig } from '@open-mercato/shared/lib/search/config'
-import { tokenizeText } from '@open-mercato/shared/lib/search/tokenize'
-import { sql } from 'kysely'
+import { findEntityIdsBySearchTrigrams } from '@open-mercato/shared/lib/search/trigramLookup'
 
 const EMAIL_LIKE_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -71,11 +70,11 @@ export async function GET(req: Request) {
   if (search) {
     const trimmedSearch = search.trim()
     // email/displayName are stored encrypted, so SQL ILIKE on the ciphertext
-    // never matches a plaintext search term. Use search_tokens table for partial
+    // never matches a plaintext search term. Use the trigram index for partial
     // matches and emailHash for exact email lookups.
     const searchFilter: Record<string, unknown>[] = []
 
-    // Search encrypted fields via search_tokens
+    // Search encrypted fields via the projection row's trigram set
     const matchedIds = await findCustomerUserIdsBySearchTokens(em, E.customer_accounts.customer_user, trimmedSearch, auth.tenantId)
     if (matchedIds && matchedIds.length > 0) {
       searchFilter.push({ id: { $in: matchedIds } })
@@ -353,31 +352,18 @@ async function findCustomerUserIdsBySearchTokens(
   tenantScope: string | null | undefined,
   field?: string,
 ): Promise<string[] | null> {
-  const trimmed = search.trim()
-  if (!trimmed) return null
   const searchConfig = resolveSearchConfig()
-  if (!searchConfig.enabled) return []
-  const { hashes } = tokenizeText(trimmed, searchConfig)
-  if (!hashes.length) return []
-
-  const db = (em as any).getKysely() as any
-  let query = db
-    .selectFrom('search_tokens')
-    .select('entity_id')
-    .where('entity_type', '=', entityType)
-    .where('token_hash', 'in', hashes)
-    .groupBy('entity_id')
-    .having(sql<boolean>`count(distinct token_hash) >= ${hashes.length}`)
-  if (field) {
-    query = query.where('field', '=', field)
-  }
-  if (tenantScope !== undefined) {
-    query = query.where(sql<boolean>`tenant_id is not distinct from ${tenantScope}`)
-  }
-  const rows = (await query.execute()) as Array<{ entity_id?: unknown }>
-  return rows
-    .map((row) => (typeof row.entity_id === 'string' ? row.entity_id : null))
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  const result = await findEntityIdsBySearchTrigrams({
+    db: (em as any).getKysely(),
+    entityType,
+    query: search,
+    fields: field ? [field] : null,
+    scope: tenantScope === undefined ? undefined : { tenantId: tenantScope },
+    config: searchConfig,
+  })
+  if (result.matched) return result.ids
+  // `null` keeps the caller's own predicate; every other non-answer is a real "narrow to nothing".
+  return result.reason === 'empty-query' ? null : []
 }
 
 const getMethodDoc: OpenApiMethodDoc = {

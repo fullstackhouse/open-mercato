@@ -113,7 +113,7 @@ export function legacyHashForLookup(value: string): string {
  * falls back to the legacy unkeyed digest so deployments without any configured key
  * keep working unchanged.
  */
-function resolveLookupPepper(): string | null {
+export function resolveLookupPepper(): string | null {
   const candidates = [
     process.env.LOOKUP_HASH_PEPPER,
     process.env.TENANT_DATA_ENCRYPTION_FALLBACK_KEY,

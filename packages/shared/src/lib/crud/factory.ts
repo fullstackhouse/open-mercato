@@ -71,6 +71,7 @@ import { runApiInterceptorsAfter, runApiInterceptorsBefore } from './interceptor
 import { mergeIdFilter, parseIdsParam, isIdsParamProvided } from './ids'
 import { buildQueryParams } from './query-params'
 import { mergeAdvancedFilters } from './advanced-filter-integration'
+import { buildIlikeTerm } from '../db/buildIlikeTerm'
 import { parseExtensionHeaders } from '../umes/extension-headers'
 import { createGenericOptimisticLockReader } from './optimistic-lock'
 import { registerOptimisticLockReaderIfAbsent } from './optimistic-lock-store'
@@ -237,6 +238,19 @@ export type ListConfig<TList> = {
    */
   tiebreakSortField?: string
   buildFilters?: (query: TList, ctx: CrudCtx) => Where<any> | Promise<Where<any>>
+  /**
+   * Fields a `?search=` term is applied to, OR-ed together.
+   *
+   * Additive: with no `searchFields` the factory leaves `?search=` to `buildFilters` exactly as
+   * before. When set, the term becomes an `$ilike` leaf per field, which the query engine answers
+   * through the projection row's trigram set — so an encrypted column is searchable here without
+   * the route hand-rolling a lookup. Combined under `$and`, so it never collides with an `$or`
+   * `buildFilters` writes.
+   *
+   * Query-engine list path only (`entityId` + `fields`); the plain-ORM fallback cannot answer a
+   * trigram predicate, so it ignores this and keeps whatever `buildFilters` produced.
+   */
+  searchFields?: string[]
   transformItem?: (item: any) => any
   allowCsv?: boolean
   // The function forms mirror `fields` above: a route whose export columns depend
@@ -296,6 +310,27 @@ type ColumnResolver = {
   field: string
   header: string
   resolve: (item: any) => unknown
+}
+
+/**
+ * ORs a `?search=` term across `list.searchFields`, under `$and` so it composes with whatever
+ * `buildFilters` produced rather than replacing it.
+ *
+ * The engine answers each `$ilike` leaf through the projection row's trigram set, which is what
+ * makes an encrypted column searchable from a route that never wrote a lookup of its own.
+ */
+function applySearchFieldFilters(
+  filters: Where<any>,
+  searchFields: string[] | undefined,
+  rawSearch: unknown,
+): Where<any> {
+  if (!searchFields?.length) return filters
+  const term = typeof rawSearch === 'string' ? rawSearch.trim() : ''
+  if (!term) return filters
+  const clause = { $or: searchFields.map((field) => ({ [field]: { $ilike: buildIlikeTerm(term) } })) }
+  const current = filters as Record<string, unknown>
+  const existing = Array.isArray(current.$and) ? current.$and : []
+  return { ...current, $and: [...existing, clause] } as Where<any>
 }
 
 function resolveAvailableExportFormats(list?: ListConfig<any>): CrudExportFormat[] {
@@ -1813,7 +1848,11 @@ export function makeCrudRoute<TCreate = any, TUpdate = any, TList = any>(opts: C
           : { page: requestedPage, pageSize: requestedPageSize }
         const baseFilters = exportFullRequested
           ? ({} as Where<any>)
-          : (opts.list.buildFilters ? await opts.list.buildFilters(validated as any, ctx) : ({} as Where<any>))
+          : applySearchFieldFilters(
+              opts.list.buildFilters ? await opts.list.buildFilters(validated as any, ctx) : ({} as Where<any>),
+              opts.list.searchFields,
+              (validated as Record<string, unknown>).search,
+            )
         const filters = exportFullRequested
           ? baseFilters
           : mergeAdvancedFilters(baseFilters as Record<string, unknown>, validated as Record<string, unknown>) as Where<any>
@@ -2011,6 +2050,7 @@ export function makeCrudRoute<TCreate = any, TUpdate = any, TList = any>(opts: C
           pageSize: page.pageSize || requestedPageSize,
           totalPages: Math.ceil(res.total / (Number(page.pageSize) || 1)),
           ...(res.meta?.listCountCapWarning ? { totalIsCapped: true } : {}),
+          ...(res.meta?.searchRecheckApproximate ? { totalIsApproximate: true } : {}),
           ...(res.meta ? { meta: res.meta } : {}),
         }
         await opts.hooks?.afterList?.(payload, { ...ctx, query: validated as any })

@@ -4,6 +4,8 @@ import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 import {
   formatQueryIndexRebuildCommands,
   readQueryIndexReindexDeclaration,
+  QUERY_INDEX_REINDEX_ALL,
+  type QueryIndexReindexTarget,
 } from '@open-mercato/shared/lib/query/migration-reindex'
 
 const MIGRATION_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
@@ -42,12 +44,20 @@ export function resolveMigrationFilePath(
   return null
 }
 
+export type CollectedQueryIndexReindex = {
+  entityTypes: string[]
+  /** `search` only when EVERY declaration asked for it; a mixed run must rebuild the document. */
+  target: QueryIndexReindexTarget
+}
+
 export async function collectQueryIndexReindexEntityTypes(
   applied: readonly AppliedMigration[],
   deps: MigrationReindexDeps,
-): Promise<string[]> {
+): Promise<CollectedQueryIndexReindex> {
   const fileExists = deps.fileExists ?? fs.existsSync
   const collected: string[] = []
+  let sawDeclaration = false
+  let allSearchOnly = true
   for (const migration of applied) {
     const filePath = resolveMigrationFilePath(
       migration.migrationsPath,
@@ -74,15 +84,21 @@ export async function collectQueryIndexReindexEntityTypes(
         } is not a "module:entity" identifier, so its projection will NOT be rebuilt.`,
       )
     })
-    for (const entityType of declared) {
+    if (!declared.entityTypes.length) continue
+    sawDeclaration = true
+    if (declared.target !== 'search') allSearchOnly = false
+    for (const entityType of declared.entityTypes) {
       if (!collected.includes(entityType)) collected.push(entityType)
     }
   }
-  return collected
+  return { entityTypes: collected, target: sawDeclaration && allSearchOnly ? 'search' : 'all' }
 }
 
-export function formatManualReindexInstructions(entityTypes: readonly string[]): string {
-  const commands = formatQueryIndexRebuildCommands(entityTypes)
+export function formatManualReindexInstructions(
+  entityTypes: readonly string[],
+  target: QueryIndexReindexTarget = 'all',
+): string {
+  const commands = formatQueryIndexRebuildCommands(entityTypes, target)
     .map((command) => `     ${command}`)
     .join('\n')
   return [
@@ -113,21 +129,35 @@ export type RequestQueryIndexReindexDeps = {
  * subscriber upserts in place — a forced run purges the entity's rows first, which would
  * leave the projection empty for the duration of the rebuild.
  */
+export type RequestQueryIndexReindexOptions = {
+  target?: QueryIndexReindexTarget
+  /**
+   * Resolves the `'*'` wildcard to the entity types this install actually has projection rows
+   * for. Omitted in tests and when no declaration used the wildcard.
+   */
+  resolveAllEntityTypes?: () => Promise<readonly string[]>
+}
+
 export async function requestQueryIndexReindex(
   entityTypes: readonly string[],
   deps: RequestQueryIndexReindexDeps,
+  options?: RequestQueryIndexReindexOptions,
 ): Promise<{ requested: string[]; queued: boolean }> {
   if (!entityTypes.length) return { requested: [], queued: false }
 
+  const target = options?.target ?? 'all'
   let container: QueryIndexReindexContainer | null = null
   const queued: string[] = []
+  let resolved: string[] = []
   try {
     container = await deps.createContainer()
+    resolved = await expandWildcard(entityTypes, options?.resolveAllEntityTypes)
+    if (!resolved.length) return { requested: [], queued: true }
     const eventBus = container.resolve('eventBus') as QueryIndexReindexEmitter
-    for (const entityType of entityTypes) {
+    for (const entityType of resolved) {
       await eventBus.emitEvent(
         'query_index.reindex',
-        { entityType, allowAllTenants: true, force: false },
+        { entityType, allowAllTenants: true, force: false, target },
         { persistent: true },
       )
       queued.push(entityType)
@@ -137,9 +167,10 @@ export async function requestQueryIndexReindex(
     )
     return { requested: queued, queued: true }
   } catch (error) {
-    const unqueued = entityTypes.filter((entityType) => !queued.includes(entityType))
+    const pool = resolved.length ? resolved : entityTypes
+    const unqueued = pool.filter((entityType) => !queued.includes(entityType))
     deps.onWarn?.(
-      `${formatManualReindexInstructions(unqueued)}\n             Reason: ${
+      `${formatManualReindexInstructions(unqueued, target)}\n             Reason: ${
         error instanceof Error ? error.message : String(error)
       }`,
     )
@@ -153,4 +184,18 @@ export async function requestQueryIndexReindex(
       }
     }
   }
+}
+
+async function expandWildcard(
+  entityTypes: readonly string[],
+  resolveAllEntityTypes?: () => Promise<readonly string[]>,
+): Promise<string[]> {
+  if (!entityTypes.includes(QUERY_INDEX_REINDEX_ALL)) return Array.from(entityTypes)
+  const explicit = entityTypes.filter((entityType) => entityType !== QUERY_INDEX_REINDEX_ALL)
+  const discovered = resolveAllEntityTypes ? Array.from(await resolveAllEntityTypes()) : []
+  const merged: string[] = [...explicit]
+  for (const entityType of discovered) {
+    if (!merged.includes(entityType)) merged.push(entityType)
+  }
+  return merged
 }

@@ -12,14 +12,12 @@ import {
   type ResolvedJoin,
 } from './join-utils'
 import { resolveSearchConfig } from '../search/config'
-import {
-  createSearchTokenAvailability,
-  isSearchFilterOp,
-  type SearchTokenAvailability,
-  type SearchTokenProbeDb,
-  type SearchTokenProbeQueryBuilder,
-} from '../search/availability'
-import { tokenizeText } from '../search/tokenize'
+import { isSearchFilterOp } from '../search/availability'
+import { resolveTermKindsForField } from '../search/fields'
+import { buildTrigramQuery, type TrigramQuery } from '../search/trigram'
+import { buildTrigramSemiJoin } from '../search/trigramSql'
+import { applySearchRecheck, type SearchRecheckPlan } from '../search/recheck'
+import { resolveEntitySearchFieldPolicy } from '../search/fields'
 import { fieldNameCandidates } from './encrypted-sort'
 import { isTenantDataEncryptionEnabled } from '../encryption/toggles'
 import { runBeforeQueryPipeline, runAfterQueryPipeline, type QueryExtensionContext } from './query-extension-runner'
@@ -325,7 +323,6 @@ function computeCustomFieldScore(cfg: Record<string, unknown>, kind: string, ent
  */
 export class BasicQueryEngine implements QueryEngine {
   private searchAliasSeq = 0
-  private searchAvailabilityInstance: SearchTokenAvailability | null = null
 
   constructor(
     private em: EntityManager,
@@ -346,22 +343,6 @@ export class BasicQueryEngine implements QueryEngine {
     const emAny = this.em as any
     if (typeof emAny?.getKysely === 'function') return emAny.getKysely() as AnyDb
     throw new Error('BasicQueryEngine requires an EntityManager exposing getKysely() (MikroORM v7)')
-  }
-
-  private searchAvailability(): SearchTokenAvailability {
-    if (!this.searchAvailabilityInstance) {
-      this.searchAvailabilityInstance = createSearchTokenAvailability({
-        getDb: () => this.getDb() as unknown as SearchTokenProbeDb,
-        getConfig: resolveSearchConfig,
-        applyOrganizationScope: (query, column, scope) => this.applyOrganizationScope(
-          query as unknown as AnyBuilder,
-          column,
-          scope,
-        ) as unknown as SearchTokenProbeQueryBuilder,
-        logDebug: (event, payload) => this.logSearchDebug(event, payload),
-      })
-    }
-    return this.searchAvailabilityInstance
   }
 
   async query<T = any>(entity: EntityId, opts: QueryOptions = {}): Promise<QueryResult<T>> {
@@ -433,27 +414,23 @@ export class BasicQueryEngine implements QueryEngine {
     const searchConfig = resolveSearchConfig()
     const searchFilters = [...baseFilters, ...cfFilters].filter((filter) => isSearchFilterOp(filter.op))
     // Callers that opt out of automatic tenant/org scoping own the full
-    // visibility predicate. Search-token filtering has its own tenant/org
-    // guards, so it must be disabled on this direct-query path as documented
-    // by QueryOptions.omitAutomaticTenantOrgScope.
-    const searchEnabled = !skipAutoScope && await this.searchAvailability().staticEnabled()
-    // Probe `search_tokens` only when this query actually searches (#4723): every consumer of
-    // `searchActive` sits behind a like/ilike guard, so on a plain list load the answer is never
-    // read — and the probe is a `LIMIT 1` the planner can resolve as a seq scan over a large
-    // `search_tokens`. The join path below already probes lazily for the same reason.
-    const hasSearchTokens = searchEnabled && searchFilters.length
-      ? await this.searchAvailability().hasTokens(String(entity), opts.tenantId ?? null, orgScope)
-      : false
-    const searchActive = searchEnabled && hasSearchTokens
-    // Opt-in via OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS (default false: the pre-existing
-    // rewrite-everything behavior is kept). When enabled, base-column like/ilike is rerouted
-    // through search tokens ONLY for encrypted columns, where
-    // ILIKE against ciphertext cannot match. On a plaintext column SQL ILIKE is exact, and the token
-    // rewrite silently changes the result set: tokenization splits on non-alphanumerics and drops
-    // tokens shorter than minTokenLength, so a document-number search like "ZK 1/2026" degrades to
-    // the tokens {202, 2026} and matches every record from that year instead of the one document.
+    // visibility predicate. Trigram filtering has its own tenant/org guards, so it must be
+    // disabled on this direct-query path as documented by
+    // QueryOptions.omitAutomaticTenantOrgScope.
+    //
+    // No availability probe: the trigram set is a column on the projection row this engine
+    // semi-joins to, so there is no side table that may be absent, empty or half-rebuilt. See
+    // `../search/availability`.
+    const searchEnabled = !skipAutoScope && searchConfig.enabled
+    const searchActive = searchEnabled
+    // THIS engine is the fallback for entities the query index does not cover, so a plaintext
+    // base column keeps exact SQL ILIKE — it is exact, needs no projection row, and is the only
+    // thing that can answer a search on an entity with no `entity_indexes` rows at all. Encrypted
+    // columns have no such option (ILIKE against ciphertext matches nothing) and always take the
+    // trigram path. The `OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS` knob that used to select
+    // between these is gone: what it switched on is now simply the behaviour.
     // `ignoreRuntimeHealth` asks the on-disk question -- a column holds ciphertext even while the
-    // KMS is down -- so an outage keeps encrypted columns on the token path (#4622).
+    // KMS is down -- so an outage keeps encrypted columns on the trigram path (#4622).
     // `organizationId: null` is deliberate, not an omission: the service then unions in every
     // organization's map (`fetchAllOrganizationFieldNames`), so a field any org encrypts stays on
     // the token path -- a wider set fails safe. Passing the request's org instead would silently
@@ -463,11 +440,7 @@ export class BasicQueryEngine implements QueryEngine {
     // behavior then, because guessing "plaintext" would turn encrypted-column search into an
     // ILIKE-on-ciphertext that matches nothing.
     let encryptedLikeFields: Set<string> | null = null
-    if (
-      searchActive &&
-      searchConfig.useIlikeForNonEncryptedFields === true &&
-      searchFilters.some((filter) => !String(filter.field).startsWith('cf:'))
-    ) {
+    if (searchActive && searchFilters.some((filter) => !String(filter.field).startsWith('cf:'))) {
       try {
         const service = this.getEncryptionService()
         const readEncryptedFieldNames = service?.getEncryptedFieldNames?.bind(service)
@@ -494,12 +467,20 @@ export class BasicQueryEngine implements QueryEngine {
       } catch (err) {
         // The fallback is safe (the old rewrite-everything behavior), but taking it silently
         // would hide that the gate has stopped working.
-        logger.warn('search: encrypted-field map unavailable; keeping the token rewrite for all columns', {
+        logger.warn('search: encrypted-field map unavailable; keeping the trigram rewrite for all columns', {
           entity: String(entity),
           error: err instanceof Error ? err.message : String(err),
         })
         encryptedLikeFields = null
       }
+    }
+    const shapeTerm = (field: string, value: unknown): TrigramQuery | null => {
+      if (typeof value !== 'string') return null
+      return buildTrigramQuery({
+        term: value,
+        tenantId: opts.tenantId ?? null,
+        kinds: resolveTermKindsForField(String(entity), field),
+      })
     }
     if (searchFilters.length) {
       const fields = searchFilters.map((filter) => String(filter.field))
@@ -510,28 +491,17 @@ export class BasicQueryEngine implements QueryEngine {
         organizationScope: orgScope,
         fields,
         searchEnabled,
-        hasSearchTokens,
         searchActive,
         searchConfig: {
           enabled: searchConfig.enabled,
-          minTokenLength: searchConfig.minTokenLength,
-          enablePartials: searchConfig.enablePartials,
-          hashAlgorithm: searchConfig.hashAlgorithm,
           blocklistedFields: searchConfig.blocklistedFields,
         },
       })
       if (!searchEnabled) {
         this.logSearchDebug('search:disabled', { entity: String(entity), table })
-      } else if (!hasSearchTokens) {
-        this.logSearchDebug('search:no-search-tokens', {
-          entity: String(entity),
-          table,
-          tenantId: opts.tenantId ?? null,
-          organizationScope: orgScope,
-        })
       }
       const fallbackFields = searchFilters
-        .filter((filter) => !searchActive || typeof filter.value !== 'string' || tokenizeText(filter.value, searchConfig).hashes.length === 0)
+        .filter((filter) => !searchActive || shapeTerm(String(filter.field), filter.value) === null)
         .map((filter) => String(filter.field))
       if (fallbackFields.length) {
         await warnOnCiphertextLikeFallback({
@@ -553,24 +523,29 @@ export class BasicQueryEngine implements QueryEngine {
       if (!filters.length) continue
       const join = joinMap.get(alias)
       if (!join?.entityId) continue
-      const hasJoinedTokens = searchEnabled
-        ? await this.searchAvailability().hasTokens(join.entityId, opts.tenantId ?? null, orgScope)
-        : false
       const fallbackFields = filters
-        .filter((filter) => !hasJoinedTokens || typeof filter.value !== 'string' || tokenizeText(filter.value, searchConfig).hashes.length === 0)
+        .filter((filter) => !searchEnabled || typeof filter.value !== 'string' || buildTrigramQuery({
+          term: String(filter.value),
+          tenantId: opts.tenantId ?? null,
+          kinds: resolveTermKindsForField(String(join.entityId), filter.column),
+        }) === null)
         .map((filter) => filter.column)
       if (!fallbackFields.length) continue
       await warnOnCiphertextLikeFallback({
         entity: join.entityId,
         fields: fallbackFields,
         tenantId: opts.tenantId ?? null,
-        reason: hasJoinedTokens
-          ? 'no-indexable-tokens'
-          : searchConfig.enabled ? 'no-search-tokens' : 'search-disabled',
+        reason: searchEnabled ? 'no-indexable-tokens' : 'search-disabled',
         service: this.getEncryptionService(),
       })
     }
     const recordIdColumn = qualify('id')
+
+    // Fields whose predicate was answered by trigram containment, which proves the fragments are
+    // present but not contiguous. Their rows are rechecked against the decrypted values below.
+    // A mutable holder rather than a `let`: the assignments happen inside builder callbacks, which
+    // TypeScript's control-flow analysis does not follow.
+    const searchRecheck: { query: TrigramQuery | null; fields: Set<string> } = { query: null, fields: new Set() }
 
     const applyFilterOp = (builder: AnyBuilder, column: string | RawBuilder<unknown>, op: string, value: unknown, fieldName?: string): AnyBuilder => {
       if (
@@ -586,30 +561,32 @@ export class BasicQueryEngine implements QueryEngine {
         // `display_name`, and a raw comparison would misread that ciphertext column as plaintext.
         (encryptedLikeFields === null || isEncryptedLikeField(encryptedLikeFields, fieldName))
       ) {
-        const tokens = tokenizeText(String(value), searchConfig)
-        const hashes = tokens.hashes
-        if (hashes.length) {
-          const result = this.applySearchTokens(builder, {
+        const trigramQuery = shapeTerm(fieldName, value)
+        if (trigramQuery) {
+          const result = this.applySearchTrigrams(builder, {
             entity: String(entity),
             field: fieldName,
-            hashes,
+            query: trigramQuery,
             recordIdColumn,
             tenantId: opts.tenantId ?? null,
             organizationScope: orgScope,
-            tokens: tokens.tokens,
           })
           this.logSearchDebug('search:filter', {
             entity: String(entity),
             field: fieldName,
-            tokens: tokens.tokens,
-            hashes,
+            term: trigramQuery.term,
+            shapings: trigramQuery.shapings.map((shaping) => shaping.kind),
             applied: result.applied,
             tenantId: opts.tenantId ?? null,
             organizationScope: orgScope,
           })
-          if (result.applied) return result.builder
+          if (result.applied) {
+            searchRecheck.fields.add(fieldName)
+            searchRecheck.query = trigramQuery
+            return result.builder
+          }
         } else {
-          this.logSearchDebug('search:skip-empty-hashes', {
+          this.logSearchDebug('search:skip-unshapeable-term', {
             entity: String(entity),
             field: fieldName,
             value,
@@ -619,15 +596,11 @@ export class BasicQueryEngine implements QueryEngine {
       return this.applyColumnOp(builder, column, op, value)
     }
 
-    // `eq` is accepted alongside `like`/`ilike` so that filters against
-    // encrypted joined columns (whose ciphertext cannot be compared for
-    // equality in SQL) can still resolve via tokenized search. Routing
-    // only applies when `searchEnabled` is true AND the joined entity has
-    // search tokens installed (`searchAvailable`); for non-searchable or
-    // non-encrypted columns the caller still falls through to exact SQL
-    // equality via `applyFilterOp`. Note that token match is approximate —
-    // callers needing strict equality on encrypted fields should filter on
-    // the deterministic `*_hash` column instead.
+    // Routing a joined-entity like/ilike through the joined entity's own trigram set is what lets
+    // an encrypted joined column be searched at all: ciphertext cannot be compared in SQL. Note
+    // the match is a containment answer over the joined record, so it is broader than the base
+    // entity's — callers needing strict equality on an encrypted field should filter on the
+    // deterministic `*_hash` column instead.
     const applyJoinFilterOp = async (
       builder: AnyBuilder,
       filter: { column: string; op: string; value?: unknown },
@@ -638,20 +611,20 @@ export class BasicQueryEngine implements QueryEngine {
       if (!['like', 'ilike'].includes(filter.op)) return { applied: false, builder }
       if (typeof filter.value !== 'string' || filter.value.trim().length === 0) return { applied: false, builder }
 
-      const searchAvailable = await this.searchAvailability().hasTokens(join.entityId, opts.tenantId ?? null, orgScope)
-      if (!searchAvailable) return { applied: false, builder }
+      const trigramQuery = buildTrigramQuery({
+        term: String(filter.value),
+        tenantId: opts.tenantId ?? null,
+        kinds: resolveTermKindsForField(String(join.entityId), filter.column),
+      })
+      if (!trigramQuery) return { applied: false, builder }
 
-      const tokens = tokenizeText(String(filter.value), searchConfig)
-      if (!tokens.hashes.length) return { applied: false, builder }
-
-      const result = this.applySearchTokens(builder, {
-        entity: join.entityId,
+      const result = this.applySearchTrigrams(builder, {
+        entity: String(join.entityId),
         field: filter.column,
-        hashes: tokens.hashes,
+        query: trigramQuery,
         recordIdColumn: `${join.alias}.id`,
         tenantId: opts.tenantId ?? null,
         organizationScope: orgScope,
-        tokens: tokens.tokens,
       })
       return { applied: result.applied, builder: result.builder }
     }
@@ -1067,33 +1040,32 @@ export class BasicQueryEngine implements QueryEngine {
         const expr = cfValueExprByKey[key]
         if (!isCountProjection && !expr) continue
         if ((f.op === 'like' || f.op === 'ilike') && searchActive && typeof f.value === 'string') {
-          const tokens = tokenizeText(String(f.value), searchConfig)
-          const hashes = tokens.hashes
-          if (hashes.length) {
-            const result = this.applySearchTokens(q, {
+          const trigramQuery = shapeTerm(f.field, f.value)
+          if (trigramQuery) {
+            const result = this.applySearchTrigrams(q, {
               entity: String(entity),
               field: f.field,
-              hashes,
+              query: trigramQuery,
               recordIdColumn,
               tenantId: opts.tenantId ?? null,
               organizationScope: orgScope,
-              tokens: tokens.tokens,
             })
             this.logSearchDebug('search:cf-filter', {
               entity: String(entity),
               field: f.field,
-              tokens: tokens.tokens,
-              hashes,
+              term: trigramQuery.term,
               applied: result.applied,
               tenantId: opts.tenantId ?? null,
               organizationScope: orgScope,
             })
             if (result.applied) {
               q = result.builder
+              searchRecheck.fields.add(f.field)
+              searchRecheck.query = trigramQuery
               continue
             }
           } else {
-            this.logSearchDebug('search:cf-skip-empty-hashes', {
+            this.logSearchDebug('search:cf-skip-unshapeable-term', {
               entity: String(entity),
               field: f.field,
               value: f.value,
@@ -1329,6 +1301,21 @@ export class BasicQueryEngine implements QueryEngine {
       }
     }
 
+    // Containment can over-match, so the rows the predicate selected are candidates until the
+    // decrypted values confirm them. Under `recheckMaxRows` every candidate is confirmed and the
+    // count stays exact; above it only the returned page is confirmed and the count is reported as
+    // approximate.
+    const recheckPlan: SearchRecheckPlan | null = searchRecheck.query && searchRecheck.fields.size
+      ? {
+          entityType: String(entity),
+          query: searchRecheck.query,
+          fields: Array.from(searchRecheck.fields),
+          fieldKinds: resolveEntitySearchFieldPolicy(String(entity)).kinds,
+        }
+      : null
+    const recheckMaxRows = searchConfig.recheckMaxRows
+    let searchRecheckApproximate = false
+
     let pagedItems: ResultRow[]
     let encryptedSortRowCapWarning: EncryptedSortRowCapWarning | undefined
 
@@ -1349,7 +1336,14 @@ export class BasicQueryEngine implements QueryEngine {
       const decryptedCandidates = decryptPayload
         ? await mapWithConcurrency(candidateRows, DECRYPT_CONCURRENCY, decryptRow)
         : candidateRows
-      const orderedCandidates = sortRowsInMemory(decryptedCandidates, resolvedSorts)
+      const confirmedCandidates = applySearchRecheck(recheckPlan, decryptedCandidates)
+      if (recheckPlan) {
+        // The candidate scan already materialized every row, so the recheck is free here and the
+        // count it produces is exact — unless the sort cap truncated the scan first.
+        if (!sortTruncated) total = confirmedCandidates.length
+        else searchRecheckApproximate = true
+      }
+      const orderedCandidates = sortRowsInMemory(confirmedCandidates, resolvedSorts)
       const pageIds = orderedCandidates
         .slice((page - 1) * pageSize, page * pageSize)
         .map((row) => row.id)
@@ -1379,21 +1373,50 @@ export class BasicQueryEngine implements QueryEngine {
           .map((id) => byId.get(String(id)))
           .filter((row): row is ResultRow => row != null)
       }
+    } else if (recheckPlan && total > 0 && total <= recheckMaxRows) {
+      // Small candidate set: confirm all of it, so both the page and the count are exact.
+      const candidates = await qFull.limit(recheckMaxRows).execute() as ResultRow[]
+      normalizeCfJsonAliases(candidates)
+      const decrypted = decryptPayload
+        ? await mapWithConcurrency(candidates, DECRYPT_CONCURRENCY, decryptRow)
+        : candidates
+      const confirmed = applySearchRecheck(recheckPlan, decrypted)
+      total = confirmed.length
+      pagedItems = confirmed.slice((page - 1) * pageSize, page * pageSize)
     } else {
-      const dataQuery = qFull.limit(pageSize).offset((page - 1) * pageSize)
-      const items = await dataQuery.execute() as ResultRow[]
-      normalizeCfJsonAliases(items)
-      pagedItems = decryptPayload
-        ? await mapWithConcurrency(items, DECRYPT_CONCURRENCY, decryptRow)
-        : items
+      // Large candidate set (or no recheck pending): page in SQL. With a recheck pending the page
+      // is over-fetched by 25% and re-fetched once if still short, and the count stays the
+      // candidate count — reported through `meta.searchRecheckApproximate`.
+      const overFetch = recheckPlan ? Math.ceil(pageSize * 1.25) : pageSize
+      const offset = (page - 1) * pageSize
+      const fetchPage = async (limit: number): Promise<ResultRow[]> => {
+        const rows = await qFull.limit(limit).offset(offset).execute() as ResultRow[]
+        normalizeCfJsonAliases(rows)
+        return decryptPayload
+          ? await mapWithConcurrency(rows, DECRYPT_CONCURRENCY, decryptRow)
+          : rows
+      }
+      let rows = await fetchPage(overFetch)
+      if (recheckPlan) {
+        searchRecheckApproximate = true
+        let confirmed = applySearchRecheck(recheckPlan, rows)
+        if (confirmed.length < pageSize && rows.length === overFetch) {
+          rows = await fetchPage(Math.ceil(pageSize * 2.5))
+          confirmed = applySearchRecheck(recheckPlan, rows)
+        }
+        pagedItems = confirmed.slice(0, pageSize)
+      } else {
+        pagedItems = rows
+      }
     }
 
     let queryResult: QueryResult<T> = { items: pagedItems as unknown as T[], page, pageSize, total }
 
-    if (encryptedSortRowCapWarning || listCountCapWarning) {
+    if (encryptedSortRowCapWarning || listCountCapWarning || searchRecheckApproximate) {
       const meta: QueryResultMeta = {}
       if (encryptedSortRowCapWarning) meta.encryptedSortRowCapWarning = encryptedSortRowCapWarning
       if (listCountCapWarning) meta.listCountCapWarning = listCountCapWarning
+      if (searchRecheckApproximate) meta.searchRecheckApproximate = true
       queryResult.meta = meta
     }
 
@@ -1630,21 +1653,29 @@ export class BasicQueryEngine implements QueryEngine {
     return present
   }
 
-  private applySearchTokens(
+  /**
+   * Adds the trigram containment predicate for the supplied (entity, field) against the record id
+   * column of the row being scanned.
+   *
+   * This engine's base table is the entity's own table, not the projection, so the predicate is a
+   * NON-correlated semi-join into `entity_indexes` — the planner answers the sub-select once
+   * through the GIN index and hash-semi-joins the ids, instead of the per-outer-row
+   * `EXISTS … GROUP BY … HAVING` the token path used.
+   */
+  private applySearchTrigrams(
     q: AnyBuilder,
     opts: {
       entity: string
       field: string
-      hashes: string[]
+      query: TrigramQuery
       recordIdColumn: string
       tenantId?: string | null
       organizationScope?: { ids: string[]; includeNull: boolean } | null
       combineWith?: 'and' | 'or'
-      tokens?: string[]
     }
   ): { applied: boolean; builder: AnyBuilder } {
-    if (!opts.hashes.length) {
-      this.logSearchDebug('search:skip-no-hashes', {
+    if (!opts.query.shapings.length) {
+      this.logSearchDebug('search:skip-no-trigrams', {
         entity: opts.entity,
         field: opts.field,
         tenantId: opts.tenantId ?? null,
@@ -1653,45 +1684,29 @@ export class BasicQueryEngine implements QueryEngine {
       return { applied: false, builder: q }
     }
     const alias = `st_${this.searchAliasSeq++}`
-    const engine = this
-    this.logSearchDebug('search:apply-search-tokens', {
+    this.logSearchDebug('search:apply-search-trigrams', {
       entity: opts.entity,
       field: opts.field,
       alias,
-      tokenCount: opts.hashes.length,
-      tokens: opts.tokens,
+      term: opts.query.term,
+      shapings: opts.query.shapings.map((shaping) => shaping.kind),
       tenantId: opts.tenantId ?? null,
       organizationScope: opts.organizationScope,
       combineWith: opts.combineWith ?? 'and',
     })
-    const buildSub = (eb: any) => {
-      let sub: AnyBuilder = eb
-        .selectFrom(`search_tokens as ${alias}`)
-        .select(sql<number>`1`.as('one'))
-        .where(`${alias}.entity_type`, '=', opts.entity)
-        .where(`${alias}.field`, '=', opts.field)
-        .where(sql<boolean>`${sql.ref(`${alias}.entity_id`)} = ${sql.ref(opts.recordIdColumn)}::text`)
-        .where(`${alias}.token_hash`, 'in', opts.hashes)
-        .groupBy([`${alias}.entity_id`, `${alias}.field`])
-        .having(sql<boolean>`count(distinct ${sql.ref(`${alias}.token_hash`)}) >= ${opts.hashes.length}`)
-      if (opts.tenantId !== undefined) {
-        sub = sub.where(sql<boolean>`${sql.ref(`${alias}.tenant_id`)} is not distinct from ${opts.tenantId ?? null}`)
-      }
-      if (opts.organizationScope) {
-        sub = engine.applyOrganizationScope(sub, `${alias}.organization_id`, opts.organizationScope)
-      }
-      return sub
-    }
-    const combiner = opts.combineWith === 'or' ? 'or' : 'and'
-    if (combiner === 'or') {
-      // When OR combining, caller expects a raw predicate to include in eb.or([...]).
-      // We keep the same semantics as the previous knex orWhereExists by mutating the outer builder with a WHERE EXISTS.
-      // Return the mutated builder; callers that need per-predicate control should build the sub themselves.
-      const next = q.where((eb: any) => eb.or([eb.exists(buildSub(eb))]))
+    const predicate = buildTrigramSemiJoin({
+      entityType: opts.entity,
+      recordIdColumn: opts.recordIdColumn,
+      query: opts.query,
+      tenantId: opts.tenantId,
+      organizationScope: opts.organizationScope ?? null,
+      alias,
+    })
+    if (opts.combineWith === 'or') {
+      const next = q.where((eb: any) => eb.or([predicate]))
       return { applied: true, builder: next }
     }
-    const next = q.where((eb: any) => eb.exists(buildSub(eb)))
-    return { applied: true, builder: next }
+    return { applied: true, builder: q.where(predicate) }
   }
 
   private applyIndexDocFilter(
@@ -1710,30 +1725,31 @@ export class BasicQueryEngine implements QueryEngine {
     }
   ): AnyBuilder {
     if ((opts.op === 'like' || opts.op === 'ilike') && opts.searchActive && typeof opts.value === 'string') {
-      const tokens = tokenizeText(String(opts.value), opts.searchConfig)
-      const hashes = tokens.hashes
-      if (hashes.length) {
-        const result = this.applySearchTokens(q, {
+      const trigramQuery = buildTrigramQuery({
+        term: String(opts.value),
+        tenantId: opts.tenantId ?? null,
+        kinds: resolveTermKindsForField(opts.entity, opts.field),
+      })
+      if (trigramQuery) {
+        const result = this.applySearchTrigrams(q, {
           entity: opts.entity,
           field: opts.field,
-          hashes,
+          query: trigramQuery,
           recordIdColumn: opts.recordIdColumn,
           tenantId: opts.tenantId ?? null,
           organizationScope: opts.organizationScope,
-          tokens: tokens.tokens,
         })
         this.logSearchDebug('search:index-doc-filter', {
           entity: opts.entity,
           field: opts.field,
-          tokens: tokens.tokens,
-          hashes,
+          term: trigramQuery.term,
           applied: result.applied,
           tenantId: opts.tenantId ?? null,
           organizationScope: opts.organizationScope,
         })
         if (result.applied) return result.builder
       } else {
-        this.logSearchDebug('search:index-doc-skip-empty-hashes', {
+        this.logSearchDebug('search:index-doc-skip-unshapeable-term', {
           entity: opts.entity,
           field: opts.field,
           value: opts.value,

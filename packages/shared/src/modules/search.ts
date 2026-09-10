@@ -258,6 +258,21 @@ export type SearchFieldPolicy = {
   hashOnly?: string[]
   /** Fields to exclude from all search */
   excluded?: string[]
+  /**
+   * How list search cleans and matches each field. A field absent from the map is cleaned as
+   * `text` (word-prefix plus whole-value substring), which is what every entity gets without a
+   * declaration — declaring a kind is a refinement, not an opt-in.
+   *
+   * Declare `phone` / `taxId` / `email` so an operator's own spelling matches: a phone stored as
+   * `+48 600-100-200` is only found by `600100200` when the field is declared a phone.
+   */
+  kinds?: Record<string, import('@open-mercato/shared/lib/search/trigram').SearchFieldKind>
+  /**
+   * When true, ONLY the fields named in `kinds` are indexed for list search on this entity,
+   * instead of refining the default selection. Use it to keep a wide free-text column out of the
+   * trigram set without adding it to the operator-owned blocklist.
+   */
+  kindsReplaceDefaults?: boolean
 }
 
 /**
