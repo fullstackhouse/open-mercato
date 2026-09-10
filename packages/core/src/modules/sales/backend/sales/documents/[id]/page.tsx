@@ -898,6 +898,7 @@ type DocumentRecord = {
   paidTotalAmount?: number | null
   refundedTotalAmount?: number | null
   outstandingAmount?: number | null
+  totalsMode?: 'computed' | 'external' | null
   createdAt?: string
   updatedAt?: string
   metadata?: Record<string, unknown> | null
@@ -1923,6 +1924,7 @@ export default function SalesDocumentDetailPage({
   const [generating, setGenerating] = React.useState(false)
   const [converting, setConverting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  const [switchingToComputedAmounts, setSwitchingToComputedAmounts] = React.useState(false)
   const [sending, setSending] = React.useState(false)
   const [sendOpen, setSendOpen] = React.useState(false)
   const [validForDays, setValidForDays] = React.useState(14)
@@ -2829,6 +2831,8 @@ export default function SalesDocumentDetailPage({
     },
     [t]
   )
+  const amountsAreExternal = kind === 'order' && record?.totalsMode === 'external'
+
   const totalsItems = React.useMemo(() => {
     if (!record) return []
     const items: { key: string; label: string; amount: number | null | undefined; emphasize?: boolean }[] = [
@@ -3769,6 +3773,43 @@ export default function SalesDocumentDetailPage({
     }
   }, [fetchDocumentByKind, kind, record, runMutationWithContext, t, validForDays])
 
+  // Leaving `external` rewrites the header and every line from unit price,
+  // quantity and discount, which cannot reproduce a source that rounded VAT per
+  // rate group. It is therefore an explicit, confirmed action of its own, never a
+  // side effect of editing something else.
+  const handleSwitchToComputedAmounts = React.useCallback(async () => {
+    if (!record || kind !== 'order') return
+    const ok = await confirm({
+      title: t(
+        'sales.documents.amountsSwitchConfirm',
+        'Recompute this order\u2019s amounts from its lines? The totals supplied by the source system will be replaced and cannot be restored from here.',
+      ),
+      variant: 'default',
+    })
+    if (!ok) return
+    setSwitchingToComputedAmounts(true)
+    try {
+      await runMutationWithContext(async () => {
+        await withScopedApiRequestHeaders(buildOptimisticLockHeader(record.updatedAt), () =>
+          apiCallOrThrow('/api/sales/orders', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: record.id, amountsMode: 'computed' }),
+          }),
+        )
+      }, { id: record.id, amountsMode: 'computed' })
+      flash(t('sales.documents.amountsSwitchDone', 'Amounts are now computed from the lines.'), 'success')
+      await refreshDocumentTotals()
+    } catch (err) {
+      logger.error('sales.documents.amounts.switchToComputed', { err })
+      if (!handleDocumentMutationError(err, t, () => setReloadKey((prev) => prev + 1))) {
+        flash(t('sales.documents.amountsSwitchFailed', 'Could not switch to computed amounts.'), 'error')
+      }
+    } finally {
+      setSwitchingToComputedAmounts(false)
+    }
+  }, [confirm, kind, record, refreshDocumentTotals, runMutationWithContext, t])
+
   const handleDelete = React.useCallback(async () => {
     if (!record) return
     const ok = await confirm({
@@ -4251,6 +4292,7 @@ export default function SalesDocumentDetailPage({
           tenantId={(record as any)?.tenantId ?? (record as any)?.tenant_id ?? null}
           onActionChange={handleSectionActionChange}
           onItemsChange={(items) => setHasItems(items.length > 0)}
+          amountsReadOnly={amountsAreExternal}
         />
       )
     }
@@ -4897,6 +4939,30 @@ export default function SalesDocumentDetailPage({
           title={t('sales.documents.detail.totals.title', 'Totals')}
           currency={record.currencyCode ?? null}
           items={totalsItems}
+          sourceBadge={
+            amountsAreExternal
+              ? {
+                  label: t('sales.documents.amountsExternal', 'Amounts from source'),
+                  hint: t(
+                    'sales.documents.amountsExternalHint',
+                    'Totals on this document come from an external system and are stored as supplied.',
+                  ),
+                }
+              : null
+          }
+          footerAction={
+            amountsAreExternal ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={switchingToComputedAmounts}
+                onClick={handleSwitchToComputedAmounts}
+              >
+                {t('sales.documents.amountsSwitchToComputed', 'Switch to computed amounts')}
+              </Button>
+            ) : null
+          }
         />
 
         <div className="space-y-4" ref={detailSectionRef}>
