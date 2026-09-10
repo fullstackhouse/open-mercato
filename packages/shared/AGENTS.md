@@ -55,7 +55,7 @@ yarn workspace @open-mercato/shared build
 | `number.ts` | When parsing numeric strings from env/query params with a fallback and optional min/integer constraint | `@open-mercato/shared/lib/number` |
 | `openapi/` | When generating CRUD OpenAPI specs | `@open-mercato/shared/lib/openapi/crud` |
 | `profiler/` | When profiling with `OM_PROFILE` env flag | `@open-mercato/shared/lib/profiler` |
-| `search/` | When resolving record ids from the `search_tokens` index — MUST use instead of hand-rolling the Kysely lookup, and MUST be unioned into (or replace) any `$ilike` filter on a column an encryption map covers | `@open-mercato/shared/lib/search/tokenLookup` |
+| `search/` | When resolving record ids from the keyed trigram hash set on `entity_indexes.search_trgm` — MUST use instead of hand-rolling the Kysely lookup, and MUST be unioned into (or replace) any `$ilike` filter on a column an encryption map covers | `@open-mercato/shared/lib/search/trigramLookup` |
 | `string.ts` | When parsing comma-separated lists from CLI args/query params, or coercing a string to `undefined` when blank | `@open-mercato/shared/lib/string` |
 | `testing/` | When bootstrapping tests — register only what the test needs | `@open-mercato/shared/lib/testing/bootstrap` |
 
@@ -98,12 +98,12 @@ const results = await findWithDecryption(em, 'Entity', filter, { tenantId, organ
 
 Encryption maps default to tenant-scoped keys. Use the additive `keyScope: 'system'` option only for records that must exist before a tenant does; the system scope remains authoritative after a tenant id is later assigned so existing ciphertext stays readable.
 
-### Search Tokens — MUST use instead of `$ilike` on encrypted columns
+### Search — MUST use instead of `$ilike` on encrypted columns
 
 ```typescript
-import { findEntityIdsBySearchTokens } from '@open-mercato/shared/lib/search/tokenLookup'
+import { findEntityIdsBySearchTrigrams } from '@open-mercato/shared/lib/search/trigramLookup'
 
-const match = await findEntityIdsBySearchTokens({
+const match = await findEntityIdsBySearchTrigrams({
   db: em.getKysely<any>(),
   entityType: E.customers.customer_entity,
   query: term,
@@ -113,27 +113,37 @@ const match = await findEntityIdsBySearchTokens({
 if (match.matched && match.ids.length) filters.$or.push({ id: { $in: match.ids } })
 ```
 
-An `$ilike` predicate runs against the stored column value. For a field covered by a
-module encryption map that value is ciphertext, so the filter matches nothing and the
-endpoint returns an empty page indistinguishable from a genuine no-result. The token
-index stores hashes of the plaintext, so it keeps matching. Issue #2990.
+An `$ilike` predicate runs against the stored column value. For a field covered by a module
+encryption map that value is ciphertext, so the filter matches nothing and the endpoint returns an
+empty page indistinguishable from a genuine no-result. `entity_indexes.search_trgm` stores keyed
+trigram hashes of the plaintext, so it keeps matching. Issue #2990; design:
+[`.ai/specs/2026-09-10-trigram-hash-list-search.md`](../../.ai/specs/2026-09-10-trigram-hash-list-search.md).
 
-- `matched: false` means the index was **not consulted** (blank query, `OM_SEARCH_ENABLED=off`,
-  or the term produced no tokens) — it is NOT "nothing matched". Keep the caller's own
+- `matched: false` means the index was **not consulted** (blank query, `OM_SEARCH_ENABLED=off`, or
+  a term under three characters once cleaned) — it is NOT "nothing matched". Keep the caller's own
   predicate in that case.
 - `matched: true` with `ids: []` is a real empty result.
-- Queries that go through the query engine get this routing automatically; raw
-  `em.find` / Kysely list routes must wire it themselves. One carve-out: with
-  `OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS=true` (default false), a base-column
-  `like`/`ilike` on a **plaintext** column runs as exact SQL ILIKE instead of the token
-  rewrite — encrypted columns keep the token path either way. When the fallback would run
-  `ILIKE` against an encrypted column, both query engines now log a warning
+- Containment proves the term's fragments are present, not contiguous, so the ids **can
+  over-match**. A caller that needs an exact answer MUST recheck the returned records against the
+  decrypted values; the query engines do this for their own list path
+  (`@open-mercato/shared/lib/search/recheck`).
+- `fields` no longer narrows the SQL — the hash set is per record, not per field. It only selects
+  which readings of the term apply when the entity declares field kinds in its `search.ts`
+  (`SearchFieldPolicy.kinds`: `text` | `identifier` | `phone` | `taxId` | `email` | `exact`).
+- `findEntityIdsBySearchTokens` (`.../search/tokenLookup`) is a `@deprecated` alias delegating
+  here, kept so existing call sites compile. `search_tokens` no longer exists.
+- Queries that go through the query engine get this routing automatically; raw `em.find` / Kysely
+  list routes must wire it themselves. One carve-out: `BasicQueryEngine` — the fallback for
+  entities the query index does not cover — keeps exact SQL `ILIKE` on a **plaintext** base
+  column, because that is the only thing that can answer a search on an entity with no
+  `entity_indexes` rows. Encrypted columns always take the trigram path. When the fallback would
+  run `ILIKE` against an encrypted column, both engines log a warning
   (`lib/query/ciphertext-search-warning`) instead of degrading silently.
-- The `…WithDecryption` helpers log the same warning outside production when the `where`
-  clause targets an encryption-map property with `$like`/`$ilike`/`$re`
-  (`lib/encryption/likeFilterWarning`). It is a development aid — the map lookup costs an
-  uncached read, so it is skipped in production. A search that only breaks under a
-  production-only encryption map still needs a test.
+- The `…WithDecryption` helpers log the same warning outside production when the `where` clause
+  targets an encryption-map property with `$like`/`$ilike`/`$re`
+  (`lib/encryption/likeFilterWarning`). It is a development aid — the map lookup costs an uncached
+  read, so it is skipped in production. A search that only breaks under a production-only
+  encryption map still needs a test.
 
 ### Boolean Parsing — MUST use instead of ad-hoc parsing
 

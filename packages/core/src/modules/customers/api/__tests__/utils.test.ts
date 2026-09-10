@@ -45,9 +45,12 @@ function createFakeDb(options: FakeDbOptions) {
       having() {
         return builder
       },
+      limit() {
+        return builder
+      },
       async execute() {
         if (state.table === 'custom_field_defs') return customFieldDefs
-        if (state.table === 'search_tokens') {
+        if (state.table === 'entity_indexes') {
           if (onSearchTokenExecute) await onSearchTokenExecute()
           const entityType = state.conditions['entity_type']
           return typeof entityType === 'string' ? searchTokenRowsByEntity[entityType] ?? [] : []

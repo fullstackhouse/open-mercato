@@ -12,11 +12,33 @@ export const QUERY_INDEX_REINDEX_EXPORT = 'queryIndexReindexEntityTypes'
 
 const ENTITY_TYPE_PATTERN = /^[a-z0-9_]+:[a-z0-9_]+$/
 
-export function isQueryIndexEntityType(value: unknown): value is string {
-  return typeof value === 'string' && ENTITY_TYPE_PATTERN.test(value)
+/**
+ * Stands for "every entity type this install actually has projection rows for". A static
+ * declaration cannot enumerate them — which modules are installed is a deploy-time fact — so the
+ * wildcard is resolved against `entity_indexes` when the reindex is queued.
+ */
+export const QUERY_INDEX_REINDEX_ALL = '*'
+
+/**
+ * Which part of the projection a queued reindex has to recompute. `search` recomputes only
+ * `entity_indexes.search_trgm` from the stored document, which is what a search-only change needs
+ * and what keeps a fill off the write-amplifying path of a full document rewrite.
+ */
+export type QueryIndexReindexTarget = 'all' | 'search'
+
+export type QueryIndexReindexDeclaration = {
+  entityTypes: readonly string[]
+  target: QueryIndexReindexTarget
 }
 
-export function declareQueryIndexReindex(entityTypes: readonly string[]): readonly string[] {
+export function isQueryIndexEntityType(value: unknown): value is string {
+  return typeof value === 'string' && (value === QUERY_INDEX_REINDEX_ALL || ENTITY_TYPE_PATTERN.test(value))
+}
+
+export function declareQueryIndexReindex(
+  entityTypes: readonly string[],
+  options?: { target?: QueryIndexReindexTarget },
+): QueryIndexReindexDeclaration {
   if (!Array.isArray(entityTypes) || entityTypes.length === 0) {
     throw new Error('[internal] declareQueryIndexReindex requires at least one entity type')
   }
@@ -29,7 +51,11 @@ export function declareQueryIndexReindex(entityTypes: readonly string[]): readon
     }
     if (!normalized.includes(entityType)) normalized.push(entityType)
   }
-  return Object.freeze(normalized)
+  const declaration: QueryIndexReindexDeclaration = {
+    entityTypes: Object.freeze(normalized),
+    target: options?.target ?? 'all',
+  }
+  return Object.freeze(declaration)
 }
 
 /**
@@ -41,21 +67,40 @@ export function declareQueryIndexReindex(entityTypes: readonly string[]): readon
 export function readQueryIndexReindexDeclaration(
   moduleExports: unknown,
   onReject?: (value: unknown) => void,
-): string[] {
-  if (!moduleExports || typeof moduleExports !== 'object') return []
+): QueryIndexReindexDeclaration {
+  const empty: QueryIndexReindexDeclaration = { entityTypes: [], target: 'all' }
+  if (!moduleExports || typeof moduleExports !== 'object') return empty
   const declared = (moduleExports as Record<string, unknown>)[QUERY_INDEX_REINDEX_EXPORT]
-  if (!Array.isArray(declared)) return []
+  // A plain array is the pre-`target` spelling and still the contract's boundary: a migration may
+  // export a literal rather than call the helper.
+  const entries = Array.isArray(declared)
+    ? declared
+    : Array.isArray((declared as QueryIndexReindexDeclaration | undefined)?.entityTypes)
+      ? (declared as QueryIndexReindexDeclaration).entityTypes
+      : null
+  if (!entries) return empty
+  const target = !Array.isArray(declared) && (declared as QueryIndexReindexDeclaration).target === 'search'
+    ? 'search'
+    : 'all'
   const collected: string[] = []
-  for (const entityType of declared) {
+  for (const entityType of entries) {
     if (!isQueryIndexEntityType(entityType)) {
       onReject?.(entityType)
       continue
     }
     if (!collected.includes(entityType)) collected.push(entityType)
   }
-  return collected
+  return { entityTypes: collected, target }
 }
 
-export function formatQueryIndexRebuildCommands(entityTypes: readonly string[]): string[] {
-  return entityTypes.map((entityType) => `mercato query_index rebuild --entity ${entityType} --global`)
+export function formatQueryIndexRebuildCommands(
+  entityTypes: readonly string[],
+  target: QueryIndexReindexTarget = 'all',
+): string[] {
+  const suffix = target === 'search' ? ' --target search' : ''
+  return entityTypes.map((entityType) =>
+    entityType === QUERY_INDEX_REINDEX_ALL
+      ? `mercato query_index reindex --all${suffix}`
+      : `mercato query_index rebuild --entity ${entityType} --global${suffix}`,
+  )
 }

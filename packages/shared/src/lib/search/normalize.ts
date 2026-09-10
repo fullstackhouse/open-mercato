@@ -1,16 +1,11 @@
-import crypto from 'crypto'
-import { resolveSearchConfig, resolveSearchTokenLimits, type SearchConfig } from './config'
-
-export type TokenizationResult = {
-  tokens: string[]
-  hashes: string[]
-}
+/** A trigram is three characters; nothing shorter can be indexed or searched. */
+export const TRIGRAM_LENGTH = 3
 
 /**
  * Latin letters that NFKD leaves intact because they are atomic codepoints rather than a
  * base letter plus a combining mark. Stripping combining marks therefore never folds them
- * to ASCII, and `splitTokens` then consumes them as separators \u2014 truncating `\u0141ukasz` to
- * `ukasz` and cutting `Za\u017c\u00f3\u0142\u0107` down to `zazo`. Because the same tokenizer runs at index
+ * to ASCII, and word splitting then consumes them as separators \u2014 truncating `\u0141ukasz` to
+ * `ukasz` and cutting `Za\u017c\u00f3\u0142\u0107` down to `zazo`. Because the same normalizer runs at index
  * time and at query time, such a record becomes unreachable from every spelling. Only
  * characters with a single unambiguous ASCII fold belong here; anything language-dependent
  * must stay out.
@@ -22,7 +17,7 @@ export type TokenizationResult = {
  * untouched and they still fold correctly in this position.
  *
  * The table covers every letter in Latin-1 Supplement (U+00C0-U+00FF) and Latin Extended-A
- * (U+0100-U+017F) that NFKD leaves un-folded; `tokenize.test.ts` pins that range so a gap
+ * (U+0100-U+017F) that NFKD leaves un-folded; `normalize.test.ts` pins that range so a gap
  * cannot silently reopen. Two entries look redundant and are not: `\u0110` (U+0110, D with
  * stroke) and `\u00d0` (U+00D0, Eth) are visually indistinguishable in uppercase and are
  * routinely substituted for one another in Croatian, Serbian and Vietnamese text, so both
@@ -31,7 +26,7 @@ export type TokenizationResult = {
  *
  * Letters outside those two blocks are deliberately out of scope \u2014 `\u0259`/`\u018f` (U+0259/U+018F,
  * common in Azerbaijani names such as `\u018fliyev`) fold to `e` under ICU and belong here on
- * the same reasoning, but each addition forces operators through another `search_tokens`
+ * the same reasoning, but each addition forces operators through another trigram
  * reindex, so extending the range is tracked separately rather than done piecemeal.
  */
 const NON_DECOMPOSING_FOLDS: Record<string, string> = {
@@ -72,60 +67,8 @@ function foldNonDecomposingLetters(text: string): string {
   return text.replace(NON_DECOMPOSING_PATTERN, (char) => NON_DECOMPOSING_FOLDS[char])
 }
 
-function normalizeText(text: string): string {
+export function normalizeText(text: string): string {
   return foldNonDecomposingLetters(text.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''))
     .replace(/[%_]/g, ' ')
     .toLowerCase()
-}
-
-function splitTokens(text: string, minLength: number): string[] {
-  return normalizeText(text)
-    .split(/[^a-z0-9]+/i)
-    .filter((token) => token.length >= minLength)
-}
-
-function appendExpandedToken(
-  token: string,
-  config: SearchConfig,
-  seen: Set<string>,
-  tokens: string[],
-  limit: number,
-): void {
-  const append = (candidate: string): boolean => {
-    if (seen.has(candidate)) return tokens.length < limit
-    seen.add(candidate)
-    tokens.push(candidate)
-    return tokens.length < limit
-  }
-
-  if (!config.enablePartials) {
-    append(token)
-    return
-  }
-
-  for (let length = config.minTokenLength; length <= token.length; length += 1) {
-    if (!append(token.slice(0, length))) return
-  }
-}
-
-export function hashToken(token: string, config?: SearchConfig): string {
-  const cfg = config ?? resolveSearchConfig()
-  return crypto.createHash(cfg.hashAlgorithm).update(token).digest('hex')
-}
-
-export function tokenizeText(text: string, config?: SearchConfig): TokenizationResult {
-  const cfg = config ?? resolveSearchConfig()
-  const limits = resolveSearchTokenLimits(cfg)
-  const boundedText = limits.maxFieldChars > 0 ? text.slice(0, limits.maxFieldChars) : text
-  const tokenLimit = limits.maxTokensPerField > 0 ? limits.maxTokensPerField : Number.POSITIVE_INFINITY
-  const seen = new Set<string>()
-  const tokens: string[] = []
-
-  for (const token of splitTokens(boundedText, cfg.minTokenLength)) {
-    if (tokens.length >= tokenLimit) break
-    appendExpandedToken(token, cfg, seen, tokens, tokenLimit)
-  }
-
-  const hashes = tokens.map((token) => hashToken(token, cfg))
-  return { tokens, hashes }
 }

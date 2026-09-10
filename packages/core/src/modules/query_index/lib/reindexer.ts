@@ -15,7 +15,7 @@ import { refreshCoverageSnapshot, writeCoverageCounts, applyCoverageAdjustments 
 import { prepareJob, updateJobProgress, finalizeJob, type JobScope } from './jobs'
 import { purgeOrphans } from './stale'
 import type { VectorIndexService } from '@open-mercato/search/vector'
-import { isSearchDebugEnabled } from './search-tokens'
+import { isSearchDebugEnabled } from './search-trigrams'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 
 const logger = createLogger('query_index').child({ component: 'reindexer' })
@@ -167,7 +167,7 @@ export async function reindexEntity(
   // reindexer at arbitrary tables (e.g. `auth_users`, `users`) and read their
   // rows into the index, bypassing tenant scoping and entity-level encryption.
   const table = resolveRegisteredEntityTableName(em, entityType)
-  if (!table || entityType === 'query_index:search_token' || table === 'search_tokens') {
+  if (!table) {
     if (!table) {
       logger.warn('Refusing to reindex unregistered entity type', {
         entityType,
@@ -585,12 +585,6 @@ export async function reindexEntity(
     // Deliberately after the coverage refresh: the authoritative recount is what keeps
     // indexed_count truthful, and it is most worth having when a run has just failed.
     // Throwing here fails the queue job so the loss is visible instead of silent.
-    if (writeTotals.searchTokenFailures > 0) {
-      logger.warn('Search token writes failed during reindex', {
-        entityType,
-        batches: writeTotals.searchTokenFailures,
-      })
-    }
     assertIndexBatchWritesLanded(entityType, writeTotals)
   } catch (error) {
     jobFailed = true

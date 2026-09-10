@@ -3,7 +3,8 @@ import {
   indexesCustomerBaseEntity,
   listSearchTokenExcludedEntityTypes,
 } from '../lib/search-entity-policy'
-import { buildSearchTokenRows } from '../lib/search-tokens'
+import { buildSearchTrigramHashes } from '../lib/search-trigrams'
+import { hashTrigram, trigramsOfValue } from '@open-mercato/shared/lib/search/trigram'
 
 const PERSON_PROFILE = 'customers:customer_person_profile'
 
@@ -43,18 +44,24 @@ describe('OM_SEARCH_CUSTOMERS_INDEX_BASE_ENTITY', () => {
  * honouring the flag, list search on `display_name` / `primary_email` / `description` would return
  * nothing — so the rows must keep being written whatever the flag says.
  */
-describe('the base-entity exclusion never touches the token writer', () => {
+describe('the base-entity exclusion never touches the trigram writer', () => {
+  const TENANT = 'tenant-1'
   const doc = { display_name: 'Ada Lovelace', description: 'Analytical engine pioneer' }
-  const buildRows = (entityType: string) => buildSearchTokenRows({ entityType, recordId: 'rec-1', doc })
+  const buildRows = (entityType: string): number[] =>
+    buildSearchTrigramHashes({ entityType, tenantId: TENANT, doc }) ?? []
+  const contains = (hashes: number[], value: string): boolean => {
+    const set = new Set(hashes)
+    return trigramsOfValue('text', value).every((trigram) => set.has(hashTrigram(trigram, TENANT)))
+  }
 
-  it('keeps writing base customer entity tokens while the flag is off', () => {
+  it('keeps writing base customer entity trigrams while the flag is off', () => {
     delete process.env.OM_SEARCH_CUSTOMERS_INDEX_BASE_ENTITY
-    const fields = new Set(buildRows(CUSTOMERS_BASE_ENTITY_TYPE).map((row) => row.field))
-    expect(fields.has('display_name')).toBe(true)
-    expect(fields.has('description')).toBe(true)
+    const hashes = buildRows(CUSTOMERS_BASE_ENTITY_TYPE)
+    expect(contains(hashes, 'Lovelace')).toBe(true)
+    expect(contains(hashes, 'Analytical')).toBe(true)
   })
 
-  it('writes exactly the same rows when the flag is on', () => {
+  it('writes exactly the same set when the flag is on', () => {
     delete process.env.OM_SEARCH_CUSTOMERS_INDEX_BASE_ENTITY
     const withFlagOff = buildRows(CUSTOMERS_BASE_ENTITY_TYPE)
     process.env.OM_SEARCH_CUSTOMERS_INDEX_BASE_ENTITY = 'true'

@@ -21,15 +21,18 @@ const mockSearchTokenWhere = jest.fn().mockImplementation(() => searchTokenQuery
 const mockSearchTokenHaving = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
 const mockSearchTokenGroupBy = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
 const mockSearchTokenSelect = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
+const mockSearchTokenLimit = jest.fn().mockImplementation(() => searchTokenQueryBuilder)
 const searchTokenQueryBuilder: any = {
   select: mockSearchTokenSelect,
   where: mockSearchTokenWhere,
   groupBy: mockSearchTokenGroupBy,
   having: mockSearchTokenHaving,
+  limit: mockSearchTokenLimit,
   execute: mockSearchTokenExecute,
 }
+// The search lookup now reads the trigram column on the projection row.
 const mockSelectFrom = jest.fn((table: string) => {
-  if (table === 'search_tokens') return searchTokenQueryBuilder
+  if (table === 'entity_indexes') return searchTokenQueryBuilder
   throw new Error(`Unexpected selectFrom ${table}`)
 })
 const mockKysely = { selectFrom: mockSelectFrom }
@@ -227,7 +230,7 @@ describe('admin /api/customer_accounts/admin/users — GET search', () => {
     mockSearchTokenExecute.mockResolvedValue([])
   })
 
-  it('queries search_tokens with the generated entity id (E.customer_accounts.customer_user) and scopes by tenant', async () => {
+  it('queries the trigram column with the generated entity id (E.customer_accounts.customer_user) and scopes by tenant', async () => {
     const matchedId = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
     mockSearchTokenExecute.mockResolvedValueOnce([{ entity_id: matchedId }])
     mockEmFindAndCount.mockResolvedValueOnce([[makeUser(matchedId)], 1])
@@ -236,7 +239,7 @@ describe('admin /api/customer_accounts/admin/users — GET search', () => {
     const body = await res.json()
 
     expect(res.status).toBe(200)
-    expect(mockSelectFrom).toHaveBeenCalledWith('search_tokens')
+    expect(mockSelectFrom).toHaveBeenCalledWith('entity_indexes')
     const entityTypeCall = mockSearchTokenWhere.mock.calls.find(
       (call) => call[0] === 'entity_type' && call[1] === '=' && call[2] === 'customer_accounts:customer_user',
     )
@@ -263,7 +266,7 @@ describe('admin /api/customer_accounts/admin/users — GET search', () => {
     expect(body.items[0]).toMatchObject({ id: matchedId })
   })
 
-  it('combines emailHash lookup with search_tokens matches when the query looks like an email', async () => {
+  it('combines emailHash lookup with trigram matches when the query looks like an email', async () => {
     const tokenId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
     mockSearchTokenExecute.mockResolvedValueOnce([{ entity_id: tokenId }])
     mockEmFindAndCount.mockResolvedValueOnce([[makeUser(tokenId)], 1])
@@ -279,7 +282,7 @@ describe('admin /api/customer_accounts/admin/users — GET search', () => {
     ]))
   })
 
-  it('returns an empty page when neither search_tokens nor the email-hash fallback match', async () => {
+  it('returns an empty page when neither trigrams nor the email-hash fallback match', async () => {
     mockSearchTokenExecute.mockResolvedValueOnce([])
 
     const res = await GET(buildRequest('http://localhost/api/customer_accounts/admin/users?search=nobody'))
@@ -290,7 +293,7 @@ describe('admin /api/customer_accounts/admin/users — GET search', () => {
     expect(mockEmFindAndCount).not.toHaveBeenCalled()
   })
 
-  it('falls back to emailHash-only search when search_tokens yield no match but the query is email-like', async () => {
+  it('falls back to emailHash-only search when trigrams yield no match but the query is email-like', async () => {
     mockSearchTokenExecute.mockResolvedValueOnce([])
     mockEmFindAndCount.mockResolvedValueOnce([[], 0])
 

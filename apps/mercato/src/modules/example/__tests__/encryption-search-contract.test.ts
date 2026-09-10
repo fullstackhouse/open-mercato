@@ -12,7 +12,7 @@
  *   to the whitelist can expose it without any signal
  *
  * Token search over the encrypted column is NOT covered by `fieldPolicy` at all:
- * `search_tokens` rows come from `reindexSearchTokensForRecord`, which decrypts
+ * The `search_trgm` set is built by `upsertIndexRow`, which decrypts
  * the index doc first. That is why excluding the field here costs no reachability.
  */
 import defaultEncryptionMaps from '../encryption'

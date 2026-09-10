@@ -1,5 +1,7 @@
 import { attachAggregateSearchField, buildIndexDocument } from '../lib/document'
-import { buildSearchTokenRows } from '../lib/search-tokens'
+import { buildSearchTrigramHashes } from '../lib/search-trigrams'
+import { trigramsOfValue } from '@open-mercato/shared/lib/search/trigram'
+import { hashTrigram } from '@open-mercato/shared/lib/search/trigram'
 
 const INTERACTION = 'customers:customer_interaction'
 const PERSON = 'customers:person'
@@ -74,26 +76,34 @@ describe('search_text aggregate honours the field blocklist', () => {
   })
 })
 
-describe('per-field search tokens honour entity-scoped blocklist entries', () => {
-  const buildRows = (entityType: string, doc: Record<string, unknown>) =>
-    buildSearchTokenRows({ entityType, recordId: 'rec-1', doc })
+describe('search trigrams honour entity-scoped blocklist entries', () => {
+  const TENANT = 'tenant-1'
+  const hashesFor = (entityType: string, doc: Record<string, unknown>): number[] =>
+    buildSearchTrigramHashes({ entityType, tenantId: TENANT, doc }) ?? []
 
-  it('drops tokens for an entity-scoped blocklisted field', () => {
+  const hashesOfValue = (value: string): number[] =>
+    trigramsOfValue('text', value).map((trigram) => hashTrigram(trigram, TENANT))
+
+  const containsAnyOf = (hashes: number[], value: string): boolean => {
+    const set = new Set(hashes)
+    return hashesOfValue(value).some((hash) => set.has(hash))
+  }
+
+  it('drops trigrams for an entity-scoped blocklisted field', () => {
     process.env.OM_SEARCH_FIELD_BLOCKLIST = `${INTERACTION}@body`
-    const fields = new Set(buildRows(INTERACTION, { subject: 'Quarterly', body: 'Confidential' }).map((row) => row.field))
-    expect(fields.has('subject')).toBe(true)
-    expect(fields.has('body')).toBe(false)
+    const hashes = hashesFor(INTERACTION, { subject: 'Quarterly', body: 'Confidential' })
+    expect(containsAnyOf(hashes, 'Quarterly')).toBe(true)
+    expect(containsAnyOf(hashes, 'Confidential')).toBe(false)
   })
 
   it('keeps the same field indexed for a different entity type', () => {
     process.env.OM_SEARCH_FIELD_BLOCKLIST = `${INTERACTION}@body`
-    const fields = new Set(buildRows(PERSON, { body: 'Profile note' }).map((row) => row.field))
-    expect(fields.has('body')).toBe(true)
+    expect(containsAnyOf(hashesFor(PERSON, { body: 'Profile note' }), 'Profile')).toBe(true)
   })
 
   it('still honours global entries for every entity type', () => {
     process.env.OM_SEARCH_FIELD_BLOCKLIST = 'body'
-    expect(buildRows(PERSON, { body: 'Profile note' })).toHaveLength(0)
+    expect(hashesFor(PERSON, { body: 'Profile note' })).toHaveLength(0)
   })
 
   it('no longer re-indexes blocklisted text through the aggregate field', () => {
@@ -102,11 +112,8 @@ describe('per-field search tokens honour entity-scoped blocklist entries', () =>
       { subject: 'Quarterly', body: 'Confidential' },
       { entityType: INTERACTION },
     )
-    const aggregateTokens = buildRows(INTERACTION, doc).filter((row) => row.field === 'search_text')
-    expect(aggregateTokens.length).toBeGreaterThan(0)
-
-    const blocklistedHashes = new Set(buildRows(PERSON, { note: 'Confidential' }).map((row) => row.token_hash))
-    expect(blocklistedHashes.size).toBeGreaterThan(0)
-    expect(aggregateTokens.some((row) => blocklistedHashes.has(row.token_hash))).toBe(false)
+    const hashes = hashesFor(INTERACTION, doc)
+    expect(containsAnyOf(hashes, 'Quarterly')).toBe(true)
+    expect(containsAnyOf(hashes, 'Confidential')).toBe(false)
   })
 })

@@ -8,7 +8,7 @@ import * as reindexPipelineStageColors from '../modules/customers/migrations/Mig
 import * as reindexWorkflowDefinitions from '../modules/workflows/migrations/Migration20260901120000_reindex_workflow_definitions'
 
 type MigrationModule = {
-  queryIndexReindexEntityTypes: readonly string[]
+  queryIndexReindexEntityTypes: { entityTypes: readonly string[]; target: 'all' | 'search' }
 } & Record<string, unknown>
 
 const CATCH_UP_MIGRATIONS: Array<{ label: string; module: MigrationModule; entityTypes: string[] }> = [
@@ -75,7 +75,7 @@ function registeredEntityTypes(moduleId: string): string[] {
 
 describe('query-index catch-up migrations', () => {
   test.each(CATCH_UP_MIGRATIONS)('$label declares the entity types it repairs', ({ module, entityTypes }) => {
-    expect(module.queryIndexReindexEntityTypes).toEqual(entityTypes)
+    expect(module.queryIndexReindexEntityTypes).toEqual({ entityTypes, target: 'all' })
   })
 
   test.each(CATCH_UP_MIGRATIONS)('$label declares only registered entity types', ({ entityTypes }) => {

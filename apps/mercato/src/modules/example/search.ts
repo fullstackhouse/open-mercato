@@ -51,7 +51,7 @@ function buildTodoPresenter(
  * sensitive by definition and MUST NOT be shipped to an external embedding or
  * fulltext provider. It stays reachable through the `tokens` strategy instead:
  * `reindexSearchTokensForRecord` decrypts the index doc before tokenizing it, so
- * `search_tokens` holds hashes of the plaintext notes and matches them without
+ * The row's `search_trgm` set holds keyed hashes of the plaintext notes' trigrams and matches them without
  * the plaintext ever leaving the database.
  */
 function buildTodoSource(ctx: SearchBuildContext, presenter: SearchResultPresenter): SearchIndexSource | null {
@@ -89,7 +89,7 @@ export const searchConfig: SearchModuleConfig = {
         // `notes` is encrypted at rest, so it is excluded rather than hash-only:
         // `hashOnly` advertises an approved hash sibling for exact-equality
         // lookup, and this module's encryption map declares no `hashField`.
-        // Excluding it here costs nothing in reachability — `search_tokens` is
+        // Excluding it here costs nothing in reachability — `search_trgm` is
         // built by the query indexer from the DECRYPTED index doc and is not
         // gated by this policy, so token search over notes keeps working.
         excluded: ['notes'],

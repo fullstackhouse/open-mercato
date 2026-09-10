@@ -2,13 +2,6 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { HybridQueryEngine, coerceSortDirection } from '../../query_index/lib/engine'
 import { BasicQueryEngine } from '@open-mercato/shared/lib/query/engine'
 import { SortDir } from '@open-mercato/shared/lib/query/types'
-import { clearSearchTokenPresenceCache } from '@open-mercato/shared/lib/search/availability'
-
-// The token-presence answer is cached process-wide (TTL); without clearing it,
-// probe-count assertions would observe hits from earlier tests in this file.
-beforeEach(() => {
-  clearSearchTokenPresenceCache()
-})
 
 jest.mock('@open-mercato/shared/lib/logger', () => {
   const mocked = {
@@ -1408,43 +1401,24 @@ describe('HybridQueryEngine custom-entity classification (#2939)', () => {
     expect(chains.some((chain) => chain.table === 'todos')).toBe(false)
   })
 
-  describe('search_tokens coverage probe (#4723)', () => {
+  describe('trigram search needs no availability probe (#4723 successor)', () => {
     type ChainRecordingDb = { _chains: ChainLog[] }
 
-    const countProbes = (db: ChainRecordingDb): number =>
+    // The token path had to probe `search_tokens` — for the table, then for this scope — before it
+    // dared emit a predicate, because the answer could be "absent", "empty" or "half-rebuilt". The
+    // trigram set is a column on `entity_indexes`, the table this engine already scans, so the
+    // predicate is unconditional and neither probe exists.
+    const countTokenProbes = (db: ChainRecordingDb): number =>
       db._chains.filter((chain) => chain.table === 'search_tokens').length
 
     const buildDb = (): ChainRecordingDb => createFakeKysely({
       baseTable: 'todos', hasIndexAny: true, baseCount: 10, indexCount: 10, customFieldKeys: {},
     })
 
-    const buildCustomEntityDb = (): ChainRecordingDb => createFakeKysely({
-      baseTable: 'unused',
-      hasIndexAny: false,
-      baseCount: 0,
-      indexCount: 0,
-      customFieldKeys: {},
-      rows: { custom_entities_storage: [{ entity_id: 'record-1' }] },
-    })
-
     const buildHybridEngine = (em: EntityManager): HybridQueryEngine =>
       new HybridQueryEngine(em, new BasicQueryEngine(em))
 
-    test('is skipped when the query carries no like/ilike filter', async () => {
-      const db = buildDb()
-      const engine = buildHybridEngine(buildEm(db))
-
-      await engine.query('example:todo', {
-        fields: ['id'],
-        organizationId: 'org1',
-        tenantId: 't1',
-        filters: [{ field: 'is_done', op: 'eq', value: false }],
-      })
-
-      expect(countProbes(db)).toBe(0)
-    })
-
-    test('still runs when the query actually searches', async () => {
+    test('a searching query never touches search_tokens', async () => {
       const db = buildDb()
       const engine = buildHybridEngine(buildEm(db))
 
@@ -1455,55 +1429,10 @@ describe('HybridQueryEngine custom-entity classification (#2939)', () => {
         filters: [{ field: 'title', op: 'ilike', value: '%abc%' }],
       })
 
-      expect(countProbes(db)).toBeGreaterThan(0)
+      expect(countTokenProbes(db)).toBe(0)
     })
 
-    test('is skipped on the custom-entity storage path without a like/ilike filter', async () => {
-      const db = buildCustomEntityDb()
-      const engine = buildHybridEngine(buildEmWithOrmMetadata(db, {}))
-
-      await engine.query('example:calendar_entity', {
-        fields: ['id'],
-        organizationIds: ['org1'],
-        tenantId: 't1',
-        filters: [{ field: 'is_active', op: 'eq', value: true }],
-      })
-
-      expect(countProbes(db)).toBe(0)
-    })
-
-    test('still runs on the custom-entity storage path when the query searches', async () => {
-      const db = buildCustomEntityDb()
-      const engine = buildHybridEngine(buildEmWithOrmMetadata(db, {}))
-
-      await engine.query('example:calendar_entity', {
-        fields: ['id'],
-        organizationIds: ['org1'],
-        tenantId: 't1',
-        filters: [{ field: 'title', op: 'ilike', value: '%abc%' }],
-      })
-
-      expect(countProbes(db)).toBeGreaterThan(0)
-    })
-
-    test('probes each joined-source entity once even when several filters hit the same source', async () => {
-      const db = buildDb()
-      const engine = buildHybridEngine(buildEm(db))
-
-      await engine.query('example:todo', {
-        fields: ['id'],
-        organizationId: 'org1',
-        tenantId: 't1',
-        filters: [
-          { field: 'title', op: 'ilike', value: '%abc%' },
-          { field: 'description', op: 'ilike', value: '%def%' },
-        ],
-      })
-
-      expect(countProbes(db)).toBe(1)
-    })
-
-    test('a join-only search probes the joined entity without probing the base source', async () => {
+    test('a join-only search never touches search_tokens either', async () => {
       const db = createFakeKysely({
         baseTable: 'todos',
         hasIndexAny: true,
@@ -1527,9 +1456,7 @@ describe('HybridQueryEngine custom-entity classification (#2939)', () => {
         filters: [{ field: 'assignee.display_name', op: 'ilike', value: '%abc%' }],
       })
 
-      expect(countProbes(db)).toBe(1)
-      const tokenProbe = (db._chains as ChainLog[]).find((chain) => chain.table === 'search_tokens')
-      expect(tokenProbe?.wheres).toContainEqual(['entity_type', '=', 'auth:user'])
+      expect(countTokenProbes(db as ChainRecordingDb)).toBe(0)
     })
   })
 })
@@ -1787,13 +1714,16 @@ describe('HybridQueryEngine cf filter operator coverage (#5039)', () => {
   // `buildCfFilterExpression` will produce anything. The two must agree: if the switch
   // grows an operator and the operator set does not, OR-grouped leaves using it get
   // silently dropped. This pins them together.
-  const SUPPORTED_OPS = ['eq', 'ne', 'in', 'nin', 'like', 'ilike', 'exists', 'gt', 'gte', 'lt', 'lte'] as const
+  const SUPPORTED_OPS = ['eq', 'ne', 'in', 'nin', 'exists', 'gt', 'gte', 'lt', 'lte'] as const
+  // like/ilike are compiled too, but into trigram containment over `search_trgm` rather than a
+  // `->>` doc read, so they are asserted separately below.
+  const SEARCH_OPS = ['like', 'ilike'] as const
 
-  // A cf predicate always reads the doc as text, so `->>` in the serialized WHERE is a
-  // reliable marker that one was emitted. Callback-form wheres are replayed against a
-  // recording ExpressionBuilder so the eq/in branches (which wrap themselves in an OR)
-  // are visible too.
-  const cfPredicatesFor = async (op: string, value: unknown): Promise<string[]> => {
+  // A cf predicate reads the doc as text, so `->>` in the serialized WHERE is a reliable marker
+  // that one was emitted; a search predicate names `search_trgm` instead. Callback-form wheres are
+  // replayed against a recording ExpressionBuilder so the eq/in branches (which wrap themselves in
+  // an OR) are visible too.
+  const cfPredicatesFor = async (op: string, value: unknown, marker = '->>'): Promise<string[]> => {
     const db = createFakeKysely({ baseTable: 'todos', hasIndexAny: true, baseCount: 5, indexCount: 5 })
     const engine = new HybridQueryEngine(buildEm(db), { query: jest.fn() } as any)
     await engine.query('example:todo', {
@@ -1815,13 +1745,20 @@ describe('HybridQueryEngine cf filter operator coverage (#5039)', () => {
       .map((node: unknown) => JSON.stringify(node, (_key, inner) =>
         inner && typeof inner.toOperationNode === 'function' ? inner.toOperationNode() : inner,
       ))
-      .filter((serialized: string) => typeof serialized === 'string' && serialized.includes('->>'))
+      .filter((serialized: string) => typeof serialized === 'string' && serialized.includes(marker))
   }
 
   test.each(SUPPORTED_OPS)('operator %s compiles to a custom-field predicate', async (op) => {
     const value = op === 'in' || op === 'nin' ? ['high'] : op === 'exists' ? true : 'high'
     const predicates = await cfPredicatesFor(op, value)
     expect(predicates.length).toBeGreaterThan(0)
+  })
+
+  test.each(SEARCH_OPS)('operator %s compiles to trigram containment', async (op) => {
+    expect((await cfPredicatesFor(op, 'high', 'search_trgm')).length).toBeGreaterThan(0)
+    // And NOT to a doc read: an `ilike` against a doc value is exactly what cannot match
+    // ciphertext, which is why the search path exists.
+    expect(await cfPredicatesFor(op, 'high')).toHaveLength(0)
   })
 
   test('an operator the builder does not compile emits no custom-field predicate at all', async () => {
@@ -1832,18 +1769,18 @@ describe('HybridQueryEngine cf filter operator coverage (#5039)', () => {
   })
 })
 
-describe('HybridQueryEngine like/ilike routing by column encryption (applyColumnFilter)', () => {
+describe('HybridQueryEngine like/ilike routing (applyColumnFilter)', () => {
   // Unit-level: applyColumnFilter is called directly with a recording builder, and
-  // buildSearchTokensSub is spied, so these cases pin the routing decision itself without
+  // buildSearchTrigramPredicate is spied, so these cases pin the routing decision itself without
   // standing up the full query() scaffolding.
   const { sql } = require('kysely')
 
   function makeEngine() {
     const engine = new HybridQueryEngine({} as any, { query: jest.fn() } as any)
-    const tokensSpy = jest
-      .spyOn(engine as any, 'buildSearchTokensSub')
-      .mockReturnValue({ __sub: true } as any)
-    return { engine, tokensSpy }
+    const trigramSpy = jest
+      .spyOn(engine as any, 'buildSearchTrigramPredicate')
+      .mockReturnValue(sql`true` as any)
+    return { engine, trigramSpy }
   }
 
   function makeBuilder() {
@@ -1867,7 +1804,7 @@ describe('HybridQueryEngine like/ilike routing by column encryption (applyColumn
 
   const runtime = (encryptedFields: Set<string> | null | undefined) => ({
     enabled: true,
-    config: { enabled: true, minTokenLength: 3, enablePartials: true, hashAlgorithm: 'sha256' as const, storeRawTokens: false, blocklistedFields: [] },
+    config: { enabled: true, blocklistedFields: [], recheckMaxRows: 1_000 },
     tenantId: 't1',
     organizationScope: null,
     searchSources: [{ entity: 'customers:customer_entity', recordIdColumn: 'b.id' }],
@@ -1876,46 +1813,50 @@ describe('HybridQueryEngine like/ilike routing by column encryption (applyColumn
     entity: 'customers:customer_entity',
     field: 'display_name',
     recordIdColumn: 'b.id',
+    recheck: { query: null, fields: new Set<string>() },
   })
 
-  test('a plaintext column keeps exact ILIKE when the gate has resolved a set', () => {
-    const { engine, tokensSpy } = makeEngine()
-    const { q, wheres } = makeBuilder()
+  test('a plaintext column routes through trigrams too — containment plus recheck is exact', () => {
+    // Under the token rewrite a plaintext column had to keep SQL ILIKE, because prefix hashes
+    // could not answer `ZK 1/2026` literally. Trigram containment can, and the recheck confirms
+    // it on the decrypted row, so this engine has one search path rather than two.
+    const { engine, trigramSpy } = makeEngine()
+    const { q } = makeBuilder()
     ;(engine as any).applyColumnFilter(q, 'b.display_name', { field: 'display_name', op: 'ilike', value: '%avision%' }, runtime(new Set(['other_column'])))
-    expect(tokensSpy).not.toHaveBeenCalled()
-    expect(wheres).toEqual([{ args: ['b.display_name', 'ilike', '%avision%'] }])
+    expect(trigramSpy).toHaveBeenCalled()
   })
 
-  test('an encrypted column still routes through tokens, matching across name shapes', () => {
+  test('an encrypted column routes through trigrams, matching across name shapes', () => {
     // The map declares camelCase; the filter carries the snake_case column name.
-    const { engine, tokensSpy } = makeEngine()
+    const { engine, trigramSpy } = makeEngine()
     const { q } = makeBuilder()
     ;(engine as any).applyColumnFilter(q, 'b.display_name', { field: 'display_name', op: 'ilike', value: '%avision%' }, runtime(new Set(['displayName'])))
-    expect(tokensSpy).toHaveBeenCalled()
+    expect(trigramSpy).toHaveBeenCalled()
   })
 
-  test('an untokenizable term on a KNOWN-encrypted column matches nothing, not everything', () => {
-    const { engine, tokensSpy } = makeEngine()
+  test('an unshapeable term on a KNOWN-encrypted column matches nothing, not everything', () => {
+    const { engine, trigramSpy } = makeEngine()
     const { q, wheres } = makeBuilder()
+    // Two characters: shorter than a trigram, so no reading of the term is indexable.
     ;(engine as any).applyColumnFilter(q, 'b.display_name', { field: 'display_name', op: 'ilike', value: 'ZK' }, runtime(new Set(['display_name'])))
-    expect(tokensSpy).not.toHaveBeenCalled()
+    expect(trigramSpy).not.toHaveBeenCalled()
     expect(wheres).toHaveLength(1)
     expect(JSON.stringify(wheres[0].args[0].toOperationNode())).toEqual(JSON.stringify(sql`false`.toOperationNode()))
   })
 
-  test('with a nullish encrypted set (gate off / custom-entity / resolution failure) legacy semantics hold', () => {
-    const { engine, tokensSpy } = makeEngine()
+  test('with a nullish encrypted set (custom-entity / resolution failure) legacy semantics hold', () => {
+    const { engine, trigramSpy } = makeEngine()
     const { q, wheres } = makeBuilder()
-    // Tokenizable term: the rewrite still fires.
+    // Shapeable term: the rewrite still fires.
     ;(engine as any).applyColumnFilter(q, 'b.display_name', { field: 'display_name', op: 'ilike', value: '%avision%' }, runtime(undefined))
-    expect(tokensSpy).toHaveBeenCalled()
-    // Untokenizable term: the predicate is dropped, NOT failed closed.
+    expect(trigramSpy).toHaveBeenCalled()
+    // Unshapeable term: the predicate is dropped, NOT failed closed.
     const before = wheres.length
     ;(engine as any).applyColumnFilter(q, 'b.display_name', { field: 'display_name', op: 'ilike', value: 'ZK' }, runtime(undefined))
     expect(wheres).toHaveLength(before)
   })
 
-  test('buildBaseFilterExpression: untokenizable OR-leaf is false only for KNOWN-encrypted columns', () => {
+  test('buildBaseFilterExpression: unshapeable OR-leaf is false only for KNOWN-encrypted columns', () => {
     const { engine } = makeEngine()
     const eb: any = { or: (parts: any[]) => ({ __or: parts }), exists: (sub: any) => ({ __exists: sub }) }
     const resolveBase = (f: string) => f

@@ -172,6 +172,12 @@ export type QueryResultMeta = {
   partialIndexWarning?: PartialIndexWarning
   encryptedSortRowCapWarning?: EncryptedSortRowCapWarning
   listCountCapWarning?: ListCountCapWarning
+  /**
+   * A list search whose candidate set was too large to confirm in full: the returned page is
+   * exact, `total` is the trigram candidate count and therefore an upper bound. Surfaced to
+   * clients as `totalIsApproximate`. Absent means the count is exact, as it always was.
+   */
+  searchRecheckApproximate?: boolean
 }
 
 export type QueryResult<T = any> = {

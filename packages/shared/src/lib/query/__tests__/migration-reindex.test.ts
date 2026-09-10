@@ -13,8 +13,16 @@ describe('declareQueryIndexReindex', () => {
       'workflows:workflow_definition',
     ])
 
-    expect(declared).toEqual(['customers:customer_dictionary_entry', 'workflows:workflow_definition'])
+    expect(declared.entityTypes).toEqual(['customers:customer_dictionary_entry', 'workflows:workflow_definition'])
+    expect(declared.target).toBe('all')
+    expect(Object.isFrozen(declared.entityTypes)).toBe(true)
     expect(Object.isFrozen(declared)).toBe(true)
+  })
+
+  it('carries a search-only target and the every-entity wildcard', () => {
+    const declared = declareQueryIndexReindex(['*'], { target: 'search' })
+
+    expect(declared).toEqual({ entityTypes: ['*'], target: 'search' })
   })
 
   it('rejects identifiers that are not module:entity', () => {
@@ -30,13 +38,23 @@ describe('readQueryIndexReindexDeclaration', () => {
       [QUERY_INDEX_REINDEX_EXPORT]: ['dictionaries:dictionary_entry', 'dictionaries:dictionary_entry'],
     }
 
-    expect(readQueryIndexReindexDeclaration(moduleExports)).toEqual(['dictionaries:dictionary_entry'])
+    expect(readQueryIndexReindexDeclaration(moduleExports))
+      .toEqual({ entityTypes: ['dictionaries:dictionary_entry'], target: 'all' })
+  })
+
+  it('reads the target from a declaration that carries one', () => {
+    const moduleExports = {
+      [QUERY_INDEX_REINDEX_EXPORT]: declareQueryIndexReindex(['*'], { target: 'search' }),
+    }
+
+    expect(readQueryIndexReindexDeclaration(moduleExports)).toEqual({ entityTypes: ['*'], target: 'search' })
   })
 
   it('returns nothing for migrations that declare nothing', () => {
-    expect(readQueryIndexReindexDeclaration({})).toEqual([])
-    expect(readQueryIndexReindexDeclaration(null)).toEqual([])
-    expect(readQueryIndexReindexDeclaration({ [QUERY_INDEX_REINDEX_EXPORT]: 'customers:deal' })).toEqual([])
+    const empty = { entityTypes: [], target: 'all' }
+    expect(readQueryIndexReindexDeclaration({})).toEqual(empty)
+    expect(readQueryIndexReindexDeclaration(null)).toEqual(empty)
+    expect(readQueryIndexReindexDeclaration({ [QUERY_INDEX_REINDEX_EXPORT]: 'customers:deal' })).toEqual(empty)
   })
 
   it('drops malformed entries instead of propagating them into a reindex request', () => {
@@ -44,7 +62,7 @@ describe('readQueryIndexReindexDeclaration', () => {
       [QUERY_INDEX_REINDEX_EXPORT]: ['customers:deal', 42, 'not-an-entity-type', null],
     }
 
-    expect(readQueryIndexReindexDeclaration(moduleExports)).toEqual(['customers:deal'])
+    expect(readQueryIndexReindexDeclaration(moduleExports)).toEqual({ entityTypes: ['customers:deal'], target: 'all' })
   })
 
   it('reports every rejected entry so a typo cannot leave a projection stale in silence', () => {
@@ -54,9 +72,8 @@ describe('readQueryIndexReindexDeclaration', () => {
       [QUERY_INDEX_REINDEX_EXPORT]: ['customers:customerDictionaryEntry', 'customers:deal', 42],
     }
 
-    expect(readQueryIndexReindexDeclaration(moduleExports, (value) => rejected.push(value))).toEqual([
-      'customers:deal',
-    ])
+    expect(readQueryIndexReindexDeclaration(moduleExports, (value) => rejected.push(value)))
+      .toEqual({ entityTypes: ['customers:deal'], target: 'all' })
     expect(rejected).toEqual(['customers:customerDictionaryEntry', 42])
   })
 
@@ -64,9 +81,8 @@ describe('readQueryIndexReindexDeclaration', () => {
     const rejected: unknown[] = []
     const moduleExports = { [QUERY_INDEX_REINDEX_EXPORT]: ['customers:deal', 'customers:deal'] }
 
-    expect(readQueryIndexReindexDeclaration(moduleExports, (value) => rejected.push(value))).toEqual([
-      'customers:deal',
-    ])
+    expect(readQueryIndexReindexDeclaration(moduleExports, (value) => rejected.push(value)))
+      .toEqual({ entityTypes: ['customers:deal'], target: 'all' })
     expect(rejected).toEqual([])
   })
 })
@@ -75,6 +91,12 @@ describe('formatQueryIndexRebuildCommands', () => {
   it('renders the operator fallback command for every entity type', () => {
     expect(formatQueryIndexRebuildCommands(['customers:deal'])).toEqual([
       'mercato query_index rebuild --entity customers:deal --global',
+    ])
+  })
+
+  it('renders the search-only wildcard as the reindex command an operator can actually run', () => {
+    expect(formatQueryIndexRebuildCommands(['*'], 'search')).toEqual([
+      'mercato query_index reindex --all --target search',
     ])
   })
 })

@@ -7,7 +7,7 @@
  *    from that projection empties the field in the UI without any error, while
  *    adding it to the grid projection buys a per-row decrypt nobody renders.
  * 2. Text search over `notes` uses a PLAIN `$ilike`, exactly like the plaintext
- *    `title` filter. The query engine rewrites like/ilike into a `search_tokens`
+ *    `title` filter. The query engine rewrites like/ilike into a trigram-containment
  *    lookup when the column is encrypted and search is active, so the module does
  *    not — and must not — hand-roll an id narrowing of its own.
  */
@@ -116,7 +116,7 @@ async function buildFilters(rawQuery: Record<string, unknown>, ctx: unknown): Pr
 
 describe('encrypted-column text search goes through the platform', () => {
   // This suite replaced one that covered a hand-rolled id-narrowing helper. The query
-  // engine already rewrites like/ilike into a `search_tokens` lookup for an encrypted
+  // engine already rewrites like/ilike into trigram containment for an encrypted
   // column (`packages/shared/src/lib/query/engine.ts` → `applyFilterOp`), and
   // `applySearchTokens` applies the tenant/organization scope itself. Reimplementing
   // that in the module meant duplicating platform behaviour AND re-deriving the scope

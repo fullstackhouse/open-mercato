@@ -1,38 +1,26 @@
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 import { parseNumberWithDefault } from '@open-mercato/shared/lib/number'
 import { parseCommaSeparatedList } from '@open-mercato/shared/lib/string'
+import { TRIGRAM_LENGTH } from './normalize'
 
 export type SearchConfig = {
   enabled: boolean
-  minTokenLength: number
-  enablePartials: boolean
-  hashAlgorithm: 'sha256' | 'sha1' | 'md5'
-  storeRawTokens: boolean
-  /**
-   * When true, a like/ilike on a PLAINTEXT base column runs as exact SQL ILIKE instead of being
-   * rewritten into an approximate search-token match; encrypted columns always keep the token
-   * path (ILIKE against ciphertext cannot match). Off by default: token matching can be faster
-   * than an unanchored ILIKE, which may need a full scan without a trigram index — but it is
-   * approximate (fragments under minTokenLength vanish, so `ZK 1/2026` degrades to its year and
-   * an all-short term drops the predicate). Flip it on when list search must be exact.
-   */
-  useIlikeForNonEncryptedFields?: boolean
   blocklistedFields: string[]
   entityBlocklistedFields?: Record<string, string[]>
   maxFieldChars?: number
-  maxTokensPerField?: number
-  maxTokensPerRecord?: number
+  /**
+   * Above this many trigram candidates the engine stops proving the result set exact: it
+   * rechecks only the page it returns and reports the candidate count with
+   * `meta.searchRecheckApproximate` (surfaced to clients as `totalIsApproximate`).
+   */
+  recheckMaxRows: number
 }
 
-export const DEFAULT_SEARCH_MIN_TOKEN_LENGTH = 3
 export const DEFAULT_SEARCH_MAX_FIELD_CHARS = 20_000
-export const DEFAULT_SEARCH_MAX_TOKENS_PER_FIELD = 5_000
-export const DEFAULT_SEARCH_MAX_TOKENS_PER_RECORD = 20_000
+export const DEFAULT_SEARCH_RECHECK_MAX_ROWS = 1_000
 
-export type SearchTokenLimits = {
+export type SearchFieldLimits = {
   maxFieldChars: number
-  maxTokensPerField: number
-  maxTokensPerRecord: number
 }
 
 const DEFAULT_BLOCKLIST = ['password', 'token', 'secret', 'hash']
@@ -47,24 +35,12 @@ function parseNumber(raw: string | undefined, fallback: number, min = 1): number
   return parseNumberWithDefault(raw, fallback, { integer: true, min })
 }
 
-export function resolveSearchTokenLimits(config: SearchConfig): SearchTokenLimits {
-  const resolveLimit = (value: number | undefined, fallback: number): number => {
-    if (value === undefined) return fallback
-    if (!Number.isFinite(value) || value < 0) return fallback
-    return Math.trunc(value)
+export function resolveSearchFieldLimits(config: SearchConfig): SearchFieldLimits {
+  const value = config.maxFieldChars
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return { maxFieldChars: DEFAULT_SEARCH_MAX_FIELD_CHARS }
   }
-  return {
-    maxFieldChars: resolveLimit(config.maxFieldChars, DEFAULT_SEARCH_MAX_FIELD_CHARS),
-    maxTokensPerField: resolveLimit(config.maxTokensPerField, DEFAULT_SEARCH_MAX_TOKENS_PER_FIELD),
-    maxTokensPerRecord: resolveLimit(config.maxTokensPerRecord, DEFAULT_SEARCH_MAX_TOKENS_PER_RECORD),
-  }
-}
-
-function parseHashAlgorithm(raw: string | undefined): 'sha256' | 'sha1' | 'md5' {
-  const value = (raw ?? '').trim().toLowerCase()
-  if (value === 'sha1') return 'sha1'
-  if (value === 'md5') return 'md5'
-  return 'sha256'
+  return { maxFieldChars: Math.trunc(value) }
 }
 
 /**
@@ -117,16 +93,10 @@ export function resolveSearchConfig(): SearchConfig {
   const blocklist = parseFieldBlocklist(process.env.OM_SEARCH_FIELD_BLOCKLIST)
   return {
     enabled: parseBoolean(process.env.OM_SEARCH_ENABLED, true),
-    minTokenLength: resolveSearchMinTokenLength(),
-    enablePartials: parseBoolean(process.env.OM_SEARCH_ENABLE_PARTIAL, true),
-    hashAlgorithm: parseHashAlgorithm(process.env.OM_SEARCH_HASH_ALGO),
-    storeRawTokens: parseBoolean(process.env.OM_SEARCH_STORE_RAW_TOKENS, false),
-    useIlikeForNonEncryptedFields: parseBoolean(process.env.OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS, false),
     blocklistedFields: blocklist.global,
     entityBlocklistedFields: blocklist.byEntity,
     maxFieldChars: parseNumber(process.env.OM_SEARCH_MAX_FIELD_CHARS, DEFAULT_SEARCH_MAX_FIELD_CHARS, 0),
-    maxTokensPerField: parseNumber(process.env.OM_SEARCH_MAX_TOKENS_PER_FIELD, DEFAULT_SEARCH_MAX_TOKENS_PER_FIELD, 0),
-    maxTokensPerRecord: parseNumber(process.env.OM_SEARCH_MAX_TOKENS_PER_RECORD, DEFAULT_SEARCH_MAX_TOKENS_PER_RECORD, 0),
+    recheckMaxRows: parseNumber(process.env.OM_SEARCH_RECHECK_MAX_ROWS, DEFAULT_SEARCH_RECHECK_MAX_ROWS, 0),
   }
 }
 
@@ -156,16 +126,11 @@ export function isSearchFieldBlocklisted(
 }
 
 /**
- * Browser-safe accessor for the minimum search token length.
+ * Browser-safe accessor for the shortest term list search can answer.
  *
- * Why: client components (e.g. global search dialog) must mirror the server-side
- * tokenizer's `minTokenLength` so the UI gates the request before hitting an
- * empty result set. Pulling the value through this single helper keeps the env
- * contract (`OM_SEARCH_MIN_LEN`) authoritative on both sides.
- *
- * How to apply: call from anywhere — server, client (when the host app exposes
- * `OM_SEARCH_MIN_LEN` through `next.config.ts`'s `env` block), or tests.
+ * A trigram is three characters, so the minimum is a constant rather than a knob — client
+ * components (the global search dialog) gate the request on the same number the server uses.
  */
 export function resolveSearchMinTokenLength(): number {
-  return parseNumber(process.env.OM_SEARCH_MIN_LEN, DEFAULT_SEARCH_MIN_TOKEN_LENGTH, 1)
+  return TRIGRAM_LENGTH
 }

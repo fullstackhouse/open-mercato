@@ -32,7 +32,7 @@ export class Todo {
    * `api/todos/route.ts`:
    * - never sorted on, never exported to CSV, never filtered with `$ilike`
    * - selected only for single-record reads, so grid pages skip the per-row decrypt
-   * - reachable by text search only through the hashed `search_tokens` index
+   * - reachable by text search only through the keyed trigram index on `entity_indexes.search_trgm`
    */
   @Property({ type: 'text', nullable: true })
   notes?: string | null

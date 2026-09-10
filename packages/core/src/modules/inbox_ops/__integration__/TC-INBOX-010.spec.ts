@@ -3,8 +3,7 @@ import { expect, test } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__integration__/helpers/api'
 import { withClient } from '@open-mercato/core/modules/core/__integration__/helpers/dbFixtures'
 import { readJsonSafe } from '@open-mercato/core/modules/core/__integration__/helpers/generalFixtures'
-import { tokenizeText } from '@open-mercato/shared/lib/search/tokenize'
-import { resolveSearchConfig } from '@open-mercato/shared/lib/search/config'
+import { buildTrigramQuery } from '@open-mercato/shared/lib/search/trigram'
 
 function decodeScope(token: string): { tenantId: string; organizationId: string } {
   const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as {
@@ -17,8 +16,8 @@ function decodeScope(token: string): { tenantId: string; organizationId: string 
   return { tenantId: payload.tenantId, organizationId: payload.orgId }
 }
 
-test.describe('TC-INBOX-010: Proposal token search', () => {
-  test('returns a scoped proposal whose summary tokens match', async ({ request }) => {
+test.describe('TC-INBOX-010: Proposal trigram search', () => {
+  test('returns a scoped proposal whose summary trigrams match', async ({ request }) => {
     const token = await getAuthToken(request)
     const scope = decodeScope(token)
     const emailId = randomUUID()
@@ -40,15 +39,19 @@ test.describe('TC-INBOX-010: Proposal token search', () => {
            values ($1, $2, $3, '[]'::jsonb, 0.95, 'pending', false, true, $4, $5, now(), now())`,
           [proposalId, emailId, summary, scope.organizationId, scope.tenantId],
         )
-        const { hashes } = tokenizeText(query, resolveSearchConfig())
-        for (const hash of hashes) {
-          await client.query(
-            `insert into search_tokens
-               (id, entity_type, entity_id, organization_id, tenant_id, field, token_hash, created_at)
-             values (gen_random_uuid(), 'inbox_ops:inbox_proposal', $1, $2, $3, 'summary', $4, now())`,
-            [proposalId, scope.organizationId, scope.tenantId, hash],
-          )
-        }
+        // The projection row is what list search reads, so the fixture seeds it directly with the
+        // same keyed hashes the writer would have produced for this tenant.
+        const trigramQuery = buildTrigramQuery({ term: query, tenantId: scope.tenantId })
+        expect(trigramQuery, 'query should shape into trigrams').not.toBeNull()
+        const hashes = Array.from(new Set(trigramQuery!.shapings.flatMap((shaping) => shaping.groups.flat())))
+        await client.query(
+          `insert into entity_indexes
+             (id, entity_type, entity_id, organization_id, tenant_id, doc, search_trgm, index_version, created_at, updated_at)
+           values (gen_random_uuid(), 'inbox_ops:inbox_proposal', $1, $2, $3, $4::jsonb, $5::int4[], 1, now(), now())
+           on conflict (entity_type, entity_id, organization_id_coalesced)
+           do update set search_trgm = excluded.search_trgm, doc = excluded.doc`,
+          [proposalId, scope.organizationId, scope.tenantId, JSON.stringify({ summary }), hashes],
+        )
       })
 
       const response = await apiRequest(
@@ -62,7 +65,7 @@ test.describe('TC-INBOX-010: Proposal token search', () => {
       expect(body?.items?.some((item) => item.id === proposalId)).toBeTruthy()
     } finally {
       await withClient(async (client) => {
-        await client.query('delete from search_tokens where entity_id = $1', [proposalId])
+        await client.query('delete from entity_indexes where entity_id = $1', [proposalId])
         await client.query('delete from inbox_proposals where id = $1', [proposalId])
         await client.query('delete from inbox_emails where id = $1', [emailId])
       })

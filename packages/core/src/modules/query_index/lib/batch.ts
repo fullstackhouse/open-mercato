@@ -2,7 +2,8 @@ import { type Kysely, sql } from 'kysely'
 import { recordIndexerError } from '@open-mercato/shared/lib/indexers/error-log'
 import { isUniqueViolation } from '@open-mercato/shared/lib/db/pg-errors'
 import { buildIndexDocument, type IndexCustomFieldValue } from './document'
-import { replaceSearchTokensForBatch, isSearchDebugEnabled } from './search-tokens'
+import { buildSearchTrigramHashes, isSearchDebugEnabled } from './search-trigrams'
+import { trigramArraySql } from './indexer'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { resolveSearchConfig } from '@open-mercato/shared/lib/search/config'
 
@@ -32,6 +33,11 @@ export type UpsertIndexBatchResult = {
   attempted: number
   written: number
   failedRecordIds: string[]
+  /**
+   * @deprecated Always 0. The trigram set is a column on the projection row, so a search-index
+   * write can no longer fail independently of the row write it rides along with. Kept so callers
+   * that destructure the result keep compiling.
+   */
   searchTokenFailures: number
 }
 
@@ -118,6 +124,8 @@ type IndexRowPayload = {
   tenant_id: string | null
   doc: Record<string, unknown>
   tokenDoc: Record<string, unknown>
+  /** `null` when search is switched off — the column is then left as it stands. */
+  searchTrgm: number[] | null
   index_version: number
 }
 
@@ -131,6 +139,7 @@ async function updateIndexRow(db: Kysely<any>, payload: IndexRowPayload): Promis
       tenant_id: payload.tenant_id ?? null,
       updated_at: sql`now()`,
       deleted_at: null,
+      ...(payload.searchTrgm ? { search_trgm: trigramArraySql(payload.searchTrgm) } : {}),
     } as any)
     .where('entity_type' as any, '=', payload.entity_type)
     .where('entity_id' as any, '=', payload.entity_id)
@@ -152,7 +161,7 @@ export async function upsertIndexBatch(
   const recordIds = rows.map((row) => normalizeId(row.id))
 
   const failedRecordIds: string[] = []
-  let searchTokenFailures = 0
+  const searchTokenFailures = 0
   let recordedRowErrors = 0
 
   const recordRowFailure = async (
@@ -331,6 +340,15 @@ export async function upsertIndexBatch(
       tenant_id: scopeTenant ?? null,
       doc,
       tokenDoc,
+      // Built from the DECRYPTED document and written in the same statement as `doc`: the
+      // trigram set is a column on this row, so there is no second table to keep in step and no
+      // window in which a written record is invisible to search.
+      searchTrgm: buildSearchTrigramHashes({
+        entityType,
+        tenantId: scopeTenant ?? null,
+        doc: tokenDoc,
+        config: searchConfig,
+      }),
       index_version: 1,
     })
     if (debugEnabled) {
@@ -361,31 +379,8 @@ export async function upsertIndexBatch(
     created_at: sql`now()`,
     updated_at: sql`now()`,
     deleted_at: null,
+    ...(payload.searchTrgm ? { search_trgm: trigramArraySql(payload.searchTrgm) } : {}),
   }))
-
-  const tokenPayloads = basePayloads.map((payload) => ({
-    entityType: payload.entity_type,
-    recordId: payload.entity_id,
-    organizationId: payload.organization_id,
-    tenantId: payload.tenant_id,
-    doc: payload.tokenDoc,
-  }))
-
-  const writeSearchTokens = async (payloads = tokenPayloads): Promise<void> => {
-    if (!payloads.length) return
-    try {
-      await replaceSearchTokensForBatch(db, payloads)
-    } catch (searchTokenError) {
-      // Record instead of swallowing: a failed token write leaves fulltext search stale.
-      // Not counted as a write failure — replaceSearchTokensForBatch is transactional, so
-      // tokens end up stale rather than missing, and the record's next write rebuilds them.
-      searchTokenFailures += 1
-      await recordIndexerError(
-        { db },
-        { source: 'fulltext', handler: 'query_index:reindex-batch', error: searchTokenError, entityType, tenantId: scope.tenantId ?? null, organizationId: scope.orgId ?? null },
-      ).catch(() => undefined)
-    }
-  }
 
   const buildResult = (written: number): UpsertIndexBatchResult => ({
     attempted: rows.length,
@@ -414,6 +409,7 @@ export async function upsertIndexBatch(
           tenant_id: sql`excluded.tenant_id`,
           deleted_at: sql`excluded.deleted_at`,
           updated_at: sql`now()`,
+          search_trgm: sql`excluded.search_trgm`,
         } as any))
       .execute()
   } catch (bulkError) {
@@ -436,9 +432,8 @@ export async function upsertIndexBatch(
   }
 
   if (!bulkWriteFailed) {
-    await writeSearchTokens()
     if (debugEnabled) {
-      logger.debug('Reindex batch tokens', {
+      logger.debug('Reindex batch trigrams', {
         entityType,
         records: basePayloads.length,
         scopeOrg: scope.orgId ?? null,
@@ -473,6 +468,7 @@ export async function upsertIndexBatch(
             created_at: sql`now()`,
             updated_at: sql`now()`,
             deleted_at: null,
+            ...(payload.searchTrgm ? { search_trgm: trigramArraySql(payload.searchTrgm) } : {}),
           } as any)
           .execute()
         written += 1
@@ -496,7 +492,5 @@ export async function upsertIndexBatch(
     }
   }
 
-  const failedRecordIdSet = new Set(failedRecordIds)
-  await writeSearchTokens(tokenPayloads.filter((payload) => !failedRecordIdSet.has(payload.recordId)))
   return buildResult(written)
 }

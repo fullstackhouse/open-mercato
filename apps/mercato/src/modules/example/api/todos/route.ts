@@ -277,7 +277,7 @@ export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
       if (q.title) F.title = { $ilike: `%${escapeLikePattern(q.title)}%` }
       // `notes` is encrypted, and this is deliberately a PLAIN `$ilike` — the same
       // shape as `title` above. The query engine intercepts like/ilike and rewrites
-      // it into a `search_tokens` lookup whenever search is active
+      // it into trigram containment over the projection row whenever search is active
       // (`packages/shared/src/lib/query/engine.ts` → `applyFilterOp`), because the
       // token index stores hashes of the DECRYPTED value. Hand-rolling an id
       // narrowing here would duplicate that, and would also have to re-apply the
