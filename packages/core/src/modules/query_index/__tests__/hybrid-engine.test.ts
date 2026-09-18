@@ -3,6 +3,7 @@ import { HybridQueryEngine, coerceSortDirection } from '../../query_index/lib/en
 import { BasicQueryEngine } from '@open-mercato/shared/lib/query/engine'
 import { SortDir } from '@open-mercato/shared/lib/query/types'
 import { clearSearchTokenPresenceCache } from '@open-mercato/shared/lib/search/availability'
+import * as queryExtensionRunner from '@open-mercato/shared/lib/query/query-extension-runner'
 
 // The token-presence answer is cached process-wide (TTL); without clearing it,
 // probe-count assertions would observe hits from earlier tests in this file.
@@ -1131,6 +1132,83 @@ describe('HybridQueryEngine', () => {
       expect(db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === 101)).toBeUndefined()
     })
 
+    test('a countProbe under the cap is the total, with no warning', async () => {
+      process.env.OM_LIST_COUNT_CAP = '100'
+      const { engine } = buildFixture(5)
+      const result = await engine.query('example:todo', {
+        tenantId: 't1', organizationId: 'org1', fields: ['id'], page: { page: 1, pageSize: 20 },
+        countProbe: jest.fn().mockResolvedValue(42),
+      })
+      expect(result.total).toBe(42)
+      expect(result.meta?.listCountCapWarning).toBeUndefined()
+    })
+
+    test('a countProbe is told when the count is uncapped', async () => {
+      process.env.OM_LIST_COUNT_CAP = '0'
+      const { engine } = buildFixture(5)
+      const countProbe = jest.fn().mockResolvedValue(7)
+      const result = await engine.query('example:todo', {
+        tenantId: 't1', organizationId: 'org1', fields: ['id'], page: { page: 1, pageSize: 20 }, countProbe,
+      })
+      expect(countProbe).toHaveBeenCalledWith(null)
+      expect(result.total).toBe(7)
+    })
+
+    test('an inner-joined custom field source voids the countProbe: it narrows rows the probe cannot see', async () => {
+      process.env.OM_LIST_COUNT_CAP = '100'
+      const { engine } = buildFixture(5)
+      const countProbe = jest.fn().mockResolvedValue(42)
+      await engine.query('example:todo', {
+        tenantId: 't1', organizationId: 'org1', fields: ['id'], page: { page: 1, pageSize: 20 },
+        customFieldSources: [{
+          entityId: 'example:todo_profile', table: 'todo_profiles', alias: 'profile',
+          recordIdColumn: 'id', join: { fromField: 'id', toField: 'todo_id', type: 'inner' },
+        }],
+        countProbe,
+      })
+      expect(countProbe).not.toHaveBeenCalled()
+    })
+
+    test('a before-query subscriber that reshapes the filters voids the countProbe', async () => {
+      process.env.OM_LIST_COUNT_CAP = '100'
+      const { engine } = buildFixture(5)
+      const countProbe = jest.fn().mockResolvedValue(42)
+      const spy = jest.spyOn(queryExtensionRunner, 'runBeforeQueryPipeline').mockImplementation(async (query) => ({
+        blocked: false,
+        query: { ...query, filters: { status: { $ne: 'archived' } } },
+      }))
+      try {
+        await engine.query('example:todo', {
+          tenantId: 't1', organizationId: 'org1', fields: ['id'], page: { page: 1, pageSize: 20 },
+          extensions: { resolve: () => undefined } as never,
+          countProbe,
+        })
+      } finally {
+        spy.mockRestore()
+      }
+      expect(countProbe).not.toHaveBeenCalled()
+    })
+
+    test('a before-query subscriber that leaves the rows alone keeps the countProbe', async () => {
+      process.env.OM_LIST_COUNT_CAP = '100'
+      const { engine } = buildFixture(5)
+      const countProbe = jest.fn().mockResolvedValue(42)
+      const spy = jest.spyOn(queryExtensionRunner, 'runBeforeQueryPipeline').mockImplementation(async (query) => ({
+        blocked: false,
+        query: { ...query },
+      }))
+      try {
+        const result = await engine.query('example:todo', {
+          tenantId: 't1', organizationId: 'org1', fields: ['id'], page: { page: 1, pageSize: 20 },
+          extensions: { resolve: () => undefined } as never,
+          countProbe,
+        })
+        expect(result.total).toBe(42)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
     test('cap disabled: count(*) directly on the count shape, no probe subquery, no GROUP BY', async () => {
       process.env.OM_LIST_COUNT_CAP = '0'
       const { db, engine } = buildFixture(5)
@@ -1291,6 +1369,24 @@ describe('HybridQueryEngine page: the index joins after the page is picked', () 
 
     // Phase 1's order survives the unordered IN read.
     expect((result.items as Array<{ id: string }>).map((item) => item.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  test('the row phase reads only the page ids, in scope: phase 1 already applied the filters', async () => {
+    const { db, engine } = buildFixture()
+    await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['id'],
+      filters: { id: { $in: ['a', 'b', 'c'] } },
+      sort: [{ field: 'id', dir: SortDir.Asc }],
+      page: { page: 1, pageSize: 3 },
+    })
+    const rowChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === null && chain.joins.some((j: { table: string }) => j.table === 'ei'))
+    expect(rowChain).toBeTruthy()
+    const inWheres = rowChain.wheres.filter((w: any[]) => w[1] === 'in')
+    expect(inWheres).toHaveLength(1)
+    expect(inWheres[0][2]).toEqual(['c', 'a', 'b'])
+    expect(rowChain.wheres.some((w: any[]) => String(w[0]).endsWith('tenant_id') && w[2] === 't1')).toBe(true)
   })
 
   test('a custom-field sort keeps the single query: the sort reads the index row', async () => {
