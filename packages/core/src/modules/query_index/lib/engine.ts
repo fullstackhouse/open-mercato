@@ -1160,6 +1160,14 @@ export class HybridQueryEngine implements QueryEngine {
       const pageSize = opts.page?.pageSize ?? 20
       const sqlDebugEnabled = this.isSqlDebugEnabled()
 
+      // The page can pick its ids before joining the index when nothing it filters or sorts on lives
+      // there: no rowset-dependent filter, a sort on base columns only, and no custom-field source
+      // join (a one-to-many source would let the single query return a row more than once).
+      const canJoinIndexAfterPage =
+        !needsIndexRowset &&
+        preparedCfSources.length === 0 &&
+        resolvedSorts.every((s) => !String(s.field).startsWith('cf:') && resolveBaseColumn(String(s.field)) !== null)
+
       const countCap = resolveListCountCap()
 
       // Both count paths build the same rebuilt shape; for `canOptimizeCount`
@@ -1302,6 +1310,51 @@ export class HybridQueryEngine implements QueryEngine {
           items = pageIds
             .map((id) => byId.get(String(id)))
             .filter((row): row is Record<string, unknown> => row != null)
+        }
+      } else if (canJoinIndexAfterPage) {
+        // Phase 1: the page's ids from the base table alone — the count's shape, which selects the
+        // same rows as the display query whenever nothing reads the index rowset. A broad filter can
+        // match hundreds of thousands of rows; joining `entity_indexes` to each of them only to keep
+        // `pageSize` is what made such a page slow.
+        const idRoot = db.selectFrom(`${baseTable} as b` as any)
+        let idBuilder = await applyCountShape(idRoot)
+        idBuilder = idBuilder.select(`${qualify('id')} as id`)
+        idBuilder = applySort(idBuilder)
+        idBuilder = idBuilder.limit(pageSize).offset((page - 1) * pageSize)
+        if (debugEnabled && sqlDebugEnabled) {
+          const compiled = idBuilder.compile()
+          this.debug('query:sql:data:ids', { entity, sql: compiled.sql, bindings: compiled.parameters, page, pageSize })
+        }
+        const idRows = await this.captureSqlTiming(
+          'query:sql:data:ids', entity,
+          () => idBuilder.execute(),
+          { page, pageSize }, profiler,
+        ) as Record<string, unknown>[]
+        const pageIds = idRows.map((row) => row.id)
+
+        // Phase 2: the display rows — index join, custom fields — for just those ids, reassembled in
+        // phase 1's order (`WHERE id IN (...)` returns them in no particular order).
+        if (pageIds.length === 0) {
+          items = []
+        } else {
+          const dataRoot = db.selectFrom(`${baseTable} as b` as any)
+          let dataBuilder = await applyQueryShape(dataRoot)
+          dataBuilder = applySelection(dataBuilder)
+          dataBuilder = dataBuilder.where(qualify('id'), 'in', pageIds)
+          if (debugEnabled && sqlDebugEnabled) {
+            const compiled = dataBuilder.compile()
+            this.debug('query:sql:data', { entity, sql: compiled.sql, bindings: compiled.parameters, page, pageSize })
+          }
+          const rowsRaw = await this.captureSqlTiming(
+            'query:sql:data', entity,
+            () => dataBuilder.execute(),
+            { page, pageSize }, profiler,
+          ) as Record<string, unknown>[]
+          const byId = new Map(rowsRaw.map((row) => [String(row.id), row]))
+          const ordered = pageIds
+            .map((id) => byId.get(String(id)))
+            .filter((row): row is Record<string, unknown> => row != null)
+          items = await mapWithConcurrency(ordered, DECRYPT_CONCURRENCY, decryptRow)
         }
       } else {
         const dataRoot = db.selectFrom(`${baseTable} as b` as any)
