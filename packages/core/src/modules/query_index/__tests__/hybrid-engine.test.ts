@@ -40,6 +40,8 @@ type KyselyMockConfig = {
   rows?: Record<string, Array<Record<string, unknown>>>
   /** If provided, returned for information_schema.columns lookups. */
   columns?: Array<{ table_name: string; column_name: string }>
+  /** Per-chain rows, consulted before `rows` — for asserting on what one particular query returned. */
+  rowsFor?: (table: string, log: ChainLog) => Array<Record<string, unknown>> | undefined
 }
 
 type ChainLog = {
@@ -250,6 +252,8 @@ function resolveRows(
       { column_name: 'deleted_at', data_type: 'timestamp' },
     ]
   }
+  const perChain = config.rowsFor?.(table, log)
+  if (perChain) return perChain
   if (config.rows?.[table]) {
     return config.rows[table]
   }
@@ -1214,6 +1218,135 @@ describe('HybridQueryEngine', () => {
     const reindexCalls = emitEvent.mock.calls.filter(([name]) => name === 'query_index.reindex')
     expect(reindexCalls).toHaveLength(0)
     warnSpy.mockRestore()
+  })
+})
+
+describe('HybridQueryEngine page: the index joins after the page is picked', () => {
+  const rows = [
+    { id: 'c', tenant_id: 't1', organization_id: 'org1' },
+    { id: 'a', tenant_id: 't1', organization_id: 'org1' },
+    { id: 'b', tenant_id: 't1', organization_id: 'org1' },
+  ]
+
+  function buildFixture() {
+    const db = createFakeKysely({
+      baseTable: 'todos',
+      hasIndexAny: true,
+      baseCount: 3,
+      indexCount: 3,
+      // The id phase returns the page in its sort order; the row phase returns the same rows in
+      // another order, as `WHERE id IN (...)` may.
+      rowsFor: (table, log) => {
+        if (table !== 'todos') return undefined
+        if (log.limit !== null && log.joins.length === 0 && log.orderBys.length > 0) return rows
+        if (log.limit === null && log.joins.some((j) => j.table === 'ei')) return [...rows].reverse()
+        return undefined
+      },
+    })
+    const engine = new HybridQueryEngine(buildEm(db), { query: jest.fn() } as any, () => ({ emitEvent: jest.fn().mockResolvedValue(undefined) }))
+    return { db, engine }
+  }
+
+  const pageChains = (db: any) => db._chains.filter((chain: ChainLog) => chain.table === 'todos' && chain.orderBys.length + chain.wheres.length > 0)
+
+  test('a base-column sort picks the page ids without joining entity_indexes, then loads just those rows', async () => {
+    const { db, engine } = buildFixture()
+    const result = await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['id'],
+      includeCustomFields: true,
+      sort: [{ field: 'id', dir: SortDir.Desc }],
+      page: { page: 2, pageSize: 3 },
+    })
+
+    const idChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === 3)
+    expect(idChain).toBeTruthy()
+    expect(idChain.joins).toEqual([])
+    expect(idChain.offset).toBe(3)
+    expect(idChain.orderBys.length).toBeGreaterThan(0)
+
+    const rowChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === null && chain.joins.some((j: { table: string }) => j.table === 'ei'))
+    expect(rowChain).toBeTruthy()
+    const idsWhere = rowChain.wheres.find((w: any[]) => w[1] === 'in')
+    expect(idsWhere?.[2]).toEqual(['c', 'a', 'b'])
+
+    // Phase 1's order survives the unordered IN read.
+    expect((result.items as Array<{ id: string }>).map((item) => item.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  test('the row phase reads only the page ids, in scope: phase 1 already applied the filters', async () => {
+    const { db, engine } = buildFixture()
+    await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['id'],
+      filters: { id: { $in: ['a', 'b', 'c'] } },
+      sort: [{ field: 'id', dir: SortDir.Asc }],
+      page: { page: 1, pageSize: 3 },
+    })
+    const rowChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === null && chain.joins.some((j: { table: string }) => j.table === 'ei'))
+    expect(rowChain).toBeTruthy()
+    const inWheres = rowChain.wheres.filter((w: any[]) => w[1] === 'in')
+    expect(inWheres).toHaveLength(1)
+    expect(inWheres[0][2]).toEqual(['c', 'a', 'b'])
+    expect(rowChain.wheres.some((w: any[]) => String(w[0]).endsWith('tenant_id') && w[2] === 't1')).toBe(true)
+  })
+
+  test('the row phase matches rows by id even when the caller does not select it', async () => {
+    const { db, engine } = buildFixture()
+    const result = await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['tenant_id'],
+      sort: [{ field: 'id', dir: SortDir.Desc }],
+      page: { page: 1, pageSize: 3 },
+    })
+    const rowChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === null && chain.joins.some((j: { table: string }) => j.table === 'ei'))
+    expect(rowChain).toBeTruthy()
+    expect(rowChain.selects.map(String)).toContain('b.id as id')
+    expect(result.items).toHaveLength(3)
+    expect(result.items.every((item) => !('id' in (item as Record<string, unknown>)))).toBe(true)
+  })
+
+  test('a custom-field sort keeps the single query: the sort reads the index row', async () => {
+    const { db, engine } = buildFixture()
+    await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['id'],
+      includeCustomFields: true,
+      sort: [{ field: 'cf:priority', dir: SortDir.Asc }],
+      page: { page: 1, pageSize: 3 },
+    })
+    const single = pageChains(db).find((chain: ChainLog) => chain.limit === 3 && chain.joins.some((j) => j.table === 'ei'))
+    expect(single).toBeTruthy()
+  })
+
+  test('a custom-field filter keeps the single query: the filter reads the index row', async () => {
+    const { db, engine } = buildFixture()
+    await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['id'],
+      filters: { cf_priority: { $eq: 'high' } },
+      sort: [{ field: 'id', dir: SortDir.Asc }],
+      page: { page: 1, pageSize: 3 },
+    })
+    const single = pageChains(db).find((chain: ChainLog) => chain.limit === 3 && chain.joins.some((j) => j.table === 'ei'))
+    expect(single).toBeTruthy()
+  })
+
+  test('an empty page issues no row query', async () => {
+    const db = createFakeKysely({ baseTable: 'todos', hasIndexAny: true, baseCount: 0, indexCount: 0 })
+    const engine = new HybridQueryEngine(buildEm(db), { query: jest.fn() } as any, () => ({ emitEvent: jest.fn().mockResolvedValue(undefined) }))
+    const result = await engine.query('example:todo', {
+      tenantId: 't1', organizationId: 'org1', fields: ['id'],
+      sort: [{ field: 'id', dir: SortDir.Asc }], page: { page: 1, pageSize: 3 },
+    })
+    expect(result.items).toEqual([])
+    const rowChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.wheres.some((w: any[]) => w[1] === 'in'))
+    expect(rowChain).toBeUndefined()
   })
 })
 
