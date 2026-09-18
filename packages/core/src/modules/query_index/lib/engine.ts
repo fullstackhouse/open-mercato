@@ -1358,7 +1358,9 @@ export class HybridQueryEngine implements QueryEngine {
         } else {
           const dataRoot = db.selectFrom(`${baseTable} as b` as any)
           let dataBuilder = applyEntityIndexesJoin(applyBaseScope(dataRoot))
-          dataBuilder = applySelection(dataBuilder)
+          // The rows are matched back to phase 1 by id, whether or not the caller selected it.
+          const selectsId = selectFields.includes('id')
+          dataBuilder = applySelection(dataBuilder, selectsId ? selectFields : [...selectFields, 'id'])
           dataBuilder = dataBuilder.where(qualify('id'), 'in', pageIds)
           if (debugEnabled && sqlDebugEnabled) {
             const compiled = dataBuilder.compile()
@@ -1373,6 +1375,11 @@ export class HybridQueryEngine implements QueryEngine {
           const ordered = pageIds
             .map((id) => byId.get(String(id)))
             .filter((row): row is Record<string, unknown> => row != null)
+            .map((row) => {
+              if (selectsId) return row
+              const { id: _id, ...rest } = row
+              return rest
+            })
           items = await mapWithConcurrency(ordered, DECRYPT_CONCURRENCY, decryptRow)
         }
       } else {

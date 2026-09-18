@@ -1389,6 +1389,22 @@ describe('HybridQueryEngine page: the index joins after the page is picked', () 
     expect(rowChain.wheres.some((w: any[]) => String(w[0]).endsWith('tenant_id') && w[2] === 't1')).toBe(true)
   })
 
+  test('the row phase matches rows by id even when the caller does not select it', async () => {
+    const { db, engine } = buildFixture()
+    const result = await engine.query('example:todo', {
+      tenantId: 't1',
+      organizationId: 'org1',
+      fields: ['tenant_id'],
+      sort: [{ field: 'id', dir: SortDir.Desc }],
+      page: { page: 1, pageSize: 3 },
+    })
+    const rowChain = db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === null && chain.joins.some((j: { table: string }) => j.table === 'ei'))
+    expect(rowChain).toBeTruthy()
+    expect(rowChain.selects.map(String)).toContain('b.id as id')
+    expect(result.items).toHaveLength(3)
+    expect(result.items.every((item) => !('id' in (item as Record<string, unknown>)))).toBe(true)
+  })
+
   test('a custom-field sort keeps the single query: the sort reads the index row', async () => {
     const { db, engine } = buildFixture()
     await engine.query('example:todo', {
