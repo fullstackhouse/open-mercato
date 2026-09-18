@@ -120,6 +120,16 @@ export type QueryOptions = {
   customFieldSources?: QueryCustomFieldSource[]
   joins?: QueryJoinEdge[]
   profiler?: Profiler
+  /**
+   * Answers the list's count in place of the engine's own count query. Called with the list count
+   * cap (`OM_LIST_COUNT_CAP`, or `null` when uncapped); it may stop at `cap + 1`, and the engine caps
+   * the result as it would its own. For a caller that can count the matching rows more cheaply than
+   * the display rowset — e.g. from an index it has already narrowed the query to. It counts the rows
+   * the caller's filters select, or an upper bound on them the caller flags as approximate. The engine
+   * ignores it when a before-query subscriber reshapes the query or an inner-joined custom field
+   * source narrows the rows.
+   */
+  countProbe?: (cap: number | null) => Promise<number>
   // When true, suppress automatic reindex scheduling triggered by coverage gap detection.
   // Used by the search indexing pipeline to prevent feedback loops where indexing triggers
   // re-indexing indefinitely.
