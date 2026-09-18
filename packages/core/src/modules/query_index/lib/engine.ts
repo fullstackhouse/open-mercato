@@ -1178,6 +1178,18 @@ export class HybridQueryEngine implements QueryEngine {
       // TODO(2026-08-12): remove `canOptimizeCount` once the shape convergence
       // has soaked (tracked in the #4552 spec as the Phase 2 follow-up).
       const runBoundedCount = async (wasOptimizable: boolean): Promise<{ total: number; warning?: ListCountCapWarning }> => {
+        if (opts.countProbe) {
+          const probe = opts.countProbe
+          const probed = await this.captureSqlTiming(
+            'query:sql:count', entity,
+            () => probe(countCap),
+            { probe: true }, profiler,
+          )
+          if (countCap !== null && probed > countCap) {
+            return { total: countCap, warning: { entity, cap: countCap } }
+          }
+          return { total: probed }
+        }
         const countRoot = db.selectFrom(`${baseTable} as b` as any)
         const shape = await applyCountShape(countRoot)
         const countQuery = countCap !== null

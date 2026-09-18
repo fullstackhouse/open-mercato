@@ -1113,6 +1113,24 @@ describe('HybridQueryEngine', () => {
       expect(countChain.wheres.length).toBeGreaterThan(0)
     })
 
+    test('a countProbe answers the count in place of the count query, capped like it', async () => {
+      process.env.OM_LIST_COUNT_CAP = '100'
+      const { db, engine } = buildFixture(5)
+      const countProbe = jest.fn().mockResolvedValue(101)
+      const result = await engine.query('example:todo', {
+        tenantId: 't1',
+        organizationId: 'org1',
+        fields: ['id'],
+        page: { page: 1, pageSize: 20 },
+        countProbe,
+      })
+      expect(countProbe).toHaveBeenCalledWith(100)
+      expect(result.total).toBe(100)
+      expect(result.meta?.listCountCapWarning).toEqual({ entity: 'example:todo', cap: 100 })
+      // No count query was built at all.
+      expect(db._chains.find((chain: ChainLog) => chain.table === 'todos' && chain.limit === 101)).toBeUndefined()
+    })
+
     test('cap disabled: count(*) directly on the count shape, no probe subquery, no GROUP BY', async () => {
       process.env.OM_LIST_COUNT_CAP = '0'
       const { db, engine } = buildFixture(5)
