@@ -130,6 +130,23 @@ export type QueryOptions = {
    * source narrows the rows.
    */
   countProbe?: (cap: number | null) => Promise<number>
+  /**
+   * Custom-field keys — `cf:`-prefixed, the bare spelling is accepted — that the caller says have
+   * a btree expression index on `entity_indexes`: one keyed on the query engine's own
+   * `coalesce((doc ->> 'cf:<key>'), (doc ->> '<key>'))`, led by `(organization_id, tenant_id)` and
+   * partial on the entity type.
+   *
+   * A declared key is read from that index instead of through the row-by-row hybrid join: a sort
+   * on it orders `entity_indexes` and reaches the base row by primary key, and an `eq`/`in` filter
+   * on it becomes a semi-join rooted there. Declaring one asserts three things the caller must keep
+   * true — the index exists, the value is single-valued text (so `eq` needs no array-containment
+   * arm), and the index row is authoritative for ordering the entity, so a base row with no index
+   * row is not ordered among the rest. Undeclared keys behave exactly as before.
+   *
+   * Ignored when the query reads more than one index document (`customFieldSources`): those
+   * expressions coalesce across several aliases, which no single-table index matches.
+   */
+  indexedCustomFields?: string[]
   // When true, suppress automatic reindex scheduling triggered by coverage gap detection.
   // Used by the search indexing pipeline to prevent feedback loops where indexing triggers
   // re-indexing indefinitely.

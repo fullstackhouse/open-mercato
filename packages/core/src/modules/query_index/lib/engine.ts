@@ -42,6 +42,27 @@ import { parseNumberWithDefault } from '@open-mercato/shared/lib/number'
 const logger = createLogger('query_index').child({ component: 'engine' })
 
 /** Operators `buildCfFilterExpression` compiles; anything else yields no predicate. */
+/**
+ * The characters a document key may carry for it to be written into the SQL as a literal. Custom
+ * field keys are `[a-z0-9_]` by construction and the engine's own `cf:` prefix adds the colon;
+ * anything else keeps the bound-parameter form.
+ */
+const DOC_KEY_LITERAL_SAFE = /^[A-Za-z0-9_.:-]+$/
+
+/**
+ * The operators a btree expression index on a document key can serve. `like`/`ilike` are absent on
+ * purpose: they are either answered by the search index or by a pattern the default operator class
+ * cannot drive, and `exists` is here because `is null` / `is not null` on the expression is.
+ */
+const INDEXED_CF_FILTER_OPS = new Set<FilterOp>(['eq', 'ne', 'in', 'nin', 'gt', 'gte', 'lt', 'lte', 'exists'])
+
+/**
+ * Row count at or above which a declared custom-field filter is read per base row instead of as a
+ * materialised set — used only when the list count is uncapped, since `OM_LIST_COUNT_CAP` is
+ * otherwise the same question already answered.
+ */
+const INDEXED_CF_SEMI_JOIN_CAP = 10_000
+
 const CF_FILTER_SUPPORTED_OPS = new Set<FilterOp>([
   'eq', 'ne', 'in', 'nin', 'like', 'ilike', 'exists', 'gt', 'gte', 'lt', 'lte',
 ])
@@ -509,6 +530,24 @@ export class HybridQueryEngine implements QueryEngine {
         }
       }
 
+      // Custom-field keys the caller says have a btree expression index on `entity_indexes`,
+      // keyed on this engine's own `coalesce((doc ->> 'cf:<key>'), (doc ->> '<key>'))` and led by
+      // `(organization_id, tenant_id)`. A declared key is read from that index — a sort orders it,
+      // an `eq`/`in` filter becomes a semi-join rooted in it — instead of through the row-by-row
+      // hybrid join. Declaring one asserts the index exists, the value is single-valued text, and
+      // the index row is authoritative for ordering the entity. Undeclared keys are untouched.
+      //
+      // Only when this query reads ONE index document: with extra custom-field sources every
+      // expression coalesces across their aliases too, and no single-table index matches that.
+      const declaredIndexedCf = new Set<string>(
+        preparedCfSources.length > 0
+          ? []
+          : (opts.indexedCustomFields ?? [])
+              .map((key) => String(key))
+              .map((key) => (key.startsWith('cf:') ? key : `cf:${key}`))
+              .filter((key) => DOC_KEY_LITERAL_SAFE.test(key)),
+      )
+
       const searchSources: SearchTokenSource[] = indexSources
         .map((src) => ({ entity: String(src.entityId), recordIdColumn: src.recordIdColumn }))
         .filter((src) => src.recordIdColumn && src.entity)
@@ -826,11 +865,75 @@ export class HybridQueryEngine implements QueryEngine {
       const regularCfFilters = cfFilters.filter((filter) => !filter.orGroup)
       const orGroupCfFilters = cfFilters.filter((filter) => filter.orGroup)
 
+      // A declared key with an index-servable operator is read from `entity_indexes` as its own
+      // rowset; everything else keeps the left-joined alias it has always used.
+      const servedFromIndexedCf = (filter: BaseFilter): boolean =>
+        declaredIndexedCf.has(String(filter.field)) && INDEXED_CF_FILTER_OPS.has(filter.op)
+      const indexRootedCfFilters = regularCfFilters.filter((filter) => servedFromIndexedCf(filter))
+      const joinedCfFilters = regularCfFilters.filter((filter) => !servedFromIndexedCf(filter))
+
+      const INDEX_ROOT_ALIAS = 'qi_cf'
+      const indexRootSources: IndexDocSource[] = [
+        { alias: INDEX_ROOT_ALIAS, entityId: entity, recordIdColumn: `${INDEX_ROOT_ALIAS}.entity_id` },
+      ]
+      // `entity_id` is text, the base key is typed. Casting the index side to the base type is what
+      // lets the planner reach the base row by primary key; comparing `b.id::text` the other way
+      // round has no index to use and was measured sorting all 1.4M base keys instead (3.5 s
+      // against 0.8 ms). So the index-rooted shapes below only run for a uuid key.
+      const baseIdIsUuid = String(columns.get('id') ?? '').toLowerCase() === 'uuid'
+      const indexRootId = sql<string>`(${sql.ref(`${INDEX_ROOT_ALIAS}.entity_id`)})::uuid`
+
+      /** `entity_indexes`, scoped to this entity and this request, as a rowset of its own. */
+      const indexRootQuery = (): AnyBuilder => {
+        let next: AnyBuilder = db
+          .selectFrom(`entity_indexes as ${INDEX_ROOT_ALIAS}` as any)
+          .where(`${INDEX_ROOT_ALIAS}.entity_type` as any, '=', String(entity))
+        if (orgScope) next = this.applyOrganizationScope(next, `${INDEX_ROOT_ALIAS}.organization_id`, orgScope)
+        if (hasTenantColumn) next = next.where(`${INDEX_ROOT_ALIAS}.tenant_id` as any, '=', opts.tenantId)
+        if (!opts.withDeleted) next = next.where(`${INDEX_ROOT_ALIAS}.deleted_at` as any, 'is', null)
+        for (const filter of indexRootedCfFilters) {
+          next = this.applyCfFilterAcrossSources(
+            next, String(filter.field), filter.op, filter.value, indexRootSources, searchRuntime, true,
+          )
+        }
+        return next
+      }
+
+      /**
+       * How a declared filter reaches the index row, and it is the count that decides — not the
+       * planner, whose estimate for a document-key predicate was measured 160× out (SPEC-045).
+       *
+       * - `semi` materialises the matching ids from the expression index and joins them to the
+       *   base table. Cheap while the matches are few; a filter matching 700 of 1.4M orders goes
+       *   from 1 428 ms to 45 ms.
+       * - `exists` probes one index row per base row, in the list's own sort order, and stops at
+       *   the page. Cheap while MOST rows match: a filter matching 600k of 1.4M is 4 ms this way
+       *   and 1 079 ms as a semi-join, which has to build the whole 600k set to return fifty.
+       *
+       * `exists` is the default because it is the shape closest to today's, so a path that reads
+       * this before the count has been taken cannot regress.
+       */
+      type IndexedCfMode = 'semi' | 'exists'
+      let indexedCfMode: IndexedCfMode = 'exists'
+
+      const applyIndexedCf = (q: AnyBuilder): AnyBuilder => {
+        if (indexRootedCfFilters.length === 0) return q
+        if (indexedCfMode === 'semi') {
+          const ids = indexRootQuery().select(indexRootId.as('id'))
+          return q.where((eb: any) => eb(qualify('id'), 'in', ids))
+        }
+        const correlated = indexRootQuery()
+          .select(sql<number>`1`.as('one'))
+          .where(sql<boolean>`${sql.ref(`${INDEX_ROOT_ALIAS}.entity_id`)} = (${sql.ref(qualify('id'))}::text)`)
+        return q.where((eb: any) => eb.exists(correlated))
+      }
+
       const applyCfFilters = (q: AnyBuilder): AnyBuilder => {
         let next = q
-        for (const filter of regularCfFilters) {
+        for (const filter of joinedCfFilters) {
           next = this.applyCfFilterAcrossSources(
             next, filter.field, filter.op, filter.value, indexSources, searchRuntime,
+            declaredIndexedCf.has(String(filter.field)),
           )
         }
         return next
@@ -905,6 +1008,7 @@ export class HybridQueryEngine implements QueryEngine {
               ...groupFilters.cf.map((filter) =>
                 this.buildCfFilterExpression(
                   eb, filter.field, filter.op, filter.value, indexSources, searchRuntime,
+                  declaredIndexedCf.has(String(filter.field)),
                 ),
               ),
             ]
@@ -981,7 +1085,7 @@ export class HybridQueryEngine implements QueryEngine {
       }
 
       const applyQueryShape = async (q: AnyBuilder): Promise<AnyBuilder> => {
-        let next = applyBaseScope(q)
+        let next = applyIndexedCf(applyBaseScope(q))
         next = applyEntityIndexesJoin(next)
         next = applyCustomFieldSourceJoins(next)
         next = applyCfFilters(next)
@@ -1007,7 +1111,9 @@ export class HybridQueryEngine implements QueryEngine {
         return next
       }
 
-      const hasCustomFieldFilters = cfFilters.length > 0
+      // Index-rooted leaves are a predicate on the base key, so they no longer make the count
+      // build the correlated index rowset — the semi-join goes in the outer query with the rest.
+      const hasCustomFieldFilters = joinedCfFilters.length > 0 || orGroupCfFilters.length > 0
       const canOptimizeCount = !hasCustomFieldFilters && !hasNonBaseSearchSource
 
       // ── Count shape (#4552 Phase 2) ─────────────────────────────────
@@ -1048,8 +1154,8 @@ export class HybridQueryEngine implements QueryEngine {
         orGroupsRowsetDependent ||
         hasInnerTypedCfSource
 
-      const applyCountShape = async (q: AnyBuilder): Promise<AnyBuilder> => {
-        let next = applyBaseScope(q)
+      const applyCountShape = async (q: AnyBuilder, shapeOpts?: { skipIndexedCf?: boolean }): Promise<AnyBuilder> => {
+        let next = shapeOpts?.skipIndexedCf ? applyBaseScope(q) : applyIndexedCf(applyBaseScope(q))
         for (const filter of outerRegularFilters) {
           const baseField = resolveBaseColumn(String(filter.field))
           if (!baseField) continue
@@ -1173,6 +1279,39 @@ export class HybridQueryEngine implements QueryEngine {
         preparedCfSources.length === 0 &&
         resolvedSorts.every((s) => !String(s.field).startsWith('cf:') && resolveBaseColumn(String(s.field)) !== null)
 
+      // The mirror image: when the ORDER BY lives on the index row and the index row has an index
+      // for it, the page's ids come from `entity_indexes` in that index's own order and the base
+      // table is reached by primary key. Joining the other way round cannot use the index at all —
+      // a LEFT JOIN keeps every base row, so the sort has to see all of them (measured: 1 311 ms
+      // against 0.8 ms for one page of 1.4M). `needsIndexRowset` being false is what guarantees
+      // every remaining filter is a base predicate the EXISTS below already carries.
+      const canSortFromIndex =
+        !requiresPlaintextSort &&
+        !needsIndexRowset &&
+        preparedCfSources.length === 0 &&
+        baseIdIsUuid &&
+        resolvedSorts.length > 0 &&
+        resolvedSorts.every((s) => declaredIndexedCf.has(String(s.field)))
+
+      // `entity_indexes` narrowed by the declared predicates, with the base row reached by primary
+      // key — the rowset both the count and an index-ordered page read, and the one shape whose
+      // cost does not depend on how many rows the filter matches.
+      const indexRootedRowset = async (): Promise<AnyBuilder> => {
+        const baseRow = await applyCountShape(db.selectFrom(`${baseTable} as b` as any), { skipIndexedCf: true })
+        return indexRootQuery().where((eb: any) => eb.exists(
+          baseRow.select(sql<number>`1`.as('one')).where(sql<boolean>`${sql.ref(qualify('id'))} = ${indexRootId}`),
+        ))
+      }
+
+      // The count always reads the index, whatever the page will do: it is capped either way, and
+      // counting through the base table meant one index lookup per order — 3 752 ms against 45 ms
+      // for a filter matching 700 of 1.4M.
+      const canCountFromIndex =
+        indexRootedCfFilters.length > 0 &&
+        !needsIndexRowset &&
+        preparedCfSources.length === 0 &&
+        baseIdIsUuid
+
       const countCap = resolveListCountCap()
 
       // Both count paths build the same rebuilt shape; for `canOptimizeCount`
@@ -1195,6 +1334,27 @@ export class HybridQueryEngine implements QueryEngine {
             return { total: countCap, warning: { entity, cap: countCap } }
           }
           return { total: probed }
+        }
+        if (canCountFromIndex) {
+          const rowset = (await indexRootedRowset()).select(sql<number>`1`.as('one'))
+          const bounded = countCap !== null ? rowset.limit(countCap + 1) : rowset
+          const indexCountQuery = db
+            .selectFrom(bounded.as('om_count_probe') as any)
+            .select(sql<string>`count(*)`.as('count'))
+          if (debugEnabled && sqlDebugEnabled) {
+            const compiled = indexCountQuery.compile()
+            this.debug('query:sql:count', { entity, sql: compiled.sql, bindings: compiled.parameters, root: 'entity_indexes' })
+          }
+          const indexCountRow = await this.captureSqlTiming(
+            'query:sql:count', entity,
+            () => indexCountQuery.executeTakeFirst(),
+            { root: 'entity_indexes' }, profiler,
+          )
+          const indexProbed = this.parseCount(indexCountRow)
+          if (countCap !== null && indexProbed > countCap) {
+            return { total: countCap, warning: { entity, cap: countCap } }
+          }
+          return { total: indexProbed }
         }
         const countRoot = db.selectFrom(`${baseTable} as b` as any)
         const shape = await applyCountShape(countRoot)
@@ -1222,6 +1382,9 @@ export class HybridQueryEngine implements QueryEngine {
       const counted = await runBoundedCount(canOptimizeCount)
       const total: number = counted.total
       const listCountCapWarning: ListCountCapWarning | undefined = counted.warning
+      // Now that the count is in, the page can pick the shape that fits how many rows matched.
+      // A capped total means the filter is broad, which is exactly what the cap is measuring.
+      indexedCfMode = total < (countCap ?? INDEXED_CF_SEMI_JOIN_CAP) ? 'semi' : 'exists'
 
       const dekKeyCache = new Map<string | null, string | null>()
 
@@ -1255,6 +1418,41 @@ export class HybridQueryEngine implements QueryEngine {
           } catch { /* keep next as-is */ }
         }
         return next
+      }
+
+      /**
+       * The display rows for a page whose ids are already decided, reassembled in that order —
+       * `WHERE id IN (...)` returns them in none. The filters are NOT re-applied: whichever phase
+       * picked the ids applied them, and re-applying them here would rebuild the candidate set the
+       * two-phase shape exists to avoid.
+       */
+      const loadDisplayRows = async (pageIds: unknown[]): Promise<Record<string, unknown>[]> => {
+        if (pageIds.length === 0) return []
+        const dataRoot = db.selectFrom(`${baseTable} as b` as any)
+        let dataBuilder = applyEntityIndexesJoin(applyBaseScope(dataRoot))
+        // The rows are matched back by id, whether or not the caller selected it.
+        const selectsId = selectFields.includes('id')
+        dataBuilder = applySelection(dataBuilder, selectsId ? selectFields : [...selectFields, 'id'])
+        dataBuilder = dataBuilder.where(qualify('id'), 'in', pageIds)
+        if (debugEnabled && sqlDebugEnabled) {
+          const compiled = dataBuilder.compile()
+          this.debug('query:sql:data', { entity, sql: compiled.sql, bindings: compiled.parameters, page, pageSize })
+        }
+        const rowsRaw = await this.captureSqlTiming(
+          'query:sql:data', entity,
+          () => dataBuilder.execute(),
+          { page, pageSize }, profiler,
+        ) as Record<string, unknown>[]
+        const byId = new Map(rowsRaw.map((row) => [String(row.id), row]))
+        const ordered = pageIds
+          .map((id) => byId.get(String(id)))
+          .filter((row): row is Record<string, unknown> => row != null)
+          .map((row) => {
+            if (selectsId) return row
+            const { id: _id, ...rest } = row
+            return rest
+          })
+        return mapWithConcurrency(ordered, DECRYPT_CONCURRENCY, decryptRow)
       }
 
       let items: Record<string, unknown>[]
@@ -1329,6 +1527,30 @@ export class HybridQueryEngine implements QueryEngine {
             .map((id) => byId.get(String(id)))
             .filter((row): row is Record<string, unknown> => row != null)
         }
+      } else if (canSortFromIndex) {
+        // Phase 1: the page's ids from `entity_indexes`, ordered by the declared expression index,
+        // with the base row's own filters as a primary-key EXISTS. The planner reads the index in
+        // order and stops at the page; the base table is never scanned.
+        let idBuilder = await indexRootedRowset()
+        for (const s of resolvedSorts) {
+          const textExpr = this.buildCfTextExprSql(String(s.field), indexRootSources)
+          if (!textExpr) continue
+          idBuilder = idBuilder.orderBy(sql`${textExpr} ${sql.raw(coerceSortDirection(s.dir))}`)
+        }
+        idBuilder = idBuilder
+          .select(sql.ref(`${INDEX_ROOT_ALIAS}.entity_id`).as('id'))
+          .limit(pageSize)
+          .offset((page - 1) * pageSize)
+        if (debugEnabled && sqlDebugEnabled) {
+          const compiled = idBuilder.compile()
+          this.debug('query:sql:data:ids', { entity, sql: compiled.sql, bindings: compiled.parameters, page, pageSize, root: 'entity_indexes' })
+        }
+        const idRows = await this.captureSqlTiming(
+          'query:sql:data:ids', entity,
+          () => idBuilder.execute(),
+          { page, pageSize, root: 'entity_indexes' }, profiler,
+        ) as Record<string, unknown>[]
+        items = await loadDisplayRows(idRows.map((row) => row.id))
       } else if (canJoinIndexAfterPage) {
         // Phase 1: the page's ids from the base table alone — the count's shape, which selects the
         // same rows as the display query whenever nothing reads the index rowset. A broad filter can
@@ -1348,40 +1570,8 @@ export class HybridQueryEngine implements QueryEngine {
           () => idBuilder.execute(),
           { page, pageSize }, profiler,
         ) as Record<string, unknown>[]
-        const pageIds = idRows.map((row) => row.id)
-
-        // Phase 2: the display rows for just those ids, reassembled in phase 1's order (`WHERE id IN
-        // (...)` returns them in no particular order). Phase 1 applied the filters; re-applying them
-        // here would rebuild a broad search's whole candidate set to confirm `pageSize` rows.
-        if (pageIds.length === 0) {
-          items = []
-        } else {
-          const dataRoot = db.selectFrom(`${baseTable} as b` as any)
-          let dataBuilder = applyEntityIndexesJoin(applyBaseScope(dataRoot))
-          // The rows are matched back to phase 1 by id, whether or not the caller selected it.
-          const selectsId = selectFields.includes('id')
-          dataBuilder = applySelection(dataBuilder, selectsId ? selectFields : [...selectFields, 'id'])
-          dataBuilder = dataBuilder.where(qualify('id'), 'in', pageIds)
-          if (debugEnabled && sqlDebugEnabled) {
-            const compiled = dataBuilder.compile()
-            this.debug('query:sql:data', { entity, sql: compiled.sql, bindings: compiled.parameters, page, pageSize })
-          }
-          const rowsRaw = await this.captureSqlTiming(
-            'query:sql:data', entity,
-            () => dataBuilder.execute(),
-            { page, pageSize }, profiler,
-          ) as Record<string, unknown>[]
-          const byId = new Map(rowsRaw.map((row) => [String(row.id), row]))
-          const ordered = pageIds
-            .map((id) => byId.get(String(id)))
-            .filter((row): row is Record<string, unknown> => row != null)
-            .map((row) => {
-              if (selectsId) return row
-              const { id: _id, ...rest } = row
-              return rest
-            })
-          items = await mapWithConcurrency(ordered, DECRYPT_CONCURRENCY, decryptRow)
-        }
+        // Phase 2: the display rows for just those ids, in phase 1's order.
+        items = await loadDisplayRows(idRows.map((row) => row.id))
       } else {
         const dataRoot = db.selectFrom(`${baseTable} as b` as any)
         let dataBuilder = await applyQueryShape(dataRoot)
@@ -1591,22 +1781,37 @@ export class HybridQueryEngine implements QueryEngine {
     return true
   }
 
+  /**
+   * A document key written into the SQL as a literal rather than as a bound parameter.
+   *
+   * Postgres matches an expression index syntactically, and an expression whose key arrives as
+   * `$3` only folds to a constant while the planner can see the value. Under a generic plan the
+   * same statement loses the index and reads the table — measured 0.5 ms against 746 ms for one
+   * page of a 1.4M-row list. node-postgres sends unnamed prepared statements, which are planned
+   * with values available, so the parameter form usually does get a custom plan; usually is not a
+   * guarantee, and nothing in the emitted SQL says so. A key with any character outside the set a
+   * custom field may be named with keeps the parameter, so a literal can never carry quoting.
+   */
+  private docKeySql(key: string): RawBuilder<string> {
+    return DOC_KEY_LITERAL_SAFE.test(key) ? sql.lit(key) : sql`${key}`
+  }
+
   /** SQL fragment for `cf:<key>` (or legacy bare key) as JSON across a single alias. */
   private jsonbSqlAlias(alias: string, key: string): RawBuilder<unknown> {
     if (key.startsWith('cf:')) {
       const bare = key.slice(3)
-      return sql`coalesce(${sql.ref(alias + '.doc')} -> ${key}, ${sql.ref(alias + '.doc')} -> ${bare})`
+      return sql`coalesce(${sql.ref(alias + '.doc')} -> ${this.docKeySql(key)}, ${sql.ref(alias + '.doc')} -> ${this.docKeySql(bare)})`
     }
-    return sql`${sql.ref(alias + '.doc')} -> ${key}`
+    return sql`${sql.ref(alias + '.doc')} -> ${this.docKeySql(key)}`
   }
 
   /** SQL fragment for `cf:<key>` (or legacy bare key) as text across a single alias. */
   private cfTextExprAlias(alias: string, key: string): RawBuilder<string | null> {
     if (key.startsWith('cf:')) {
       const bare = key.slice(3)
-      return sql<string | null>`coalesce((${sql.ref(alias + '.doc')} ->> ${key}), (${sql.ref(alias + '.doc')} ->> ${bare}))`
+      return sql<string | null>`coalesce((${sql.ref(alias + '.doc')} ->> ${this.docKeySql(key)}), (${sql.ref(alias + '.doc')} ->> ${this.docKeySql(bare)}))`
     }
-    return sql<string | null>`(${sql.ref(alias + '.doc')} ->> ${key})`
+    return sql<string | null>`(${sql.ref(alias + '.doc')} ->> ${this.docKeySql(key)})`
   }
 
   /** Build JSON/text SQL expressions across multiple index alias sources (coalesce over them). */
@@ -1638,7 +1843,8 @@ export class HybridQueryEngine implements QueryEngine {
     op: FilterOp,
     value: unknown,
     sources: IndexDocSource[],
-    search?: SearchRuntime
+    search?: SearchRuntime,
+    scalar?: boolean,
   ): any | null {
     if (!sources.length) return null
     if ((op === 'like' || op === 'ilike') && search?.enabled && typeof value === 'string') {
@@ -1669,18 +1875,23 @@ export class HybridQueryEngine implements QueryEngine {
       case 'eq':
         // An unset custom field has no array element to contain, so the
         // arrContains branch cannot match it — compare the text value only.
-        return value === null
-          ? sql<boolean>`${textExpr} is null`
-          : eb.or([
-              sql<boolean>`${textExpr} = ${value}`,
-              arrContains(value),
-            ])
+        if (value === null) return sql<boolean>`${textExpr} is null`
+        // A DECLARED single-valued field has no array element to contain either, and the `OR` is
+        // what stops a btree expression index from being used at all: Postgres needs a BitmapOr
+        // over BOTH arms, and the containment arm has no index. Measured on a 1.4M-row list, the
+        // same filtered page took 278 ms with the arm and 47 ms without it.
+        if (scalar) return sql<boolean>`${textExpr} = ${value}`
+        return eb.or([
+          sql<boolean>`${textExpr} = ${value}`,
+          arrContains(value),
+        ])
       case 'ne':
         return value === null
           ? sql<boolean>`${textExpr} is not null`
           : sql<boolean>`${textExpr} <> ${value}`
       case 'in': {
         const values = this.toArray(value)
+        if (scalar) return sql<boolean>`${textExpr} in (${sql.join(values.map((v) => sql`${v}`), sql`, `)})`
         return eb.or(
           values.flatMap((val) => [
             sql<boolean>`${textExpr} = ${val}`,
@@ -1738,7 +1949,8 @@ export class HybridQueryEngine implements QueryEngine {
     op: FilterOp,
     value: unknown,
     sources: IndexDocSource[],
-    search?: SearchRuntime
+    search?: SearchRuntime,
+    scalar?: boolean,
   ): AnyBuilder {
     if (!this.cfFilterHasPredicate(op, value, sources, search)) {
       // Preserve the pre-existing behaviour of dropping a leaf we cannot compile.
@@ -1749,7 +1961,7 @@ export class HybridQueryEngine implements QueryEngine {
       }
       return builder
     }
-    return builder.where((eb: any) => this.buildCfFilterExpression(eb, key, op, value, sources, search))
+    return builder.where((eb: any) => this.buildCfFilterExpression(eb, key, op, value, sources, search, scalar))
   }
 
   /** Build a search-token EXISTS predicate across multiple sources (OR-joined). */
