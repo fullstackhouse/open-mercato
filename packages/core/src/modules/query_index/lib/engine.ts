@@ -217,6 +217,9 @@ function createQueryProfiler(entity: string): Profiler {
   })
 }
 
+/** The options that decide which rows a query selects — what a `countProbe` must agree with. */
+const COUNT_PROBE_ROWSET_KEYS = ['filters', 'customFieldSources', 'withDeleted', 'tenantId', 'organizationId', 'organizationIds'] as const
+
 export class HybridQueryEngine implements QueryEngine {
   private coverageStatsTtlMs: number
   private customFieldKeysCache = new Map<string, { expiresAt: number; value: string[] }>()
@@ -296,7 +299,9 @@ export class HybridQueryEngine implements QueryEngine {
       if (beforeResult.blocked) {
         throw new Error(beforeResult.errorMessage ?? 'Query blocked by extension subscriber')
       }
-      opts = beforeResult.query
+      // A count probe was built for the caller's rows; a subscriber that reshaped them voids it.
+      const reshaped = COUNT_PROBE_ROWSET_KEYS.some((key) => beforeResult.query[key] !== opts[key])
+      opts = reshaped ? { ...beforeResult.query, countProbe: undefined } : beforeResult.query
     }
     const { extensions: _stripExt, ...coreOpts } = opts
     opts = coreOpts
@@ -1189,6 +1194,19 @@ export class HybridQueryEngine implements QueryEngine {
       // TODO(2026-08-12): remove `canOptimizeCount` once the shape convergence
       // has soaked (tracked in the #4552 spec as the Phase 2 follow-up).
       const runBoundedCount = async (wasOptimizable: boolean): Promise<{ total: number; warning?: ListCountCapWarning }> => {
+        // An inner-joined source drops rows the probe cannot see.
+        if (opts.countProbe && !hasInnerTypedCfSource) {
+          const probe = opts.countProbe
+          const probed = await this.captureSqlTiming(
+            'query:sql:count', entity,
+            () => probe(countCap),
+            { probe: true }, profiler,
+          )
+          if (countCap !== null && probed > countCap) {
+            return { total: countCap, warning: { entity, cap: countCap } }
+          }
+          return { total: probed }
+        }
         const countRoot = db.selectFrom(`${baseTable} as b` as any)
         const shape = await applyCountShape(countRoot)
         const countQuery = countCap !== null
