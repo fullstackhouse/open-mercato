@@ -28,10 +28,11 @@ function registerReapplyCommand(options: {
 
 function createBus() {
   const logMock = jest.fn(async (payload: LogRecord) => ({ id: 'log-1', ...payload }))
+  const flushMock = jest.fn()
   const container = createContainer({ injectionMode: InjectionMode.CLASSIC })
   container.register({
     actionLogService: asValue({ log: logMock }),
-    dataEngine: asValue({ flushOrmEntityChanges: jest.fn() }),
+    dataEngine: asValue({ flushOrmEntityChanges: flushMock }),
   })
   const ctx = {
     container,
@@ -47,7 +48,7 @@ function createBus() {
       ctx,
       metadata: { resourceKind: 'test.record', resourceId: 'rec-1', ...metadata },
     })
-  return { execute, logMock }
+  return { execute, logMock, flushMock }
 }
 
 describe('CommandBus skipLogWhenUnchanged', () => {
@@ -66,6 +67,19 @@ describe('CommandBus skipLogWhenUnchanged', () => {
 
     expect(logMock).not.toHaveBeenCalled()
     expect(logEntry).toBeNull()
+  })
+
+  it('still flushes the queued side effects when it skips the row', async () => {
+    registerReapplyCommand({
+      before: { id: 'rec-1', name: 'Same' },
+      after: { id: 'rec-1', name: 'Same' },
+    })
+    const { execute, logMock, flushMock } = createBus()
+
+    await execute({ skipLogWhenUnchanged: true })
+
+    expect(logMock).not.toHaveBeenCalled()
+    expect(flushMock).toHaveBeenCalledTimes(1)
   })
 
   it('treats a moved updatedAt alone as unchanged', async () => {
