@@ -84,6 +84,14 @@ export type CommandRunAsContext = {
 
 export type CommandLogMetadata = {
   skipLog?: boolean
+  /**
+   * When true, an execute whose before/after snapshots yield no changes writes no
+   * action-log row. Opt-in per call, for callers that re-apply records which are
+   * often unchanged (a sync re-reading its source, a read-through refresh). With
+   * either snapshot missing the row is still written: the bus cannot tell whether
+   * anything changed, so it logs.
+   */
+  skipLogWhenUnchanged?: boolean
   tenantId?: string | null
   organizationId?: string | null
   actorUserId?: string | null

@@ -189,6 +189,14 @@ function deriveChangesFromSnapshots(
   return Object.keys(changes).length ? changes : null
 }
 
+function isUnchangedExecution(metadata: CommandLogMetadata): boolean {
+  const before = asRecord(metadata.snapshotBefore)
+  const after = asRecord(metadata.snapshotAfter)
+  if (!before || !after) return false
+  if (metadata.changes && Object.keys(metadata.changes).length > 0) return false
+  return Object.keys(buildRecordChanges(before, after)).length === 0
+}
+
 function invertRecordedChanges(
   changes: unknown,
 ): Record<string, { from: unknown; to: unknown }> | null {
@@ -540,6 +548,7 @@ export class CommandBus {
     if (!primary && !secondary) return null
     return {
       skipLog: secondary?.skipLog ?? primary?.skipLog ?? false,
+      skipLogWhenUnchanged: secondary?.skipLogWhenUnchanged ?? primary?.skipLogWhenUnchanged ?? false,
       tenantId: secondary?.tenantId ?? primary?.tenantId ?? null,
       organizationId: secondary?.organizationId ?? primary?.organizationId ?? null,
       actorUserId: secondary?.actorUserId ?? primary?.actorUserId ?? null,
@@ -567,6 +576,7 @@ export class CommandBus {
   ): Promise<ActionLog | null> {
     if (!metadata) return null
     if (metadata.skipLog) return null
+    if (metadata.skipLogWhenUnchanged && isUnchangedExecution(metadata)) return null
     const resourceKind =
       typeof metadata.resourceKind === 'string' ? metadata.resourceKind : null
     if (resourceKind && SKIPPED_ACTION_LOG_RESOURCE_KINDS.has(resourceKind)) {

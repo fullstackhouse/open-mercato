@@ -9,7 +9,7 @@ Use this digest after app call sites and generated facts identify a named framew
 - `prepare(input, ctx)` captures the before snapshot before execution.
 - `execute(input, ctx)` performs the durable operation and returns the public result.
 - `captureAfter(input, result, ctx)` can capture the after snapshot.
-- `buildLog({ input, result, ctx, snapshots })` returns action-log metadata; returning `null` or `skipLog` suppresses a normal log entry.
+- `buildLog({ input, result, ctx, snapshots })` returns action-log metadata; returning `null` or `skipLog` suppresses a normal log entry. `skipLogWhenUnchanged` does so only when both snapshots exist and show no change.
 - `undo({ input, ctx, logEntry })` and `redo(...)` are only valid when the handler owns a reversible contract. Undo payload is stored under `commandPayload`, not `logEntry.payload`; use the shared undo extractor.
 
 `CommandRuntimeContext` carries authentication, selected organization scope, the DI container, optional request and sync origin, bulk-import suppression, and an optional `transactionalEm`. A handler must preserve this scope and reuse `transactionalEm` when supplied instead of opening an independent transaction.

@@ -102,6 +102,25 @@ Handlers can opt into structured audit logs by returning metadata from `buildLog
 
 When metadata is provided, the bus writes to `ActionLogService` (if registered in the container) and persists undo tokens automatically. Snapshot fields (`snapshotBefore` / `snapshotAfter`) make it easy to render diffs in the admin UI.
 
+### Skipping the Log
+
+Two metadata flags keep a row out of the action log. Either can come from `buildLog` or from the `metadata` passed to `execute`; when both set one, `buildLog` wins.
+
+- `skipLog: true` writes no row for this execute.
+- `skipLogWhenUnchanged: true` writes no row only when the before and after snapshots are both present and show no change. Use it for callers that re-apply records which are often unchanged, such as a sync re-reading its source:
+
+```ts
+await commandBus.execute('my_module.records.update', {
+  input,
+  ctx,
+  metadata: { skipLogWhenUnchanged: true },
+})
+```
+
+The comparison is the one the bus uses to derive `changes`, so `updatedAt` / `updated_at` are ignored. If either snapshot is missing, or `buildLog` reports non-empty `changes`, the row is written as usual. A command with no log row has no undo token, so the response carries no `x-om-operation` header and the UI offers no undo for it.
+
+A field the handler writes but leaves out of its snapshots is invisible to this check. Before you set the flag for a command, confirm its `prepare` / `captureAfter` snapshots cover every field the caller can change.
+
 ### Helper Utilities
 
 Reusable helpers in `@open-mercato/shared/lib/commands/helpers` cover common patterns:
