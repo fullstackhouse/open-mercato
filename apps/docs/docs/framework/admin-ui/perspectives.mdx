@@ -75,7 +75,7 @@ The perspectives sidebar stays the default save path, and the button is off by d
 | Prop | Purpose |
 |------|---------|
 | `showSaveViewButton` | Renders the built-in “Save view” button next to the views switcher. Off by default; the recommended path. |
-| `viewApiRef` | Imperative handle: `getCurrentSettings()`, `getDirtyState()`, `saveCurrentView(input?)`, `openViewsSidebar()`. For hosts that render their own control. |
+| `viewApiRef` | Imperative handle: `getCurrentSettings()`, `getDirtyState()`, `saveCurrentView(input?)`, `openViewsSidebar()`, `activatePerspective(id)`, `getPerspectives()`. For hosts that render their own control. |
 | `onColumnsDirtyChange` | Read-only callback fired whenever the unsaved-changes state changes. Only fires for tables that wire `perspective`. |
 
 A custom `toolbar` prop replaces the built-in toolbar entirely, so `showSaveViewButton` has no effect there. Such a host renders the same affordance from `viewApiRef` and `onColumnsDirtyChange` — still without patching `DataTable`:
@@ -112,6 +112,35 @@ const [dirty, setDirty] = React.useState<DataTableViewDirtyState | null>(null)
 `saveCurrentView()` returns a result instead of throwing: `{ ok: true, perspectiveId }`, or `{ ok: false, reason: 'perspectives-disabled' | 'not-ready' | 'name-required' | 'failed' }`. `not-ready` means the perspectives permission check has not resolved yet — nothing was saved and nothing is wrong, so retry rather than telling the user views are disabled. Conflicts (HTTP 409) are surfaced by the shared conflict bar exactly as in the sidebar flow.
 
 `openViewsSidebar()` is a no-op for a user without the `perspectives.use` feature (the sidebar closes again on the next render), so gate a host-rendered “Manage views” action on the same permission instead of expecting an error. The dirty state and the imperative handle are only computed for tables that pass at least one of these three props — a table that opts out pays nothing.
+
+## Rendering your own view switcher
+
+A host that wants its own switcher — tabs above the table instead of the built-in “Views” dropdown — reads the list and activates a view through the same handle, and subscribes to changes with `perspective.onPerspectivesChange`:
+
+```tsx
+const viewApi = React.useRef<DataTableViewApi | null>(null)
+const [views, setViews] = React.useState<DataTablePerspectivesState | null>(null)
+
+<Tabs
+  value={views?.activePerspectiveId ?? 'all'}
+  onValueChange={(id) => viewApi.current?.activatePerspective(id === 'all' ? null : id)}
+>
+  <TabsList>
+    <TabsTrigger value="all">All</TabsTrigger>
+    {views?.perspectives.map((view) => (
+      <TabsTrigger key={view.id} value={view.id}>{view.name}</TabsTrigger>
+    ))}
+  </TabsList>
+</Tabs>
+
+<DataTable
+  perspective={{ tableId: 'sales:orders', onPerspectivesChange: setViews }}
+  viewApiRef={viewApi}
+  …
+/>
+```
+
+`activatePerspective(id)` takes the same path as picking a view in the built-in switcher, for personal and role views alike; `null` clears to “No view”, and an unknown id does nothing. `getPerspectives()` returns `{ perspectives, rolePerspectives, activePerspectiveId }` — empty arrays while the list loads — and `onPerspectivesChange` pushes the same shape whenever the list or the active view changes. A user without the `perspectives.use` feature gets the empty state and `activatePerspective` is a no-op. The built-in dropdown and sidebar are unchanged by any of this.
 
 ## API surface
 

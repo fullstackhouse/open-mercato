@@ -235,6 +235,20 @@ export type DataTablePerspectiveConfig = {
     activePerspectiveId?: string | null
     initialSettings?: PerspectiveSettings | null
   }
+  /**
+   * Called whenever the set of views or the active view changes — the push
+   * counterpart of `DataTableViewApi.getPerspectives`, so a host rendering its
+   * own view switcher can re-render without polling. A user without the
+   * `perspectives.use` feature receives the empty state.
+   */
+  onPerspectivesChange?: (state: DataTablePerspectivesState) => void
+}
+
+/** The saved views a table knows, as its built-in views switcher sees them. */
+export type DataTablePerspectivesState = {
+  perspectives: PerspectiveDto[]
+  rolePerspectives: RolePerspectiveDto[]
+  activePerspectiveId: string | null
 }
 
 /** Input for the imperative `saveCurrentView` action. */
@@ -290,6 +304,14 @@ export type DataTableViewApi = {
    * the same permission rather than expecting an error.
    */
   openViewsSidebar: () => void
+  /**
+   * Activates a saved view (personal or role) by id — the same path the
+   * built-in switcher takes. `null` clears to "No view". An unknown id, or a
+   * user without the `perspectives.use` feature, is a no-op.
+   */
+  activatePerspective: (perspectiveId: string | null) => void
+  /** The views the table currently knows, as the built-in switcher sees them. Empty while loading. */
+  getPerspectives: () => DataTablePerspectivesState
 }
 
 export type BulkAction<T = Record<string, unknown>> = {
@@ -351,9 +373,10 @@ export type DataTableProps<T extends RowData> = {
   onColumnsDirtyChange?: (state: DataTableViewDirtyState) => void
   /**
    * Imperative handle for the view/perspective surface (`saveCurrentView`,
-   * `getDirtyState`, `getCurrentSettings`, `openViewsSidebar`). Pairs with
-   * `onColumnsDirtyChange` so a host can render a "Save view" button in its own
-   * toolbar instead of relying on the built-in one.
+   * `getDirtyState`, `getCurrentSettings`, `openViewsSidebar`,
+   * `activatePerspective`, `getPerspectives`). Pairs with `onColumnsDirtyChange`
+   * and `perspective.onPerspectivesChange` so a host can render its own "Save
+   * view" button or view switcher instead of relying on the built-in ones.
    */
   viewApiRef?: React.Ref<DataTableViewApi | null>
   /**
@@ -494,6 +517,11 @@ const EMPTY_FILTER_DEFS: FilterDef[] = []
 const EMPTY_FILTER_VALUES: FilterValues = Object.freeze({}) as FilterValues
 /** Stand-in for the live view settings on tables that never opt into the view API. */
 const EMPTY_VIEW_SETTINGS: PerspectiveSettings = Object.freeze({}) as PerspectiveSettings
+const EMPTY_PERSPECTIVES_STATE: DataTablePerspectivesState = Object.freeze({
+  perspectives: [],
+  rolePerspectives: [],
+  activePerspectiveId: null,
+}) as DataTablePerspectivesState
 
 // Directional shadow utilities for sticky table cells. `border-collapse: collapse`
 // blocks `box-shadow` on `<td>`/`<th>`, so we paint the shadow as a pseudo-element
@@ -2394,6 +2422,39 @@ export function DataTable<T extends RowData>({
     applyPerspectiveSettings(item.settings, item.id)
   }, [applyPerspectiveSettings])
 
+  // Gated exactly like the built-in switcher: a user without `perspectives.use`
+  // never sees views there, so a host-rendered switcher must not either — even
+  // when the server pre-seeded the list through `initialState.response`.
+  const perspectivesState = React.useMemo<DataTablePerspectivesState>(() => {
+    if (!canUsePerspectives) return EMPTY_PERSPECTIVES_STATE
+    return {
+      perspectives: perspectiveData?.perspectives ?? EMPTY_PERSPECTIVES_STATE.perspectives,
+      rolePerspectives: perspectiveData?.rolePerspectives ?? EMPTY_PERSPECTIVES_STATE.rolePerspectives,
+      activePerspectiveId,
+    }
+  }, [canUsePerspectives, perspectiveData, activePerspectiveId])
+
+  const activatePerspective = React.useCallback((perspectiveId: string | null) => {
+    if (!canUsePerspectives) return
+    if (perspectiveId === null) {
+      applyPerspectiveSettings({}, null)
+      return
+    }
+    const item = perspectivesState.perspectives.find((entry) => entry.id === perspectiveId)
+      ?? perspectivesState.rolePerspectives.find((entry) => entry.id === perspectiveId)
+    if (item) handlePerspectiveActivate(item)
+  }, [canUsePerspectives, perspectivesState, applyPerspectiveSettings, handlePerspectiveActivate])
+
+  const perspectivesStateRef = React.useRef(perspectivesState)
+  const onPerspectivesChangeRef = React.useRef(perspectiveConfig?.onPerspectivesChange)
+  React.useLayoutEffect(() => {
+    perspectivesStateRef.current = perspectivesState
+    onPerspectivesChangeRef.current = perspectiveConfig?.onPerspectivesChange
+  }, [perspectivesState, perspectiveConfig?.onPerspectivesChange])
+  React.useEffect(() => {
+    onPerspectivesChangeRef.current?.(perspectivesState)
+  }, [perspectivesState])
+
   const handlePerspectiveSave = React.useCallback(async (input: { name: string; isDefault: boolean; applyToRoles: string[]; setRoleDefault: boolean; perspectiveId?: string | null; settings?: PerspectiveSettings }) => {
     const normalizedRoles = Array.from(new Set(input.applyToRoles))
     await savePerspectiveMutation.mutateAsync({
@@ -2535,7 +2596,9 @@ export function DataTable<T extends RowData>({
     getDirtyState: () => viewDirtyStateRef.current,
     saveCurrentView,
     openViewsSidebar: () => setPerspectiveOpen(true),
-  }), [getCurrentSettings, saveCurrentView])
+    activatePerspective,
+    getPerspectives: () => perspectivesStateRef.current,
+  }), [getCurrentSettings, saveCurrentView, activatePerspective])
 
   const handleSaveViewClick = React.useCallback(async () => {
     const result = await saveCurrentView()
