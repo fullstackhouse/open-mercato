@@ -120,6 +120,7 @@ A host that wants its own switcher — tabs above the table instead of the built
 ```tsx
 const viewApi = React.useRef<DataTableViewApi | null>(null)
 const [views, setViews] = React.useState<DataTablePerspectivesState | null>(null)
+const allViews = [...(views?.perspectives ?? []), ...(views?.rolePerspectives ?? [])]
 
 <Tabs
   value={views?.activePerspectiveId ?? 'all'}
@@ -127,7 +128,7 @@ const [views, setViews] = React.useState<DataTablePerspectivesState | null>(null
 >
   <TabsList>
     <TabsTrigger value="all">All</TabsTrigger>
-    {views?.perspectives.map((view) => (
+    {allViews.map((view) => (
       <TabsTrigger key={view.id} value={view.id}>{view.name}</TabsTrigger>
     ))}
   </TabsList>
