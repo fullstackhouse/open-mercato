@@ -79,6 +79,41 @@ describe('diffPerspectiveSettings', () => {
     expect(diffPerspectiveSettings({ pageSize: 50 }, {})).toEqual([])
   })
 
+  it('ignores changes to the filter keys a host excludes', () => {
+    const options = { ignoreFilterKeys: ['status'] }
+    expect(
+      diffPerspectiveSettings({ filters: { status: 'open', owner: 'me' } }, { filters: { status: 'closed', owner: 'me' } }, options),
+    ).toEqual([])
+    expect(
+      diffPerspectiveSettings({ filters: { status: 'open', owner: 'me' } }, { filters: { status: 'open', owner: 'you' } }, options),
+    ).toEqual(['filters'])
+  })
+
+  it('treats an ignored filter key as absent on either side', () => {
+    const options = { ignoreFilterKeys: ['status'] }
+    expect(diffPerspectiveSettings({}, { filters: { status: 'open' } }, options)).toEqual([])
+    expect(diffPerspectiveSettings({ filters: { status: 'open' } }, {}, options)).toEqual([])
+    expect(diffPerspectiveSettings({ filters: { owner: 'me' } }, { filters: { owner: 'me', status: 'open' } }, options)).toEqual([])
+  })
+
+  it('does not mutate the settings it compares when ignoring filter keys', () => {
+    const base = { filters: { status: 'open', owner: 'me' } }
+    const current = { filters: { status: 'closed', owner: 'me' } }
+    diffPerspectiveSettings(base, current, { ignoreFilterKeys: ['status'] })
+    expect(base).toEqual({ filters: { status: 'open', owner: 'me' } })
+    expect(current).toEqual({ filters: { status: 'closed', owner: 'me' } })
+  })
+
+  it('compares a persisted filter tree as a whole even with ignored keys', () => {
+    const tree = (value: string) => ({
+      v: 2,
+      root: { id: 'root', type: 'group', combinator: 'and', children: [{ id: 'r1', type: 'rule', field: 'status', op: 'is', value }] },
+    })
+    expect(
+      diffPerspectiveSettings({ filters: tree('open') }, { filters: tree('closed') }, { ignoreFilterKeys: ['status', 'root'] }),
+    ).toEqual(['filters'])
+  })
+
   it('treats null and undefined settings as empty', () => {
     expect(diffPerspectiveSettings(null, undefined)).toEqual([])
     expect(diffPerspectiveSettings(null, { searchValue: 'acme' })).toEqual(['searchValue'])

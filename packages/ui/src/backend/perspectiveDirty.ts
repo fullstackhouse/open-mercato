@@ -1,4 +1,5 @@
 import type { PerspectiveSettings } from '@open-mercato/shared/modules/perspectives/types'
+import { isPersistedFilterTree } from '@open-mercato/shared/lib/query/advanced-filter-tree'
 
 /**
  * Setting groups the unsaved-changes comparison tracks.
@@ -40,6 +41,21 @@ function stableStringify(value: unknown): string {
     .filter(([, entryValue]) => entryValue !== undefined)
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
   return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join(',')}}`
+}
+
+/**
+ * Drops the ignored keys from a legacy filter record, returning a copy; a record
+ * left with no keys compares equal to "no filters". A persisted advanced-filter
+ * tree has no top-level filter keys, so it is returned untouched.
+ */
+function omitFilterKeys(filters: unknown, ignoredKeys: readonly string[]): unknown {
+  if (ignoredKeys.length === 0 || !filters || typeof filters !== 'object' || Array.isArray(filters)) return filters
+  if (isPersistedFilterTree(filters)) return filters
+  const remaining: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(filters as Record<string, unknown>)) {
+    if (!ignoredKeys.includes(key)) remaining[key] = value
+  }
+  return Object.keys(remaining).length > 0 ? remaining : null
 }
 
 function normalizeOrder(order: string[] | undefined, fallback: string[]): string[] {
@@ -85,6 +101,8 @@ export type DiffPerspectiveSettingsOptions = {
    * materialized its default order is not reported as dirty.
    */
   defaultColumnOrder?: string[]
+  /** Filter keys compared neither way — a host's navigation filters, which do not edit the view. */
+  ignoreFilterKeys?: readonly string[]
 }
 
 /**
@@ -103,6 +121,7 @@ export function diffPerspectiveSettings(
   const baseSettings = base ?? {}
   const currentSettings = current ?? {}
   const defaultColumnOrder = options?.defaultColumnOrder ?? []
+  const ignoreFilterKeys = options?.ignoreFilterKeys ?? []
   const changed: DataTableViewSettingKey[] = []
 
   const baseOrder = normalizeOrder(baseSettings.columnOrder, defaultColumnOrder)
@@ -124,7 +143,10 @@ export function diffPerspectiveSettings(
     !== stableStringify(normalizeSorting(currentSettings.sorting))
   ) changed.push('sorting')
 
-  if (stableStringify(baseSettings.filters ?? null) !== stableStringify(currentSettings.filters ?? null)) {
+  if (
+    stableStringify(omitFilterKeys(baseSettings.filters, ignoreFilterKeys) ?? null)
+    !== stableStringify(omitFilterKeys(currentSettings.filters, ignoreFilterKeys) ?? null)
+  ) {
     changed.push('filters')
   }
 

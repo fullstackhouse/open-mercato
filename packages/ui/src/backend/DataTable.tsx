@@ -230,6 +230,13 @@ export type DataTablePerspectiveConfig = {
    * (•••) button is suppressed — the "Views" control already opens that panel.
    */
   align?: 'left' | 'right'
+  /**
+   * Filter keys that never make the active view dirty; see
+   * `DiffPerspectiveSettingsOptions.ignoreFilterKeys`. Only what counts as
+   * unsaved changes: saving is unchanged, so `getCurrentSettings()` and
+   * `saveCurrentView()` still persist these keys with every other filter.
+   */
+  dirtyIgnoreFilterKeys?: readonly string[]
   initialState?: {
     response?: PerspectivesIndexResponse
     activePerspectiveId?: string | null
@@ -1384,6 +1391,13 @@ export function DataTable<T extends RowData>({
   const perspectiveTableId = perspectiveConfig?.tableId ?? null
   const perspectiveAlign: 'left' | 'right' = perspectiveConfig?.align ?? 'left'
   const perspectiveEnabled = Boolean(perspectiveTableId)
+  // Keyed by value so a host passing an inline array literal does not re-run the
+  // dirty diff on every render.
+  const dirtyIgnoreFilterKeysSignature = JSON.stringify(perspectiveConfig?.dirtyIgnoreFilterKeys ?? [])
+  const dirtyIgnoreFilterKeys = React.useMemo(
+    () => JSON.parse(dirtyIgnoreFilterKeysSignature) as string[],
+    [dirtyIgnoreFilterKeysSignature],
+  )
   // Snapshot from localStorage is read post-mount via useLayoutEffect to avoid SSR/CSR
   // hydration mismatch. Initial render uses only props-derived state (identical on both sides).
   const initialSnapshotRef = React.useRef<PerspectiveSnapshot | null>(null)
@@ -2436,6 +2450,7 @@ export function DataTable<T extends RowData>({
     }
     const changedKeys = diffPerspectiveSettings(viewBaseline, currentViewSettings, {
       defaultColumnOrder: defaultColumnOrderIds,
+      ignoreFilterKeys: dirtyIgnoreFilterKeys,
     })
     return {
       isDirty: changedKeys.length > 0,
@@ -2450,6 +2465,7 @@ export function DataTable<T extends RowData>({
     viewBaseline,
     currentViewSettings,
     defaultColumnOrderIds,
+    dirtyIgnoreFilterKeys,
     activePerspectiveId,
     activePersonalPerspectiveId,
   ])
