@@ -104,6 +104,12 @@ describe('diffPerspectiveSettings', () => {
     expect(current).toEqual({ filters: { status: 'closed', owner: 'me' } })
   })
 
+  it('keeps a non-ignored __proto__ filter key when ignoring others', () => {
+    const base = JSON.parse('{"filters":{"__proto__":"a","status":"open"}}')
+    const current = JSON.parse('{"filters":{"__proto__":"b","status":"open"}}')
+    expect(diffPerspectiveSettings(base, current, { ignoreFilterKeys: ['status'] })).toEqual(['filters'])
+  })
+
   it('compares a persisted filter tree as a whole even with ignored keys', () => {
     const tree = (value: string) => ({
       v: 2,

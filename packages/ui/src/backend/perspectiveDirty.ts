@@ -51,11 +51,8 @@ function stableStringify(value: unknown): string {
 function omitFilterKeys(filters: unknown, ignoredKeys: readonly string[]): unknown {
   if (ignoredKeys.length === 0 || !filters || typeof filters !== 'object' || Array.isArray(filters)) return filters
   if (isPersistedFilterTree(filters)) return filters
-  const remaining: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(filters as Record<string, unknown>)) {
-    if (!ignoredKeys.includes(key)) remaining[key] = value
-  }
-  return Object.keys(remaining).length > 0 ? remaining : null
+  const remaining = Object.entries(filters as Record<string, unknown>).filter(([key]) => !ignoredKeys.includes(key))
+  return remaining.length > 0 ? Object.fromEntries(remaining) : null
 }
 
 function normalizeOrder(order: string[] | undefined, fallback: string[]): string[] {
