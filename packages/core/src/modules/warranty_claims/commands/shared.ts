@@ -77,6 +77,20 @@ export function withWarrantyExactAmounts<T>(parsed: T, raw: unknown): T {
   return withExact as T
 }
 
+/**
+ * The input without the `<field>Exact` keys a route attached, so the strict
+ * command schemas accept it. `withWarrantyExactAmounts` still reads them from
+ * the original input.
+ */
+export function withoutWarrantyExactKeys(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const exactKeys = new Set(WARRANTY_MONEY_FIELDS.map((field) => `${field}Exact`))
+  const entries = Object.entries(raw as Record<string, unknown>)
+    .filter(([key]) => !exactKeys.has(key))
+    .map(([key, value]) => [key, key === 'lines' && Array.isArray(value) ? value.map(withoutWarrantyExactKeys) : value])
+  return Object.fromEntries(entries)
+}
+
 /** The exact money input for `field`: its `<field>Exact` string when present. */
 export function exactMoneyInput(
   input: object,

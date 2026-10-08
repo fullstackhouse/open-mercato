@@ -71,6 +71,7 @@ import {
   type WarrantyClaimScope,
   exactMoneyInput,
   withWarrantyExactAmounts,
+  withoutWarrantyExactKeys,
 } from './shared'
 import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
 
@@ -259,7 +260,7 @@ const preReceivedStatuses = new Set<WarrantyClaimStatus>([
 ])
 
 function parseCommandInput<T>(schema: z.ZodType<T>, rawInput: unknown): T {
-  const result = schema.safeParse(rawInput ?? {})
+  const result = schema.safeParse(withoutWarrantyExactKeys(rawInput) ?? {})
   if (!result.success) {
     throw new CrudHttpError(400, { error: 'warranty_claims.errors.invalidInput' })
   }

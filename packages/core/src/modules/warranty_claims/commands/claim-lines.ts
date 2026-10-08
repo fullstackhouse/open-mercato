@@ -46,6 +46,7 @@ import {
   type WarrantyClaimScope,
   exactMoneyInput,
   withWarrantyExactAmounts,
+  withoutWarrantyExactKeys,
 } from './shared'
 import { assertPendingClaimQuantitiesWithinSold, validateClaimReferences } from './claims'
 import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
@@ -139,7 +140,7 @@ const mutableParentStatuses = new Set([
 ])
 
 function parseCommandInput<T>(schema: z.ZodType<T>, rawInput: unknown): T {
-  const result = schema.safeParse(rawInput ?? {})
+  const result = schema.safeParse(withoutWarrantyExactKeys(rawInput) ?? {})
   if (!result.success) {
     throw new CrudHttpError(400, { error: '[internal] invalid warranty claim line command input' })
   }
