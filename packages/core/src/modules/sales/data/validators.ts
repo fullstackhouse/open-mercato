@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { amountComparisonTolerance, resolveExactDecimal, toDecimal } from '@open-mercato/shared/lib/decimal'
 import {
   createDictionaryEntrySchema,
   updateDictionaryEntrySchema,
@@ -549,9 +550,14 @@ export const RETURN_ADJUSTMENT_EXCEEDS_REMAINING_GROSS_MESSAGE =
 export type ReturnAdjustmentRemainingCheck = {
   kind?: string | null
   amountNet?: number | null
+  amountNetExact?: string | null
   amountGross?: number | null
+  amountGrossExact?: string | null
   remainingNet: number
+  remainingNetExact?: string | null
   remainingGross: number
+  remainingGrossExact?: string | null
+  amountDecimalPlaces?: number
 }
 
 export type ReturnAdjustmentRemainingIssue = {
@@ -561,19 +567,24 @@ export type ReturnAdjustmentRemainingIssue = {
 
 // Inclusive: abs(amount) === remaining is allowed. Tiny epsilon absorbs
 // floating-point rounding from upstream tax/rate adjustments.
-const RETURN_REMAINING_EPSILON = 0.005
+function exactOrZero(exact: unknown, legacy: unknown) {
+  return toDecimal(resolveExactDecimal(exact, typeof legacy === 'number' ? legacy : null) ?? '0')
+}
 
 export const validateReturnAdjustmentWithinRemaining = (
   value: ReturnAdjustmentRemainingCheck
 ): ReturnAdjustmentRemainingIssue[] => {
   if (value.kind !== 'return') return []
-  const absNet = typeof value.amountNet === 'number' ? Math.abs(value.amountNet) : 0
-  const absGross = typeof value.amountGross === 'number' ? Math.abs(value.amountGross) : 0
+  const tolerance = amountComparisonTolerance(value.amountDecimalPlaces)
+  const absNet = exactOrZero(value.amountNetExact, value.amountNet).abs()
+  const absGross = exactOrZero(value.amountGrossExact, value.amountGross).abs()
+  const remainingNet = exactOrZero(value.remainingNetExact, value.remainingNet)
+  const remainingGross = exactOrZero(value.remainingGrossExact, value.remainingGross)
   const issues: ReturnAdjustmentRemainingIssue[] = []
-  if (absGross > value.remainingGross + RETURN_REMAINING_EPSILON) {
+  if (absGross.gt(remainingGross.plus(tolerance))) {
     issues.push({ path: 'amountGross', message: RETURN_ADJUSTMENT_EXCEEDS_REMAINING_GROSS_MESSAGE })
   }
-  if (absNet > value.remainingNet + RETURN_REMAINING_EPSILON) {
+  if (absNet.gt(remainingNet.plus(tolerance))) {
     issues.push({ path: 'amountNet', message: RETURN_ADJUSTMENT_EXCEEDS_REMAINING_NET_MESSAGE })
   }
   return issues

@@ -2937,6 +2937,20 @@ function normalizeShippingMethodContext(
         | number
         | null,
     ),
+    baseRateNetExact: toNumericString(
+      ((snapshot as Record<string, unknown>).baseRateNet ??
+        (snapshot as Record<string, unknown>).base_rate_net) as
+        | string
+        | number
+        | null,
+    ),
+    baseRateGrossExact: toNumericString(
+      ((snapshot as Record<string, unknown>).baseRateGross ??
+        (snapshot as Record<string, unknown>).base_rate_gross) as
+        | string
+        | number
+        | null,
+    ),
     metadata:
       metadata && typeof metadata === "object"
         ? cloneJson(metadata as Record<string, unknown>)
@@ -3127,6 +3141,17 @@ const LINE_EXACT_AMOUNT_FIELDS = [
 ] as const;
 
 const ADJUSTMENT_EXACT_AMOUNT_FIELDS = ["amountNet", "amountGross"] as const;
+
+const DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS = [
+  "subtotalNetAmount",
+  "subtotalGrossAmount",
+  "discountTotalAmount",
+  "taxTotalAmount",
+  "grandTotalNetAmount",
+  "grandTotalGrossAmount",
+  "paidTotalAmount",
+  "outstandingAmount",
+] as const;
 
 /**
  * Exact decimal string for `value`: the first candidate whose float equals it
@@ -8820,14 +8845,29 @@ const orderAdjustmentUpsertCommand: CommandHandler<
         kind: "return",
         amountNet:
           effectiveAdjustment.amountNet ?? effectiveAdjustment.amountGross ?? 0,
+        amountNetExact:
+          effectiveAdjustment.amountNet !== null && effectiveAdjustment.amountNet !== undefined
+            ? effectiveAdjustment.amountNetExact
+            : effectiveAdjustment.amountGrossExact,
         amountGross:
           effectiveAdjustment.amountGross ?? effectiveAdjustment.amountNet ?? 0,
+        amountGrossExact:
+          effectiveAdjustment.amountGross !== null && effectiveAdjustment.amountGross !== undefined
+            ? effectiveAdjustment.amountGrossExact
+            : effectiveAdjustment.amountNetExact,
         remainingNet: Number(
           baselineCalculation.totals?.grandTotalNetAmount ?? 0,
         ),
+        remainingNetExact: baselineCalculation.totals?.grandTotalNetAmountExact,
         remainingGross: Number(
           baselineCalculation.totals?.grandTotalGrossAmount ?? 0,
         ),
+        remainingGrossExact: baselineCalculation.totals?.grandTotalGrossAmountExact,
+        amountDecimalPlaces: await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+          code: calculationContext.currencyCode,
+          tenantId: calculationContext.tenantId,
+          organizationId: calculationContext.organizationId,
+        }),
       });
       if (issues.length > 0) {
         const { translate } = await resolveTranslations();
@@ -9286,14 +9326,29 @@ const quoteAdjustmentUpsertCommand: CommandHandler<
         kind: "return",
         amountNet:
           effectiveAdjustment.amountNet ?? effectiveAdjustment.amountGross ?? 0,
+        amountNetExact:
+          effectiveAdjustment.amountNet !== null && effectiveAdjustment.amountNet !== undefined
+            ? effectiveAdjustment.amountNetExact
+            : effectiveAdjustment.amountGrossExact,
         amountGross:
           effectiveAdjustment.amountGross ?? effectiveAdjustment.amountNet ?? 0,
+        amountGrossExact:
+          effectiveAdjustment.amountGross !== null && effectiveAdjustment.amountGross !== undefined
+            ? effectiveAdjustment.amountGrossExact
+            : effectiveAdjustment.amountNetExact,
         remainingNet: Number(
           baselineCalculation.totals?.grandTotalNetAmount ?? 0,
         ),
+        remainingNetExact: baselineCalculation.totals?.grandTotalNetAmountExact,
         remainingGross: Number(
           baselineCalculation.totals?.grandTotalGrossAmount ?? 0,
         ),
+        remainingGrossExact: baselineCalculation.totals?.grandTotalGrossAmountExact,
+        amountDecimalPlaces: await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+          code: calculationContext.currencyCode,
+          tenantId: calculationContext.tenantId,
+          organizationId: calculationContext.organizationId,
+        }),
       });
       if (issues.length > 0) {
         const { translate } = await resolveTranslations();
@@ -9608,7 +9663,11 @@ const createInvoiceCommand: CommandHandler<
               tenantId: initial.tenantId,
             })
           ).number;
-    const parsed = invoiceCreateSchema.parse({ ...initial, invoiceNumber });
+    const parsed = withExactAmounts(
+      invoiceCreateSchema.parse({ ...initial, invoiceNumber }),
+      rawInput,
+      DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS,
+    );
     const ensuredInvoiceNumber = parsed.invoiceNumber ?? invoiceNumber;
     if (!ensuredInvoiceNumber) {
       throw new CrudHttpError(400, { error: "Invoice number is required." });
@@ -9656,14 +9715,14 @@ const createInvoiceCommand: CommandHandler<
       issueDate: parsed.issueDate ?? new Date(),
       dueDate: parsed.dueDate ?? null,
       currencyCode: parsed.currencyCode,
-      subtotalNetAmount: toNumericString(parsed.subtotalNetAmount ?? 0),
-      subtotalGrossAmount: toNumericString(parsed.subtotalGrossAmount ?? 0),
-      discountTotalAmount: toNumericString(parsed.discountTotalAmount ?? 0),
-      taxTotalAmount: toNumericString(parsed.taxTotalAmount ?? 0),
-      grandTotalNetAmount: toNumericString(parsed.grandTotalNetAmount ?? 0),
-      grandTotalGrossAmount: toNumericString(parsed.grandTotalGrossAmount ?? 0),
-      paidTotalAmount: toNumericString(parsed.paidTotalAmount ?? 0),
-      outstandingAmount: toNumericString(parsed.outstandingAmount ?? 0),
+      subtotalNetAmount: exactAmountString(parsed.subtotalNetAmountExact, parsed.subtotalNetAmount ?? 0),
+      subtotalGrossAmount: exactAmountString(parsed.subtotalGrossAmountExact, parsed.subtotalGrossAmount ?? 0),
+      discountTotalAmount: exactAmountString(parsed.discountTotalAmountExact, parsed.discountTotalAmount ?? 0),
+      taxTotalAmount: exactAmountString(parsed.taxTotalAmountExact, parsed.taxTotalAmount ?? 0),
+      grandTotalNetAmount: exactAmountString(parsed.grandTotalNetAmountExact, parsed.grandTotalNetAmount ?? 0),
+      grandTotalGrossAmount: exactAmountString(parsed.grandTotalGrossAmountExact, parsed.grandTotalGrossAmount ?? 0),
+      paidTotalAmount: exactAmountString(parsed.paidTotalAmountExact, parsed.paidTotalAmount ?? 0),
+      outstandingAmount: exactAmountString(parsed.outstandingAmountExact, parsed.outstandingAmount ?? 0),
       metadata: parsed.metadata ?? null,
       customFieldSetId: parsed.customFieldSetId ?? null,
       createdAt: new Date(),
@@ -9681,7 +9740,11 @@ const createInvoiceCommand: CommandHandler<
 
           if (parsed.lines?.length) {
             for (let i = 0; i < parsed.lines.length; i++) {
-              const line = parsed.lines[i];
+              const line = withExactAmounts(
+                parsed.lines[i],
+                rawListItem(rawInput, "lines", i),
+                LINE_EXACT_AMOUNT_FIELDS,
+              );
               em.persist(
                 em.create(SalesInvoiceLine, {
                   id: randomUUID(),
@@ -9700,14 +9763,14 @@ const createInvoiceCommand: CommandHandler<
                   normalizedUnit: line.normalizedUnit ?? null,
                   uomSnapshot: line.uomSnapshot ?? null,
                   currencyCode: line.currencyCode ?? parsed.currencyCode,
-                  unitPriceNet: toNumericString(line.unitPriceNet ?? 0),
-                  unitPriceGross: toNumericString(line.unitPriceGross ?? 0),
-                  discountAmount: toNumericString(line.discountAmount ?? 0),
+                  unitPriceNet: exactAmountString(line.unitPriceNetExact, line.unitPriceNet ?? 0),
+                  unitPriceGross: exactAmountString(line.unitPriceGrossExact, line.unitPriceGross ?? 0),
+                  discountAmount: exactAmountString(line.discountAmountExact, line.discountAmount ?? 0),
                   discountPercent: toNumericString(line.discountPercent ?? 0),
                   taxRate: toNumericString(line.taxRate ?? 0),
-                  taxAmount: toNumericString(line.taxAmount ?? 0),
-                  totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount ?? 0, line.totalGrossAmount ?? 0, line.taxRate ?? 0),
-                  totalGrossAmount: toNumericString(line.totalGrossAmount ?? 0),
+                  taxAmount: exactAmountString(line.taxAmountExact, line.taxAmount ?? 0),
+                  totalNetAmount: deriveExactLineNetFromGross(exactAmountString(line.totalNetAmountExact, line.totalNetAmount ?? 0), exactAmountString(line.totalGrossAmountExact, line.totalGrossAmount ?? 0), line.taxRate ?? 0),
+                  totalGrossAmount: exactAmountString(line.totalGrossAmountExact, line.totalGrossAmount ?? 0),
                   metadata: line.metadata ?? null,
                 }),
               );
@@ -9864,14 +9927,14 @@ function applyInvoiceHeaderUpdate(
   if (input.issueDate !== undefined) invoice.issueDate = input.issueDate;
   if (input.dueDate !== undefined) invoice.dueDate = input.dueDate;
   if (input.currencyCode !== undefined) invoice.currencyCode = input.currencyCode;
-  if (input.subtotalNetAmount !== undefined) invoice.subtotalNetAmount = toNumericString(input.subtotalNetAmount);
-  if (input.subtotalGrossAmount !== undefined) invoice.subtotalGrossAmount = toNumericString(input.subtotalGrossAmount);
-  if (input.discountTotalAmount !== undefined) invoice.discountTotalAmount = toNumericString(input.discountTotalAmount);
-  if (input.taxTotalAmount !== undefined) invoice.taxTotalAmount = toNumericString(input.taxTotalAmount);
-  if (input.grandTotalNetAmount !== undefined) invoice.grandTotalNetAmount = toNumericString(input.grandTotalNetAmount);
-  if (input.grandTotalGrossAmount !== undefined) invoice.grandTotalGrossAmount = toNumericString(input.grandTotalGrossAmount);
-  if (input.paidTotalAmount !== undefined) invoice.paidTotalAmount = toNumericString(input.paidTotalAmount);
-  if (input.outstandingAmount !== undefined) invoice.outstandingAmount = toNumericString(input.outstandingAmount);
+  if (input.subtotalNetAmount !== undefined) invoice.subtotalNetAmount = exactAmountString(input.subtotalNetAmountExact, input.subtotalNetAmount);
+  if (input.subtotalGrossAmount !== undefined) invoice.subtotalGrossAmount = exactAmountString(input.subtotalGrossAmountExact, input.subtotalGrossAmount);
+  if (input.discountTotalAmount !== undefined) invoice.discountTotalAmount = exactAmountString(input.discountTotalAmountExact, input.discountTotalAmount);
+  if (input.taxTotalAmount !== undefined) invoice.taxTotalAmount = exactAmountString(input.taxTotalAmountExact, input.taxTotalAmount);
+  if (input.grandTotalNetAmount !== undefined) invoice.grandTotalNetAmount = exactAmountString(input.grandTotalNetAmountExact, input.grandTotalNetAmount);
+  if (input.grandTotalGrossAmount !== undefined) invoice.grandTotalGrossAmount = exactAmountString(input.grandTotalGrossAmountExact, input.grandTotalGrossAmount);
+  if (input.paidTotalAmount !== undefined) invoice.paidTotalAmount = exactAmountString(input.paidTotalAmountExact, input.paidTotalAmount);
+  if (input.outstandingAmount !== undefined) invoice.outstandingAmount = exactAmountString(input.outstandingAmountExact, input.outstandingAmount);
   if (input.metadata !== undefined) invoice.metadata = input.metadata;
 }
 
@@ -9891,7 +9954,11 @@ const updateInvoiceCommand: CommandHandler<
     return snapshot ? { before: snapshot } : {};
   },
   async execute(rawInput, ctx) {
-    const parsed = invoiceUpdateSchema.parse(rawInput ?? {});
+    const parsed = withExactAmounts(
+      invoiceUpdateSchema.parse(rawInput ?? {}),
+      rawInput,
+      DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS,
+    );
     const id = requireId(parsed);
     ensureOrganizationScope(ctx, parsed.organizationId);
     ensureTenantScope(ctx, parsed.tenantId);
@@ -10176,7 +10243,11 @@ const createCreditMemoCommand: CommandHandler<
               tenantId: initial.tenantId,
             })
           ).number;
-    const parsed = creditMemoCreateSchema.parse({ ...initial, creditMemoNumber });
+    const parsed = withExactAmounts(
+      creditMemoCreateSchema.parse({ ...initial, creditMemoNumber }),
+      rawInput,
+      DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS,
+    );
     const ensuredCreditMemoNumber = parsed.creditMemoNumber ?? creditMemoNumber;
     if (!ensuredCreditMemoNumber) {
       throw new CrudHttpError(400, { error: "Credit memo number is required." });
@@ -10238,11 +10309,11 @@ const createCreditMemoCommand: CommandHandler<
       reason: parsed.reason ?? null,
       issueDate: parsed.issueDate ?? new Date(),
       currencyCode: parsed.currencyCode,
-      subtotalNetAmount: toNumericString(parsed.subtotalNetAmount ?? 0),
-      subtotalGrossAmount: toNumericString(parsed.subtotalGrossAmount ?? 0),
-      taxTotalAmount: toNumericString(parsed.taxTotalAmount ?? 0),
-      grandTotalNetAmount: toNumericString(parsed.grandTotalNetAmount ?? 0),
-      grandTotalGrossAmount: toNumericString(parsed.grandTotalGrossAmount ?? 0),
+      subtotalNetAmount: exactAmountString(parsed.subtotalNetAmountExact, parsed.subtotalNetAmount ?? 0),
+      subtotalGrossAmount: exactAmountString(parsed.subtotalGrossAmountExact, parsed.subtotalGrossAmount ?? 0),
+      taxTotalAmount: exactAmountString(parsed.taxTotalAmountExact, parsed.taxTotalAmount ?? 0),
+      grandTotalNetAmount: exactAmountString(parsed.grandTotalNetAmountExact, parsed.grandTotalNetAmount ?? 0),
+      grandTotalGrossAmount: exactAmountString(parsed.grandTotalGrossAmountExact, parsed.grandTotalGrossAmount ?? 0),
       metadata: parsed.metadata ?? null,
       customFieldSetId: parsed.customFieldSetId ?? null,
       createdAt: new Date(),
@@ -10260,7 +10331,11 @@ const createCreditMemoCommand: CommandHandler<
 
           if (parsed.lines?.length) {
             for (let i = 0; i < parsed.lines.length; i++) {
-              const line = parsed.lines[i];
+              const line = withExactAmounts(
+                parsed.lines[i],
+                rawListItem(rawInput, "lines", i),
+                LINE_EXACT_AMOUNT_FIELDS,
+              );
               em.persist(
                 em.create(SalesCreditMemoLine, {
                   id: randomUUID(),
@@ -10278,12 +10353,12 @@ const createCreditMemoCommand: CommandHandler<
                   normalizedUnit: line.normalizedUnit ?? null,
                   uomSnapshot: line.uomSnapshot ?? null,
                   currencyCode: line.currencyCode ?? parsed.currencyCode,
-                  unitPriceNet: toNumericString(line.unitPriceNet ?? 0),
-                  unitPriceGross: toNumericString(line.unitPriceGross ?? 0),
+                  unitPriceNet: exactAmountString(line.unitPriceNetExact, line.unitPriceNet ?? 0),
+                  unitPriceGross: exactAmountString(line.unitPriceGrossExact, line.unitPriceGross ?? 0),
                   taxRate: toNumericString(line.taxRate ?? 0),
-                  taxAmount: toNumericString(line.taxAmount ?? 0),
-                  totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount ?? 0, line.totalGrossAmount ?? 0, line.taxRate ?? 0),
-                  totalGrossAmount: toNumericString(line.totalGrossAmount ?? 0),
+                  taxAmount: exactAmountString(line.taxAmountExact, line.taxAmount ?? 0),
+                  totalNetAmount: deriveExactLineNetFromGross(exactAmountString(line.totalNetAmountExact, line.totalNetAmount ?? 0), exactAmountString(line.totalGrossAmountExact, line.totalGrossAmount ?? 0), line.taxRate ?? 0),
+                  totalGrossAmount: exactAmountString(line.totalGrossAmountExact, line.totalGrossAmount ?? 0),
                   metadata: line.metadata ?? null,
                 }),
               );
@@ -10407,11 +10482,11 @@ function applyCreditMemoHeaderUpdate(
   if (input.reason !== undefined) creditMemo.reason = input.reason;
   if (input.issueDate !== undefined) creditMemo.issueDate = input.issueDate;
   if (input.currencyCode !== undefined) creditMemo.currencyCode = input.currencyCode;
-  if (input.subtotalNetAmount !== undefined) creditMemo.subtotalNetAmount = toNumericString(input.subtotalNetAmount);
-  if (input.subtotalGrossAmount !== undefined) creditMemo.subtotalGrossAmount = toNumericString(input.subtotalGrossAmount);
-  if (input.taxTotalAmount !== undefined) creditMemo.taxTotalAmount = toNumericString(input.taxTotalAmount);
-  if (input.grandTotalNetAmount !== undefined) creditMemo.grandTotalNetAmount = toNumericString(input.grandTotalNetAmount);
-  if (input.grandTotalGrossAmount !== undefined) creditMemo.grandTotalGrossAmount = toNumericString(input.grandTotalGrossAmount);
+  if (input.subtotalNetAmount !== undefined) creditMemo.subtotalNetAmount = exactAmountString(input.subtotalNetAmountExact, input.subtotalNetAmount);
+  if (input.subtotalGrossAmount !== undefined) creditMemo.subtotalGrossAmount = exactAmountString(input.subtotalGrossAmountExact, input.subtotalGrossAmount);
+  if (input.taxTotalAmount !== undefined) creditMemo.taxTotalAmount = exactAmountString(input.taxTotalAmountExact, input.taxTotalAmount);
+  if (input.grandTotalNetAmount !== undefined) creditMemo.grandTotalNetAmount = exactAmountString(input.grandTotalNetAmountExact, input.grandTotalNetAmount);
+  if (input.grandTotalGrossAmount !== undefined) creditMemo.grandTotalGrossAmount = exactAmountString(input.grandTotalGrossAmountExact, input.grandTotalGrossAmount);
   if (input.metadata !== undefined) creditMemo.metadata = input.metadata;
 }
 
@@ -10431,7 +10506,11 @@ const updateCreditMemoCommand: CommandHandler<
     return snapshot ? { before: snapshot } : {};
   },
   async execute(rawInput, ctx) {
-    const parsed = creditMemoUpdateSchema.parse(rawInput ?? {});
+    const parsed = withExactAmounts(
+      creditMemoUpdateSchema.parse(rawInput ?? {}),
+      rawInput,
+      DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS,
+    );
     const id = requireId(parsed);
     ensureOrganizationScope(ctx, parsed.organizationId);
     ensureTenantScope(ctx, parsed.tenantId);

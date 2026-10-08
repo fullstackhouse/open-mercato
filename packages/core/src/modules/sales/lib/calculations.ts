@@ -2,6 +2,7 @@ import { createLogger } from '@open-mercato/shared/lib/logger'
 import {
   DEFAULT_AMOUNT_DECIMAL_PLACES,
   FX_DECIMAL_PLACES,
+  amountComparisonTolerance,
   decimalToNumber,
   decimalToString,
   divideDecimals,
@@ -76,9 +77,7 @@ function resolveDecimalPlaces(decimalPlaces?: number | null): number {
 // honest rounding as a mismatch. Half a minor unit is the widest divergence
 // that cannot be a real discrepancy and the narrowest that silences that noise.
 // It scales with the amount precision: 0.005 at the default 4 decimals.
-function netReconciliationTolerance(decimalPlaces: number): DecimalValue {
-  return toDecimal(`5e-${Math.max(decimalPlaces - 1, 0)}`)
-}
+const netReconciliationTolerance = amountComparisonTolerance
 
 function extractAdjustmentTaxRate(adjustment: SalesAdjustmentDraft): number | null {
   const metadata = (adjustment.metadata ?? {}) as Record<string, unknown>

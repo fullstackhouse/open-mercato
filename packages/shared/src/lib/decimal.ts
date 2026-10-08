@@ -166,6 +166,15 @@ export function withExactAmounts<T extends object, K extends string>(
   return { ...parsed, ...exact } as WithExactAmounts<T, K>
 }
 
+/**
+ * Tolerance for comparing money amounts rounded to `decimalPlaces`: half a
+ * minor unit of a 2-decimal currency at the default 4 places (0.005), scaled
+ * down with higher precision.
+ */
+export function amountComparisonTolerance(decimalPlaces: number = DEFAULT_AMOUNT_DECIMAL_PLACES): DecimalValue {
+  return toDecimal(`5e-${Math.max(decimalPlaces - 1, 0)}`)
+}
+
 export function resolveAmountDecimalPlaces(currencyDecimalPlaces?: number | null): number {
   if (typeof currencyDecimalPlaces !== 'number' || !Number.isInteger(currencyDecimalPlaces) || currencyDecimalPlaces < 0) {
     return DEFAULT_AMOUNT_DECIMAL_PLACES
