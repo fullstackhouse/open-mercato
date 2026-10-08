@@ -394,17 +394,17 @@ describe('findInvalidVariantPriceKinds', () => {
     expect(findInvalidVariantPriceKinds(priceKinds, drafts)).toEqual(['promo'])
   })
 
-  it('flags values above numeric(16,4) integer precision', () => {
+  it('accepts values beyond 12 integer digits', () => {
     const drafts = {
-      regular: { priceKindId: 'regular', amount: '1000000000000', displayMode: 'excluding-tax' as const },
+      regular: { priceKindId: 'regular', amount: '1000000000000000000000', displayMode: 'excluding-tax' as const },
     }
-    expect(findInvalidVariantPriceKinds(priceKinds, drafts)).toEqual(['regular'])
+    expect(findInvalidVariantPriceKinds(priceKinds, drafts)).toEqual([])
   })
 
-  it('flags values with more than four decimal places', () => {
+  it('accepts values with more than four decimal places', () => {
     const drafts = {
-      regular: { priceKindId: 'regular', amount: '12.34567', displayMode: 'excluding-tax' as const },
+      regular: { priceKindId: 'regular', amount: '0.000000000000000001', displayMode: 'excluding-tax' as const },
     }
-    expect(findInvalidVariantPriceKinds(priceKinds, drafts)).toEqual(['regular'])
+    expect(findInvalidVariantPriceKinds(priceKinds, drafts)).toEqual([])
   })
 })

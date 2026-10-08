@@ -1,4 +1,8 @@
+import { decimalToNumber, decimalToString } from '@open-mercato/shared/lib/decimal'
+
+/** @deprecated Prices are no longer limited in integer digits. */
 export const CATALOG_PRICE_MAX_INTEGER_DIGITS = 12
+/** @deprecated Prices are no longer limited in decimal places. */
 export const CATALOG_PRICE_MAX_FRACTION_DIGITS = 4
 
 export type CatalogPriceAmountValidationReason =
@@ -9,13 +13,13 @@ export type CatalogPriceAmountValidationReason =
   | 'too_many_fraction_digits'
 
 export type CatalogPriceAmountValidationResult =
-  | { ok: true; numeric: number }
+  | { ok: true; numeric: number; exact: string }
   | { ok: false; reason: CatalogPriceAmountValidationReason }
 
 function normalizeCatalogPriceRawValue(value: unknown): string | null {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return null
-    return String(value)
+    return decimalToString(value)
   }
   if (typeof value !== 'string') return null
   const normalized = value.trim().replace(/\s+/g, '')
@@ -32,20 +36,8 @@ export function validateCatalogPriceAmountInput(
     return { ok: false, reason: 'invalid_format' }
   }
 
-  const numeric = Number(raw)
-  if (!Number.isFinite(numeric)) return { ok: false, reason: 'not_finite' }
-  if (numeric < 0) return { ok: false, reason: 'negative' }
-
-  const [integerPartRaw, fractionPart = ''] = raw.split('.')
-  const integerPart = integerPartRaw.replace(/^0+(?=\d)/, '')
-  if (integerPart.length > CATALOG_PRICE_MAX_INTEGER_DIGITS) {
-    return { ok: false, reason: 'too_many_integer_digits' }
-  }
-  if (fractionPart.length > CATALOG_PRICE_MAX_FRACTION_DIGITS) {
-    return { ok: false, reason: 'too_many_fraction_digits' }
-  }
-
-  return { ok: true, numeric }
+  const exact = decimalToString(raw)
+  return { ok: true, numeric: decimalToNumber(exact), exact }
 }
 
 export function isCatalogPriceAmountInputValid(value: unknown): boolean {
@@ -53,5 +45,5 @@ export function isCatalogPriceAmountInputValid(value: unknown): boolean {
 }
 
 export function getCatalogPriceAmountValidationMessage(): string {
-  return `Price must be a valid non-negative amount with at most ${CATALOG_PRICE_MAX_INTEGER_DIGITS} digits before the decimal point and ${CATALOG_PRICE_MAX_FRACTION_DIGITS} decimal places.`
+  return 'Price must be a valid non-negative amount.'
 }
