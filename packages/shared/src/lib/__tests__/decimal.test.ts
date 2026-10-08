@@ -18,6 +18,7 @@ import {
   sumDecimals,
   toDecimal,
   withExactAmounts,
+  withExactListAmounts,
 } from '../decimal'
 
 describe('decimal', () => {
@@ -147,5 +148,27 @@ describe('withExactAmounts', () => {
     expect(result.feeExact).toBe('5')
     expect('missingExact' in result).toBe(false)
     expect(result.amount).toBe(parsed.amount)
+  })
+
+  it('reads the exact string a route attached once the raw field is a number', () => {
+    const exactValue = '0.123456789012345678901'
+    const routeOutput = { amount: Number(exactValue), amountExact: exactValue }
+    const result = withExactAmounts({ amount: Number(exactValue) }, routeOutput, ['amount'] as const)
+    expect(result.amountExact).toBe(exactValue)
+  })
+
+  it('ignores an attached exact string that does not match the number', () => {
+    const result = withExactAmounts({ amount: 12 }, { amount: 12, amountExact: '99.5' }, ['amount'] as const)
+    expect(result.amountExact).toBe('12')
+  })
+})
+
+describe('withExactListAmounts', () => {
+  it('pairs parsed and raw list items by index', () => {
+    const raw = { lines: [{ price: '1.000000000000000001' }, { price: 2 }] }
+    const parsed = [{ price: Number('1.000000000000000001') }, { price: 2 }]
+    const result = withExactListAmounts(parsed, raw, 'lines', ['price'] as const)
+    expect(result?.map((line) => line.priceExact)).toEqual(['1.000000000000000001', '2'])
+    expect(withExactListAmounts(undefined, raw, 'lines', ['price'] as const)).toBeUndefined()
   })
 })

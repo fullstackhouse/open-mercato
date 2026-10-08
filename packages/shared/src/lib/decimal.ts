@@ -162,7 +162,9 @@ export type WithExactAmounts<T, K extends string> = T & { [P in K as `${P}Exact`
 
 /**
  * Adds `<field>Exact` strings next to number fields a zod schema coerced, taken
- * from the raw input so digits beyond float precision survive the parse.
+ * from the raw input so digits beyond float precision survive the parse. When the
+ * raw field is already a number (an API route parsed the body before the command),
+ * the `<field>Exact` string that route attached is used instead.
  */
 export function withExactAmounts<T extends object, K extends string>(
   parsed: T,
@@ -174,9 +176,27 @@ export function withExactAmounts<T extends object, K extends string>(
   const exact: Record<string, string | null> = {}
   for (const field of fields) {
     if (values[field] === undefined) continue
-    exact[`${field}Exact`] = resolveExactDecimal(source[field], values[field])
+    const rawValue = source[field]
+    const candidate = typeof rawValue === 'string' ? rawValue : source[`${field}Exact`] ?? rawValue
+    exact[`${field}Exact`] = resolveExactDecimal(candidate, values[field])
   }
   return { ...parsed, ...exact } as WithExactAmounts<T, K>
+}
+
+/**
+ * Applies `withExactAmounts` to each item of the `key` list, pairing parsed and raw
+ * items by index. Lets an API route keep exact digits for nested lines.
+ */
+export function withExactListAmounts<T extends object, K extends string>(
+  parsedItems: readonly T[] | null | undefined,
+  raw: unknown,
+  key: string,
+  fields: readonly K[],
+): WithExactAmounts<T, K>[] | undefined {
+  if (!parsedItems) return undefined
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined
+  const rawItems = Array.isArray(source) ? source : []
+  return parsedItems.map((item, index) => withExactAmounts(item, rawItems[index], fields))
 }
 
 /**
