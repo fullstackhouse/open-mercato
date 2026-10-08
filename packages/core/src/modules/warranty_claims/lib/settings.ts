@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { DEFAULT_SLA_HOURS } from '../data/constants'
 import { WarrantyClaimSettings } from '../data/entities'
+import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
 
 export type WarrantyClaimEffectiveSettings = {
   slaHours: number
@@ -43,6 +44,11 @@ function parseNullableNumber(value: string | number | null | undefined): number 
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function canonicalAmountString(value: string | number | null | undefined): string | null {
+  const parsed = parseDecimal(value)
+  return parsed ? decimalToString(parsed) : null
+}
+
 export async function loadWarrantyClaimSettings(
   em: EntityManager,
   scope: { tenantId: string; organizationId: string | null },
@@ -67,7 +73,7 @@ export async function resolveEffectiveWarrantyClaimSettings(
     slaAtRiskThresholdPct: settings.slaAtRiskThresholdPct ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.slaAtRiskThresholdPct,
     autoApproveEnabled: settings.autoApproveEnabled ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.autoApproveEnabled,
     autoApproveMaxAmount: parseNullableNumber(settings.autoApproveMaxAmount),
-    autoApproveMaxAmountExact: settings.autoApproveMaxAmount ?? null,
+    autoApproveMaxAmountExact: canonicalAmountString(settings.autoApproveMaxAmount),
     autoApproveCurrencyCode: settings.autoApproveCurrencyCode ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.autoApproveCurrencyCode,
     autoApproveRequireInWarranty: settings.autoApproveRequireInWarranty ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.autoApproveRequireInWarranty,
     defaultWarrantyMonths: settings.defaultWarrantyMonths ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.defaultWarrantyMonths,

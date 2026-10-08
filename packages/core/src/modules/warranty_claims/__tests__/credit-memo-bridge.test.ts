@@ -443,7 +443,7 @@ describe('warranty_claims.claim.create_credit_memo exact amounts', () => {
     })
   })
 
-  it('keeps 4-decimal fiat divisions while exact gross digits pass through', async () => {
+  it('rounds claim line amounts to the currency amount precision so totals match unit prices', async () => {
     seedClaim()
     seedLine({ creditAmount: '61.50001' })
     seedSourceLine()
@@ -451,15 +451,30 @@ describe('warranty_claims.claim.create_credit_memo exact amounts', () => {
     await createCreditMemoCommand.execute(executeInput(), makeCtx())
 
     expect(dispatchedLines()[0]).toMatchObject({
-      totalGrossAmount: '61.50001',
+      totalGrossAmount: '61.5000',
       totalNetAmount: '50.0000',
-      taxAmount: '11.50001',
+      taxAmount: '11.5000',
       unitPriceGross: '61.5000',
       unitPriceNet: '50.0000',
     })
   })
 
+  it('rounds the restocking fee and core credit before adjusting the gross', async () => {
+    seedClaim()
+    seedLine({ creditAmount: '61.50004', restockingFee: '1.00004', coreCreditAmount: '0.50004' })
+    seedSourceLine()
+
+    await createCreditMemoCommand.execute(executeInput(), makeCtx())
+
+    expect(dispatchedLines()[0]).toMatchObject({
+      totalGrossAmount: '61.0000',
+      unitPriceGross: '61.0000',
+    })
+    expect(createDispatch().input).toMatchObject({ grandTotalGrossAmount: '61.0000' })
+  })
+
   it('never derives a net above the gross for a zero tax rate', async () => {
+    mockCurrencyDecimalPlaces = 18
     seedClaim()
     seedLine({ creditAmount: '1.123456789012345678' })
     seedSourceLine(ORDER_LINE_ID, {

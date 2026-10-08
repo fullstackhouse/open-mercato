@@ -2669,9 +2669,10 @@ function prepareCreditMemoLine(
   }
   const proratedGrossAmount = divideAmount(multiplyDecimals(sourceGrossAmount, creditedQuantity), orderQuantity, amountDecimalPlaces)
   const proratedNetAmount = divideAmount(multiplyDecimals(netBasisAmount, creditedQuantity), orderQuantity, amountDecimalPlaces)
-  const creditAmount = parseDecimal(claimLine.creditAmount)
-  const restockingFee = parseDecimal(claimLine.restockingFee) ?? toDecimal(0)
-  const coreCreditAmount = parseDecimal(claimLine.coreCreditAmount) ?? toDecimal(0)
+  const parsedCreditAmount = parseDecimal(claimLine.creditAmount)
+  const creditAmount = parsedCreditAmount === null ? null : roundDecimal(parsedCreditAmount, amountDecimalPlaces)
+  const restockingFee = roundDecimal(parseDecimal(claimLine.restockingFee) ?? 0, amountDecimalPlaces)
+  const coreCreditAmount = roundDecimal(parseDecimal(claimLine.coreCreditAmount) ?? 0, amountDecimalPlaces)
   const baseGrossAmount = creditAmount ?? proratedGrossAmount
   const adjustedGrossAmount = addDecimals(subtractDecimals(baseGrossAmount, restockingFee), coreCreditAmount)
   const grossAmount = compareDecimals(adjustedGrossAmount, 0) > 0 ? adjustedGrossAmount : toDecimal(0)
