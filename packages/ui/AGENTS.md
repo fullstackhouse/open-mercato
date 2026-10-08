@@ -107,7 +107,7 @@ When you need… use this. Details (variants, sizes, props, MUST rules) live in 
 
 ## CrudForm Guidelines
 
-- Use `CrudForm` as the default for create/edit flows and dialog forms.
+- Use `CrudForm` (wired to CRUD factory/commands APIs, shared by create/edit) as the default for create/edit flows and dialog forms.
 - If a backend page cannot use `CrudForm`, use `useGuardedMutation` from `@open-mercato/ui/backend/injection/useGuardedMutation` for every write (`POST`/`PUT`/`PATCH`/`DELETE`).
 - Always call writes through `runMutation({ operation, context, mutationPayload })` so global injection modules (e.g. record-lock conflict handling) can run `onBeforeSave`/`onAfterSave`, apply scoped headers, and receive errors consistently.
 - Use manual `useInjectionSpotEvents(GLOBAL_MUTATION_INJECTION_SPOT_ID)` only when `useGuardedMutation` is insufficient.
@@ -118,14 +118,14 @@ When you need… use this. Details (variants, sizes, props, MUST rules) live in 
 - Keep `fields` and `groups` in memoized helpers.
 - Pass `entityIds` when custom fields are involved.
 - Use `createCrud`/`updateCrud`/`deleteCrud` for submit actions and call `flash()` for success/failure messaging.
+- Money/FX fields: `type: 'decimal'` submits an exact decimal string, `'number'` a float.
 - **Optimistic locking is automatic in edit mode.** When the form is editing an existing record (`initialValues` has an `id`), `CrudForm` auto-derives the `x-om-ext-optimistic-lock-expected-updated-at` header from `initialValues.updatedAt` (camel) / `updated_at` (snake) on submit AND delete — so **every edit form locks by default** with no per-form wiring. Therefore: edit-mode `initialValues` MUST include `updatedAt`. An explicit `optimisticLockUpdatedAt` prop (including `null`) overrides the derived value; create mode never attaches; pass `disableOptimisticLock` to opt out (e.g. forms whose locking is owned at the command layer, like sales document sub-resources, or entities without `updated_at`). Do NOT additionally wrap `updateCrud`/`deleteCrud` in `withScopedApiRequestHeaders(buildOptimisticLockHeader(...))` inside `onSubmit`/`onDelete` — that double-attaches; let `CrudForm` supply the header.
 
 ## UI Interaction
 - Every new dialog must support `Cmd/Ctrl + Enter` as a primary action shortcut and `Escape` to cancel, mirroring the shared UX patterns used across modules.
-- Default to `CrudForm` for new forms and `DataTable` for tables displaying information unless a different component is explicitly required.
+- Default to `DataTable` for tables displaying information unless a different component is explicitly required.
 - Use the `EventSelect` component from `@open-mercato/ui/backend/inputs/EventSelect` for event selection. It fetches declared events via the `/api/events` endpoint.
 - Never use `window.confirm` — use the shared `ConfirmDialog` and `useConfirmDialog` from `@open-mercato/ui/backend/confirm-dialog` for confirmation flows.
-- New CRUD forms should use `CrudForm` wired to CRUD factory/commands APIs and be shared between create/edit flows.
 - Prefer reusing components from the shared `packages/ui` package before introducing new UI primitives.
 - For new `DataTable` columns, set `meta.truncate` and `meta.maxWidth` in the column config when you need specific truncation behavior; only rely on defaults when those are not set.
 - When you create new UI check reusable components before creating UI from scratch (see [`.ai/specs/implemented/SPEC-001-2026-01-21-ui-reusable-components.md`](.ai/specs/implemented/SPEC-001-2026-01-21-ui-reusable-components.md))

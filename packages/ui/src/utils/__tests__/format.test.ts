@@ -18,6 +18,30 @@ describe('formatCurrency', () => {
     expect(formatCurrency('12345678901234567890.12', 'USD', 'en-US')).toBe('$12,345,678,901,234,567,890.12')
   })
 
+  it('shows every digit of a value finer than the currency default', () => {
+    expect(formatCurrency('0.000000000000000003', 'ETH', EN)?.replace(/\s/g, ' ')).toBe('ETH 0.000000000000000003')
+    expect(formatCurrency('12.3456', 'USD', EN)).toBe('$12.3456')
+    expect(formatCurrency('0.000000000000000000000000000001', 'USD', EN)).toBe('$0.000000000000000000000000000001')
+  })
+
+  it('pads to the ISO digits of the currency', () => {
+    expect(formatCurrency('5', 'KWD', EN)?.replace(/\s/g, ' ')).toBe('KWD 5.000')
+    expect(formatCurrency('5.1234', 'KWD', EN)?.replace(/\s/g, ' ')).toBe('KWD 5.1234')
+    expect(formatCurrency('1234', 'JPY', EN)).toBe('¥1,234')
+    expect(formatCurrency('1234.5', 'JPY', EN)).toBe('¥1,234.5')
+    expect(formatCurrency('5', 'XYZ', EN)?.replace(/\s/g, ' ')).toBe('XYZ 5.00')
+  })
+
+  it('pads to the configured precision when it is lower than the ISO digits', () => {
+    expect(formatCurrency('5', 'USD', EN, 0)).toBe('$5')
+    expect(formatCurrency('5.25', 'USD', EN, 0)).toBe('$5.25')
+  })
+
+  it('hides float noise of a number value', () => {
+    expect(formatCurrency(0.1 + 0.2, 'USD', EN)).toBe('$0.30')
+    expect(formatCurrency(1.5 * 33.33, 'USD', EN)).toBe('$49.995')
+  })
+
   it('returns null for empty input', () => {
     expect(formatCurrency(null)).toBeNull()
     expect(formatCurrency(undefined)).toBeNull()
