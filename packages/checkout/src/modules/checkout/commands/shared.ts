@@ -121,7 +121,17 @@ function readExactMoneyField(snapshot: CheckoutTemplateSnapshot, key: Propagated
   return resolveExactDecimal(snapshot[PROPAGATED_TEMPLATE_EXACT_FIELD_KEYS[key]], snapshot[key])
 }
 
+function normalizePriceListItemsForComparison(items: unknown): unknown {
+  if (!Array.isArray(items)) return items
+  return items.map((item) => {
+    if (!isRecord(item)) return item
+    const { amountExact, ...rest } = item
+    return { ...rest, amount: resolveExactDecimal(amountExact, rest.amount) }
+  })
+}
+
 function readPropagatedTemplateField(snapshot: CheckoutTemplateSnapshot, key: PropagatedTemplateFieldKey): unknown {
+  if (key === 'priceListItems') return normalizePriceListItemsForComparison(snapshot.priceListItems)
   return isPropagatedTemplateMoneyField(key) ? readExactMoneyField(snapshot, key) : snapshot[key]
 }
 

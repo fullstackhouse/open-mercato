@@ -15,8 +15,7 @@ import {
 import { assertValidCheckoutStatusTransition } from '../lib/transaction-status-machine'
 import { decimalToString, roundDecimal } from '@open-mercato/shared/lib/decimal'
 import { resolveCurrencyDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
-
-const DEFAULT_CHECKOUT_DECIMAL_PLACES = 2
+import { DEFAULT_CHECKOUT_DECIMAL_PLACES } from '../lib/amountPrecision'
 
 function resolveTransactionScope(input: { tenantId?: string | null; organizationId?: string | null }) {
   if (!input.organizationId || !input.tenantId) {

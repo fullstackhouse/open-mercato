@@ -225,4 +225,43 @@ describe('template link sync helpers', () => {
     expect(result.snapshot.fixedPriceAmount).toBe(20)
     expect(result.snapshot.fixedPriceAmountExact).toBe('20')
   })
+
+  it('keeps syncing price-list items after the link is re-saved with exact amounts', () => {
+    const before = createTemplateSnapshot({
+      pricingMode: 'price_list',
+      priceListItems: [{ id: 'basic', description: 'Basic', amount: 10, currencyCode: 'USD' }],
+    })
+    const after = createTemplateSnapshot({
+      pricingMode: 'price_list',
+      priceListItems: [{ id: 'basic', description: 'Basic', amount: 12.5, amountExact: '12.5', currencyCode: 'USD' }],
+    })
+    const resavedLink = createLinkSnapshot({
+      pricingMode: 'price_list',
+      priceListItems: [{ id: 'basic', description: 'Basic', amount: 10, amountExact: '10.00', currencyCode: 'USD' }],
+    })
+
+    const result = buildSelectiveLinkedLinkSnapshot(resavedLink, before, after)
+
+    expect(result.changed).toBe(true)
+    expect(result.snapshot.priceListItems).toEqual(after.priceListItems)
+  })
+
+  it('treats price-list items with a different exact amount as a link override', () => {
+    const before = createTemplateSnapshot({
+      pricingMode: 'price_list',
+      priceListItems: [{ id: 'eth', description: 'ETH', amount: 1, amountExact: '1.000000000000000001', currencyCode: 'ETH' }],
+    })
+    const after = createTemplateSnapshot({
+      pricingMode: 'price_list',
+      priceListItems: [{ id: 'eth', description: 'ETH', amount: 2, amountExact: '2', currencyCode: 'ETH' }],
+    })
+    const overriddenLink = createLinkSnapshot({
+      pricingMode: 'price_list',
+      priceListItems: [{ id: 'eth', description: 'ETH', amount: 1, amountExact: '1.000000000000000002', currencyCode: 'ETH' }],
+    })
+
+    const result = buildSelectiveLinkedLinkSnapshot(overriddenLink, before, after)
+
+    expect(result.snapshot.priceListItems).toEqual(overriddenLink.priceListItems)
+  })
 })

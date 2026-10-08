@@ -9,10 +9,17 @@ import {
   createCustomAmountTemplateInput,
   createCustomerData,
   createFixedTemplateInput,
+  createPriceListTemplateInput,
   deleteCheckoutEntityIfExists,
   readPublicPayLink,
   updateTemplate,
 } from './helpers/fixtures'
+import {
+  buildPayPageSubmitBody,
+  parsePayPageAmountInput,
+  toPayPageAmount,
+  type PayPageAmount,
+} from '../lib/payPageAmount'
 
 /**
  * TC-CHKT-PRECISION-001: checkout amounts in an 18-decimal currency keep every digit.
@@ -30,6 +37,9 @@ const CUSTOM_MIN = '0.000000000000000001'
 const CUSTOM_MAX = '9.999999999999999999'
 const SUBMITTED_AMOUNT = '1.1234567890123456785'
 const CHARGED_AMOUNT = '1.123456789012345679'
+const PAY_PAGE_FIXED_PRICE = '1234.567890123456789012'
+const PAY_PAGE_PRICE_ITEM = '0.123456789012345678'
+const PAY_PAGE_CUSTOM_MIN = '1.000000000000000001'
 
 async function readJson(response: APIResponse): Promise<JsonRecord> {
   const raw = await response.text()
@@ -65,10 +75,10 @@ async function readCheckoutEntity(
   return readJson(response)
 }
 
-async function submitExactAmount(
+async function submitPayload(
   request: APIRequestContext,
   slug: string,
-  amount: string,
+  data: JsonRecord,
 ): Promise<APIResponse> {
   const baseUrl = process.env.BASE_URL || 'http://localhost:3000'
   return request.fetch(`${baseUrl}/api/checkout/pay/${encodeURIComponent(slug)}/submit`, {
@@ -77,8 +87,45 @@ async function submitExactAmount(
       'Content-Type': 'application/json',
       'Idempotency-Key': `precision-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     }),
-    data: { customerData: createCustomerData(), acceptedLegalConsents: {}, amount },
+    data,
   })
+}
+
+async function submitExactAmount(
+  request: APIRequestContext,
+  slug: string,
+  amount: string,
+): Promise<APIResponse> {
+  return submitPayload(request, slug, { customerData: createCustomerData(), acceptedLegalConsents: {}, amount })
+}
+
+async function readPublicPayload(request: APIRequestContext, slug: string): Promise<JsonRecord> {
+  const response = await readPublicPayLink(request, slug)
+  expect(response.status(), `GET /api/checkout/pay/${slug} should be 200`).toBe(200)
+  return readJson(response)
+}
+
+async function submitLikePayPage(
+  request: APIRequestContext,
+  token: string,
+  slug: string,
+  amount: PayPageAmount,
+  selectedPriceItemId: string | null = null,
+): Promise<JsonRecord> {
+  const body = buildPayPageSubmitBody({
+    customerData: createCustomerData(),
+    acceptedLegalConsents: {},
+    ...amount,
+    selectedPriceItemId,
+  })
+  expect(typeof body.amount, 'the pay page submits the amount as an exact string').toBe('string')
+  const response = await submitPayload(request, slug, body)
+  const responseBody = await readJson(response)
+  expect(response.status(), `pay page submit for ${slug} failed: ${JSON.stringify(responseBody)}`).toBe(201)
+  const transactionId = responseBody.transactionId as string
+  expect(transactionId, 'submit should return transactionId').toBeTruthy()
+  const transactionBody = await readCheckoutEntity(request, token, 'transactions', transactionId)
+  return (transactionBody.transaction ?? {}) as JsonRecord
 }
 
 test.describe('TC-CHKT-PRECISION-001: 18-decimal currency checkout amounts', () => {
@@ -186,6 +233,87 @@ test.describe('TC-CHKT-PRECISION-001: 18-decimal currency checkout amounts', () 
         await deleteCheckoutEntityIfExists(request, token, 'links', linkId)
       }
       await deleteCheckoutEntityIfExists(request, token, 'templates', templateId)
+      await deleteCurrenciesEntityIfExists(request, token, '/api/currencies/currencies', currencyId)
+    }
+  })
+
+  test('pay page payloads pay a high-precision fixed price, price-list item and the exact custom minimum', async ({ request }) => {
+    test.slow()
+    const token = await getAuthToken(request, 'admin')
+    let currencyId: string | null = null
+    const linkIds: string[] = []
+
+    try {
+      const currency = await createRandomCurrencyFixture(request, token, {
+        name: 'QA TC-CHKT-PRECISION-001 pay page',
+        decimalPlaces: 18,
+      })
+      currencyId = currency.id
+
+      const fixedLink = await createCheckoutEntity(request, token, 'links', {
+        ...createFixedTemplateInput({ fixedPriceCurrencyCode: currency.code, status: 'active' }),
+        fixedPriceAmount: PAY_PAGE_FIXED_PRICE,
+        fixedPriceOriginalAmount: null,
+      })
+      linkIds.push(fixedLink.id as string)
+      const fixedPayload = await readPublicPayload(request, fixedLink.slug as string)
+      expect(fixedPayload.fixedPriceAmountExact).toBe(PAY_PAGE_FIXED_PRICE)
+
+      const floatSubmit = await submitPayload(request, fixedLink.slug as string, {
+        customerData: createCustomerData(),
+        acceptedLegalConsents: {},
+        amount: fixedPayload.fixedPriceAmount,
+      })
+      expect(floatSubmit.status(), 'a float fixed price no longer matches the exact configuration').toBe(422)
+
+      const fixedTransaction = await submitLikePayPage(
+        request,
+        token,
+        fixedLink.slug as string,
+        toPayPageAmount(fixedPayload.fixedPriceAmount, fixedPayload.fixedPriceAmountExact),
+      )
+      expect(fixedTransaction.amountExact).toBe(PAY_PAGE_FIXED_PRICE)
+
+      const priceListLink = await createCheckoutEntity(request, token, 'links', {
+        ...createPriceListTemplateInput(),
+        priceListItems: [{ id: 'precise', description: 'Precise', amount: PAY_PAGE_PRICE_ITEM, currencyCode: currency.code }],
+      })
+      linkIds.push(priceListLink.id as string)
+      const priceListPayload = await readPublicPayload(request, priceListLink.slug as string)
+      const priceItems = (priceListPayload.priceListItems ?? []) as Array<{ id: string; amount: number; amountExact?: string | null }>
+      const preciseItem = priceItems.find((item) => item.id === 'precise')
+      expect(preciseItem?.amountExact).toBe(PAY_PAGE_PRICE_ITEM)
+
+      const priceListTransaction = await submitLikePayPage(
+        request,
+        token,
+        priceListLink.slug as string,
+        toPayPageAmount(preciseItem?.amount, preciseItem?.amountExact),
+        'precise',
+      )
+      expect(priceListTransaction.amountExact).toBe(PAY_PAGE_PRICE_ITEM)
+      expect(priceListTransaction.selectedPriceItemId).toBe('precise')
+
+      const customLink = await createCheckoutEntity(request, token, 'links', {
+        ...createCustomAmountTemplateInput({ customAmountCurrencyCode: currency.code }),
+        customAmountMin: PAY_PAGE_CUSTOM_MIN,
+        customAmountMax: CUSTOM_MAX,
+      })
+      linkIds.push(customLink.id as string)
+      const customPayload = await readPublicPayload(request, customLink.slug as string)
+      expect(customPayload.customAmountMinExact).toBe(PAY_PAGE_CUSTOM_MIN)
+
+      const customTransaction = await submitLikePayPage(
+        request,
+        token,
+        customLink.slug as string,
+        parsePayPageAmountInput(customPayload.customAmountMinExact as string),
+      )
+      expect(customTransaction.amountExact).toBe(PAY_PAGE_CUSTOM_MIN)
+    } finally {
+      for (const linkId of linkIds) {
+        await deleteCheckoutEntityIfExists(request, token, 'links', linkId)
+      }
       await deleteCurrenciesEntityIfExists(request, token, '/api/currencies/currencies', currencyId)
     }
   })

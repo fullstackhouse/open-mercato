@@ -162,6 +162,20 @@ describe('checkout utils', () => {
     })).toThrow()
   })
 
+  it('checks custom amounts against the stored, currency-rounded bounds', () => {
+    const link = createLink({ pricingMode: 'custom_amount', fixedPriceAmount: null, customAmountMin: '10', customAmountMax: '10.01', customAmountCurrencyCode: 'USD' })
+    const submit = (amountExact: string) => resolveSubmittedAmount(link, {
+      customerData: {},
+      acceptedLegalConsents: {},
+      amount: Number(amountExact),
+      amountExact,
+    })
+    expect(submit('10').amountExact).toBe('10')
+    expect(submit('10.01').amountExact).toBe('10.01')
+    expect(() => submit('9.999')).toThrow(CrudHttpError)
+    expect(() => submit('10.011')).toThrow(CrudHttpError)
+  })
+
   it('stores consent proof only for accepted legal documents with markdown', () => {
     const link = createLink({
       legalDocuments: {
