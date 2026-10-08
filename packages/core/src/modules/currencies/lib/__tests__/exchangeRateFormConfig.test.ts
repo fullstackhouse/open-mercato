@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@jest/globals'
 import {
   buildExchangeRatePayload,
+  formatRateForDisplay,
   metadataToFormValue,
   validateExchangeRateForm,
 } from '../exchangeRateFormConfig'
@@ -43,5 +44,17 @@ describe('exchange rate form config', () => {
   it('renders metadata for the form', () => {
     expect(metadataToFormValue(null)).toBe('')
     expect(metadataToFormValue({ a: 1 })).toBe('{\n  "a": 1\n}')
+  })
+})
+
+describe('formatRateForDisplay', () => {
+  it('shows at most 17 significant digits', () => {
+    expect(formatRateForDisplay('0.25188916876574307304785894206549118387909319899244')).toBe('0.25188916876574307')
+    expect(formatRateForDisplay('0.000056123456789012345678')).toBe('0.000056123456789012346')
+    expect(formatRateForDisplay('4.25')).toBe('4.25')
+  })
+
+  it('returns a malformed rate unchanged instead of throwing', () => {
+    expect(formatRateForDisplay('NaN')).toBe('NaN')
   })
 })

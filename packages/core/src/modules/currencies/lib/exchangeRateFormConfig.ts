@@ -2,7 +2,7 @@ import type { CrudFormGroup, CrudFieldOption } from '@open-mercato/ui/backend/Cr
 import type { ApiCallResult } from '@open-mercato/ui/backend/utils/apiCall'
 import { createCrudFormError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { createLogger } from '@open-mercato/shared/lib/logger'
-import { decimalToString, isDecimalInput, toDecimal } from '@open-mercato/shared/lib/decimal'
+import { MIN_SIGNIFICANT_DIGITS, decimalToString, isDecimalInput, parseDecimal, toDecimal } from '@open-mercato/shared/lib/decimal'
 
 const logger = createLogger('currencies').child({ component: 'exchange-rate-form' })
 
@@ -235,4 +235,10 @@ export function buildExchangeRatePayload(values: Record<string, unknown>, valida
     metadata: validated.metadata,
     isActive: values.isActive !== false,
   }
+}
+
+/** Rate for list display: at most 17 significant digits; the raw value when it is not a decimal. */
+export function formatRateForDisplay(rate: string): string {
+  const parsed = parseDecimal(rate)
+  return parsed ? decimalToString(parsed.prec(MIN_SIGNIFICANT_DIGITS)) : rate
 }
