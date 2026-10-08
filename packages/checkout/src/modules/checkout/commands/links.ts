@@ -117,10 +117,10 @@ const createLinkCommand: CommandHandler<Record<string, unknown>, { id: string; s
       completionCount: 0,
       activeReservationCount: 0,
       isLocked: false,
-      fixedPriceAmount: toMoneyString(sourceValues.fixedPriceAmount),
-      fixedPriceOriginalAmount: toMoneyString(sourceValues.fixedPriceOriginalAmount),
-      customAmountMin: toMoneyString(sourceValues.customAmountMin),
-      customAmountMax: toMoneyString(sourceValues.customAmountMax),
+      fixedPriceAmount: toMoneyString(sourceValues.fixedPriceAmountExact ?? sourceValues.fixedPriceAmount),
+      fixedPriceOriginalAmount: toMoneyString(sourceValues.fixedPriceOriginalAmountExact ?? sourceValues.fixedPriceOriginalAmount),
+      customAmountMin: toMoneyString(sourceValues.customAmountMinExact ?? sourceValues.customAmountMin),
+      customAmountMax: toMoneyString(sourceValues.customAmountMaxExact ?? sourceValues.customAmountMax),
       slug,
       passwordHash: await hashCheckoutPassword(sourceValues.password),
     } as any)
@@ -312,10 +312,10 @@ const updateLinkCommand: CommandHandler<Record<string, unknown>, { ok: true; slu
     const previousStatus = link.status
     Object.assign(link, {
       ...parsed,
-      fixedPriceAmount: parsed.fixedPriceAmount !== undefined ? toMoneyString(parsed.fixedPriceAmount) : link.fixedPriceAmount,
-      fixedPriceOriginalAmount: parsed.fixedPriceOriginalAmount !== undefined ? toMoneyString(parsed.fixedPriceOriginalAmount) : link.fixedPriceOriginalAmount,
-      customAmountMin: parsed.customAmountMin !== undefined ? toMoneyString(parsed.customAmountMin) : link.customAmountMin,
-      customAmountMax: parsed.customAmountMax !== undefined ? toMoneyString(parsed.customAmountMax) : link.customAmountMax,
+      fixedPriceAmount: parsed.fixedPriceAmount !== undefined ? toMoneyString(parsed.fixedPriceAmountExact ?? parsed.fixedPriceAmount) : link.fixedPriceAmount,
+      fixedPriceOriginalAmount: parsed.fixedPriceOriginalAmount !== undefined ? toMoneyString(parsed.fixedPriceOriginalAmountExact ?? parsed.fixedPriceOriginalAmount) : link.fixedPriceOriginalAmount,
+      customAmountMin: parsed.customAmountMin !== undefined ? toMoneyString(parsed.customAmountMinExact ?? parsed.customAmountMin) : link.customAmountMin,
+      customAmountMax: parsed.customAmountMax !== undefined ? toMoneyString(parsed.customAmountMaxExact ?? parsed.customAmountMax) : link.customAmountMax,
       slug,
       passwordHash,
     })

@@ -80,6 +80,7 @@ describe('checkout utils', () => {
       amount: 99.99,
     })).toEqual({
       amount: 99.99,
+      amountExact: '99.99',
       currencyCode: 'USD',
       selectedPriceItemId: null,
     })
@@ -136,9 +137,26 @@ describe('checkout utils', () => {
       selectedPriceItemId: 'vip',
     })).toEqual({
       amount: 149.5,
+      amountExact: '149.5',
       currencyCode: 'EUR',
       selectedPriceItemId: 'vip',
     })
+  })
+
+  it('compares submitted amounts exactly beyond float precision', () => {
+    const link = createLink({ pricingMode: 'custom_amount', fixedPriceAmount: null, customAmountMin: '0.000000000000000001', customAmountMax: '1', customAmountCurrencyCode: 'ETH' })
+    expect(resolveSubmittedAmount(link, {
+      customerData: {},
+      acceptedLegalConsents: {},
+      amount: Number('0.000000000000000002'),
+      amountExact: '0.000000000000000002',
+    }).amountExact).toBe('0.000000000000000002')
+    expect(() => resolveSubmittedAmount(link, {
+      customerData: {},
+      acceptedLegalConsents: {},
+      amount: 0,
+      amountExact: '0',
+    })).toThrow()
   })
 
   it('stores consent proof only for accepted legal documents with markdown', () => {

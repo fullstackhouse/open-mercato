@@ -117,10 +117,10 @@ const createTemplateCommand: CommandHandler<Record<string, unknown>, { id: strin
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       ...parsed,
-      fixedPriceAmount: toMoneyString(parsed.fixedPriceAmount),
-      fixedPriceOriginalAmount: toMoneyString(parsed.fixedPriceOriginalAmount),
-      customAmountMin: toMoneyString(parsed.customAmountMin),
-      customAmountMax: toMoneyString(parsed.customAmountMax),
+      fixedPriceAmount: toMoneyString(parsed.fixedPriceAmountExact ?? parsed.fixedPriceAmount),
+      fixedPriceOriginalAmount: toMoneyString(parsed.fixedPriceOriginalAmountExact ?? parsed.fixedPriceOriginalAmount),
+      customAmountMin: toMoneyString(parsed.customAmountMinExact ?? parsed.customAmountMin),
+      customAmountMax: toMoneyString(parsed.customAmountMaxExact ?? parsed.customAmountMax),
       passwordHash: await hashCheckoutPassword(parsed.password),
     } as any)
     em.persist(template)
@@ -292,10 +292,10 @@ const updateTemplateCommand: CommandHandler<Record<string, unknown>, { ok: true 
       : template.passwordHash
     Object.assign(template, {
       ...parsed,
-      fixedPriceAmount: parsed.fixedPriceAmount !== undefined ? toMoneyString(parsed.fixedPriceAmount) : template.fixedPriceAmount,
-      fixedPriceOriginalAmount: parsed.fixedPriceOriginalAmount !== undefined ? toMoneyString(parsed.fixedPriceOriginalAmount) : template.fixedPriceOriginalAmount,
-      customAmountMin: parsed.customAmountMin !== undefined ? toMoneyString(parsed.customAmountMin) : template.customAmountMin,
-      customAmountMax: parsed.customAmountMax !== undefined ? toMoneyString(parsed.customAmountMax) : template.customAmountMax,
+      fixedPriceAmount: parsed.fixedPriceAmount !== undefined ? toMoneyString(parsed.fixedPriceAmountExact ?? parsed.fixedPriceAmount) : template.fixedPriceAmount,
+      fixedPriceOriginalAmount: parsed.fixedPriceOriginalAmount !== undefined ? toMoneyString(parsed.fixedPriceOriginalAmountExact ?? parsed.fixedPriceOriginalAmount) : template.fixedPriceOriginalAmount,
+      customAmountMin: parsed.customAmountMin !== undefined ? toMoneyString(parsed.customAmountMinExact ?? parsed.customAmountMin) : template.customAmountMin,
+      customAmountMax: parsed.customAmountMax !== undefined ? toMoneyString(parsed.customAmountMaxExact ?? parsed.customAmountMax) : template.customAmountMax,
       passwordHash,
     })
     await em.flush()

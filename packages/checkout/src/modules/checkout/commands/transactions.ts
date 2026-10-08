@@ -32,6 +32,7 @@ type CheckoutTerminalEventPayload = {
   status: CheckoutTransaction['status']
   paymentStatus: string | null
   amount: number
+  amountExact?: string | null
   currency: string
   gatewayProvider: string | null
   gatewayTransactionId: string | null
@@ -95,7 +96,7 @@ const createTransactionCommand: CommandHandler<Record<string, unknown>, { id: st
         ...parsed,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
-        amount: toMoneyString(parsed.amount) ?? '0.00',
+        amount: toMoneyString(parsed.amountExact ?? parsed.amount) ?? '0.00',
         status: 'processing',
       })
       tx.persist(transaction)
@@ -115,6 +116,7 @@ const createTransactionCommand: CommandHandler<Record<string, unknown>, { id: st
       linkId: transaction.linkId,
       status: transaction.status,
       amount: Number(transaction.amount),
+      amountExact: toMoneyString(transaction.amount),
       currency: transaction.currencyCode,
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
@@ -127,6 +129,7 @@ const createTransactionCommand: CommandHandler<Record<string, unknown>, { id: st
       status: transaction.status,
       paymentStatus: transaction.paymentStatus ?? null,
       amount: Number(transaction.amount),
+      amountExact: toMoneyString(transaction.amount),
       currency: transaction.currencyCode,
       gatewayProvider: lockedLinkGatewayProvider,
       gatewayTransactionId: transaction.gatewayTransactionId ?? null,
@@ -244,6 +247,7 @@ const updateTransactionStatusCommand: CommandHandler<Record<string, unknown>, { 
           status: transaction.status,
           paymentStatus: transaction.paymentStatus ?? null,
           amount: Number(transaction.amount),
+          amountExact: toMoneyString(transaction.amount),
           currency: transaction.currencyCode,
           gatewayProvider: link.gatewayProviderKey ?? null,
           gatewayTransactionId: transaction.gatewayTransactionId ?? null,
