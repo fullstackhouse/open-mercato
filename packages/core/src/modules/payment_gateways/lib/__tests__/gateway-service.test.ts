@@ -583,4 +583,51 @@ describe('payment gateway service — cumulative capture ceiling (#4487)', () =>
 
     expect(transaction.capturedAmount).toBe('0.3')
   })
+
+  it('keeps the exact reserved amount when a float-only provider reports the same captured float', async () => {
+    const transaction = makeTransaction('authorized')
+    transaction.amount = '1234.567890123456789012'
+    const { service, captureFn } = buildService(transaction, {})
+    captureFn
+      .mockResolvedValueOnce({ status: 'captured', capturedAmount: 1000 })
+      .mockResolvedValueOnce({ status: 'captured', capturedAmount: Number('234.567890123456789011') })
+
+    const first = await service.capturePayment(transaction.id, '1000.000000000000000001', scope, 'capture-exact-a')
+
+    expect(first).toMatchObject({ capturedAmount: 1000, capturedAmountExact: '1000.000000000000000001' })
+    expect(transaction.capturedAmount).toBe('1000.000000000000000001')
+    await expect(service.capturePayment(transaction.id, '234.567890123456789012', scope, 'capture-exact-over'))
+      .rejects.toMatchObject({ status: 409, body: { code: 'payment_capture_ceiling_exceeded' } })
+
+    const rest = await service.capturePayment(transaction.id, undefined, scope, 'capture-exact-rest')
+
+    expect((captureFn.mock.calls[1]?.[0] as { amountExact?: string }).amountExact).toBe('234.567890123456789011')
+    expect(rest).toMatchObject({ capturedAmountExact: '234.567890123456789011' })
+    expect(transaction.capturedAmount).toBe('1234.567890123456789012')
+  })
+
+  it('falls back to the provider float when it reports a different captured amount', async () => {
+    const transaction = makeTransaction('authorized')
+    transaction.amount = '1234.567890123456789012'
+    const { service, captureFn } = buildService(transaction, {})
+    captureFn.mockResolvedValueOnce({ status: 'captured', capturedAmount: 999.5 })
+
+    const result = await service.capturePayment(transaction.id, '1000.000000000000000001', scope, 'capture-short-exact')
+
+    expect(result).toMatchObject({ capturedAmountExact: '999.5' })
+    expect(transaction.capturedAmount).toBe('999.5')
+  })
+
+  it('returns the exact requested refund amount when a float-only provider echoes its float', async () => {
+    const transaction = makeTransaction('captured', '1234.567890123456789012')
+    transaction.amount = '1234.567890123456789012'
+    const { service, refundFn } = buildService(transaction, {
+      refund: { status: 'partially_refunded', refundedAmount: 100, refundId: 're_exact' },
+    })
+
+    const result = await service.refundPayment(transaction.id, '100.000000000000000001', 'return', scope, 'refund-exact')
+
+    expect((refundFn.mock.calls[0]?.[0] as { amountExact?: string }).amountExact).toBe('100.000000000000000001')
+    expect(result).toMatchObject({ refundedAmount: 100, refundedAmountExact: '100.000000000000000001' })
+  })
 })

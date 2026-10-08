@@ -594,13 +594,17 @@ export function createPaymentGatewayService(deps: PaymentGatewayServiceDeps) {
             { operationId: operation.operationId, reservedAmount },
           )
         },
-        invoke: ({ adapter, credentials, transaction, idempotencyKey }) => adapter.capture({
-          sessionId: readProviderSessionId(transaction),
-          amount: providerAmountExact === undefined ? undefined : decimalToNumber(providerAmountExact),
-          amountExact: providerAmountExact,
-          credentials,
-          idempotencyKey,
-        }),
+        invoke: async ({ adapter, credentials, transaction, idempotencyKey }) => {
+          const result = await adapter.capture({
+            sessionId: readProviderSessionId(transaction),
+            amount: providerAmountExact === undefined ? undefined : decimalToNumber(providerAmountExact),
+            amountExact: providerAmountExact,
+            credentials,
+            idempotencyKey,
+          })
+          const capturedAmountExact = resolveExactDecimal(result.capturedAmountExact ?? reservedAmount, result.capturedAmount)
+          return capturedAmountExact === null ? result : { ...result, capturedAmountExact }
+        },
         applyResult: (transaction, result) => {
           transaction.gatewayMetadata = {
             ...readGatewayMetadata(transaction.gatewayMetadata),
@@ -638,14 +642,19 @@ export function createPaymentGatewayService(deps: PaymentGatewayServiceDeps) {
         operationId,
         payload: { amount: amount ?? null, reason: reason ?? null },
         scope,
-        invoke: ({ adapter, credentials, transaction, idempotencyKey }) => adapter.refund({
-          sessionId: readProviderSessionId(transaction),
-          amount: amount === undefined ? undefined : Number(amount),
-          amountExact: amount === undefined ? undefined : (resolveExactDecimal(amount, null) ?? undefined),
-          reason,
-          credentials,
-          idempotencyKey,
-        }),
+        invoke: async ({ adapter, credentials, transaction, idempotencyKey }) => {
+          const requestedAmountExact = amount === undefined ? undefined : (resolveExactDecimal(amount, null) ?? undefined)
+          const result = await adapter.refund({
+            sessionId: readProviderSessionId(transaction),
+            amount: amount === undefined ? undefined : Number(amount),
+            amountExact: requestedAmountExact,
+            reason,
+            credentials,
+            idempotencyKey,
+          })
+          const refundedAmountExact = resolveExactDecimal(result.refundedAmountExact ?? requestedAmountExact, result.refundedAmount)
+          return refundedAmountExact === null ? result : { ...result, refundedAmountExact }
+        },
         applyResult: (transaction, result) => {
           transaction.gatewayRefundId = result.refundId
           transaction.gatewayMetadata = {
