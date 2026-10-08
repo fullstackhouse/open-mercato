@@ -35,7 +35,13 @@ import {
   enforceSalesDocumentOptimisticLock,
   SALES_RESOURCE_KIND_ORDER,
 } from './shared'
-import { parseDecimal, toDecimal, withExactAmounts } from '@open-mercato/shared/lib/decimal'
+import {
+  countDecimalPlaces,
+  parseDecimal,
+  toDecimal,
+  withExactAmounts,
+  type DecimalInput,
+} from '@open-mercato/shared/lib/decimal'
 import { resolveDictionaryEntryValue } from '../lib/dictionaries'
 import { resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
@@ -60,6 +66,18 @@ const shipmentCrudEvents: CrudEventsConfig = {
 const ADDRESS_SNAPSHOT_KEY = 'shipmentAddressSnapshot'
 
 const SHIPMENT_EXACT_AMOUNT_FIELDS = ['declaredValueNet', 'declaredValueGross'] as const
+
+/**
+ * Whether `amount` settles `grandTotal`. Rows written by the old float math can be
+ * one unit of the 4th decimal short, so a total that close still counts as settled;
+ * the tolerance shrinks when either amount carries more decimals.
+ */
+export function coversGrandTotal(amount: DecimalInput, grandTotal: DecimalInput): boolean {
+  const total = toDecimal(grandTotal)
+  const covered = toDecimal(amount)
+  const scale = Math.max(4, countDecimalPlaces(total), countDecimalPlaces(covered))
+  return covered.gte(total.minus(toDecimal(`1e-${scale}`)))
+}
 
 export type ShipmentSnapshot = {
   id: string
@@ -705,13 +723,13 @@ const updateShipmentCommand: CommandHandler<ShipmentUpdateInput, { shipmentId: s
       const grandTotal = parseDecimal(order.grandTotalGrossAmount) ?? toDecimal(0)
 
       // Check for full refund first (higher priority than payment)
-      const isFullyRefunded = refundedAmount.gte(grandTotal)
+      const isFullyRefunded = coversGrandTotal(refundedAmount, grandTotal)
       if (isFullyRefunded) {
         throw new CrudHttpError(422, { error: translate('sales.shipments.fully_returned', 'Cannot modify shipment: order is fully returned') })
       }
 
       // Check for completed payment
-      const isFullyPaid = paidAmount.gte(grandTotal)
+      const isFullyPaid = coversGrandTotal(paidAmount, grandTotal)
       if (isFullyPaid) {
         throw new CrudHttpError(422, { error: translate('sales.shipments.payment_completed', 'Cannot modify shipment: order payment is completed') })
       }
