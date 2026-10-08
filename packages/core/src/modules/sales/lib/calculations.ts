@@ -426,39 +426,75 @@ function buildDocumentAmounts(
   return totals
 }
 
+type AmountPair = { exact: unknown; value: unknown }
+type AmountPairs = Record<string, AmountPair>
+
+type DocumentAmountPairs = {
+  totals: AmountPairs
+  lines: AmountPairs[]
+  adjustments: AmountPairs[]
+}
+
+const ADJUSTMENT_AMOUNT_FIELDS = ['amountNet', 'amountGross'] as const
+
+function captureAmountPairs(record: object, fields: readonly string[]): AmountPairs {
+  const values = record as Record<string, unknown>
+  const pairs: AmountPairs = {}
+  for (const field of fields) pairs[field] = { exact: values[`${field}Exact`], value: values[field] }
+  return pairs
+}
+
+function captureDocumentAmounts(result: SalesDocumentCalculationResult): DocumentAmountPairs {
+  return {
+    totals: captureAmountPairs(result.totals, SALES_DOCUMENT_AMOUNT_FIELDS),
+    lines: result.lines.map((line) => captureAmountPairs(line, SALES_LINE_RESULT_AMOUNT_FIELDS)),
+    adjustments: result.adjustments.map((adjustment) => captureAmountPairs(adjustment, ADJUSTMENT_AMOUNT_FIELDS)),
+  }
+}
+
 /**
- * Re-derives every `<field>Exact` from its float field when a hook changed only
- * the float (see `resolveExactDecimal`), so callers can trust the exact fields.
+ * Picks the value a hook meant: when it changed the `<field>Exact` string, that
+ * string wins; otherwise the float decides as in `resolveExactDecimal` (a hook
+ * that only changed the float overrides a stale exact value).
  */
-function syncLineResultExactAmounts(result: SalesLineCalculationResult): SalesLineCalculationResult {
-  let synced = result
-  for (const field of SALES_LINE_RESULT_AMOUNT_FIELDS) {
-    const value = exactAmount(result[`${field}Exact`], result[field])
+function reconcileAmount(before: AmountPair | undefined, exact: unknown, value: unknown): DecimalValue | null {
+  const nextExact = typeof exact === 'string' ? exactAmount(exact, undefined) : null
+  if (nextExact !== null && before !== undefined) {
+    const previousExact = typeof before.exact === 'string' ? exactAmount(before.exact, undefined) : null
+    if (previousExact === null || !previousExact.eq(nextExact)) return nextExact
+  }
+  return exactAmount(exact, value)
+}
+
+function reconcileAmounts<T extends object>(record: T, fields: readonly string[], before?: AmountPairs): T {
+  const values = record as Record<string, unknown>
+  let synced = record
+  for (const field of fields) {
+    const value = reconcileAmount(before?.[field], values[`${field}Exact`], values[field])
     if (value !== null) synced = withExactAmount(synced, field, value)
   }
   return synced
 }
 
-function syncAdjustmentExactAmounts(adjustment: SalesAdjustmentDraft): SalesAdjustmentDraft {
-  let synced = adjustment
-  const net = exactAmount(adjustment.amountNetExact, adjustment.amountNet)
-  const gross = exactAmount(adjustment.amountGrossExact, adjustment.amountGross)
-  if (net !== null) synced = withExactAmount(synced, 'amountNet', net)
-  if (gross !== null) synced = withExactAmount(synced, 'amountGross', gross)
-  return synced
+/** Keeps every `<field>Exact` consistent with its float after a hook ran. */
+function syncLineResultExactAmounts(
+  result: SalesLineCalculationResult,
+  before?: AmountPairs,
+): SalesLineCalculationResult {
+  return reconcileAmounts(result, SALES_LINE_RESULT_AMOUNT_FIELDS, before)
 }
 
-function syncDocumentResultExactAmounts(result: SalesDocumentCalculationResult): SalesDocumentCalculationResult {
-  let totals = { ...result.totals }
-  for (const field of SALES_DOCUMENT_AMOUNT_FIELDS) {
-    const value = exactAmount(result.totals[`${field}Exact`], result.totals[field])
-    if (value !== null) totals = withExactAmount(totals, field, value)
-  }
+function syncDocumentResultExactAmounts(
+  result: SalesDocumentCalculationResult,
+  before?: DocumentAmountPairs,
+): SalesDocumentCalculationResult {
   return {
     ...result,
-    lines: result.lines.map(syncLineResultExactAmounts),
-    adjustments: result.adjustments.map(syncAdjustmentExactAmounts),
-    totals,
+    lines: result.lines.map((line, index) => syncLineResultExactAmounts(line, before?.lines[index])),
+    adjustments: result.adjustments.map((adjustment, index) =>
+      reconcileAmounts(adjustment, ADJUSTMENT_AMOUNT_FIELDS, before?.adjustments[index]),
+    ),
+    totals: reconcileAmounts(result.totals, SALES_DOCUMENT_AMOUNT_FIELDS, before?.totals),
   }
 }
 
@@ -485,37 +521,48 @@ class SalesCalculationRegistry {
   async calculateLine(opts: CalculateLineOptions): Promise<SalesLineCalculationResult> {
     const { documentKind, line, context, eventBus } = opts
     let current = buildBaseLineResult(line, resolveDecimalPlaces(context.amountDecimalPlaces))
+    const applyHook = async (run: () => Promise<void>) => {
+      const before = captureAmountPairs(current, SALES_LINE_RESULT_AMOUNT_FIELDS)
+      await run()
+      current = syncLineResultExactAmounts(current, before)
+    }
 
     if (eventBus) {
-      await eventBus.emitEvent('sales.line.calculate.before', {
-        documentKind,
-        line,
-        context,
-        result: current,
-        setResult(next: SalesLineCalculationResult) {
-          current = next
-        },
-      })
+      await applyHook(() =>
+        eventBus.emitEvent('sales.line.calculate.before', {
+          documentKind,
+          line,
+          context,
+          result: current,
+          setResult(next: SalesLineCalculationResult) {
+            current = next
+          },
+        }),
+      )
     }
 
     for (const hook of this.lineCalculators) {
-      const next = await hook({ documentKind, line, context, current })
-      if (next) current = next
-    }
-
-    if (eventBus) {
-      await eventBus.emitEvent('sales.line.calculate.after', {
-        documentKind,
-        line,
-        context,
-        result: current,
-        setResult(next: SalesLineCalculationResult) {
-          current = next
-        },
+      await applyHook(async () => {
+        const next = await hook({ documentKind, line, context, current })
+        if (next) current = next
       })
     }
 
-    return syncLineResultExactAmounts(current)
+    if (eventBus) {
+      await applyHook(() =>
+        eventBus.emitEvent('sales.line.calculate.after', {
+          documentKind,
+          line,
+          context,
+          result: current,
+          setResult(next: SalesLineCalculationResult) {
+            current = next
+          },
+        }),
+      )
+    }
+
+    return current
   }
 
   async calculateDocument(opts: CalculateDocumentOptions): Promise<SalesDocumentCalculationResult> {
@@ -536,42 +583,54 @@ class SalesCalculationRegistry {
       amountDecimalPlaces: context.amountDecimalPlaces,
     })
 
+    const applyHook = async (run: () => Promise<void>) => {
+      const before = captureDocumentAmounts(current)
+      await run()
+      current = syncDocumentResultExactAmounts(current, before)
+    }
+
     if (eventBus) {
-      await eventBus.emitEvent('sales.document.calculate.before', {
-        documentKind,
-        lines: resolvedLines,
-        context,
-        adjustments,
-        result: current,
-        setResult(next: SalesDocumentCalculationResult) {
-          current = next
-        },
-      })
+      await applyHook(() =>
+        eventBus.emitEvent('sales.document.calculate.before', {
+          documentKind,
+          lines: resolvedLines,
+          context,
+          adjustments,
+          result: current,
+          setResult(next: SalesDocumentCalculationResult) {
+            current = next
+          },
+        }),
+      )
     }
 
     for (const hook of this.totalsCalculators) {
-      const next = await hook({
-        documentKind,
-        lines: resolvedLines,
-        existingAdjustments: adjustments,
-        context,
-        current,
-        eventBus,
+      await applyHook(async () => {
+        const next = await hook({
+          documentKind,
+          lines: resolvedLines,
+          existingAdjustments: adjustments,
+          context,
+          current,
+          eventBus,
+        })
+        if (next) current = next
       })
-      if (next) current = next
     }
 
     if (eventBus) {
-      await eventBus.emitEvent('sales.document.calculate.after', {
-        documentKind,
-        lines: resolvedLines,
-        context,
-        adjustments,
-        result: current,
-        setResult(next: SalesDocumentCalculationResult) {
-          current = next
-        },
-      })
+      await applyHook(() =>
+        eventBus.emitEvent('sales.document.calculate.after', {
+          documentKind,
+          lines: resolvedLines,
+          context,
+          adjustments,
+          result: current,
+          setResult(next: SalesDocumentCalculationResult) {
+            current = next
+          },
+        }),
+      )
     }
 
     // Payment totals (paid/refunded) are authoritative inputs, not derived from
@@ -580,7 +639,6 @@ class SalesCalculationRegistry {
     // outstanding back to the full grand total), producing a stale paid/
     // outstanding display after a payment. Re-apply the input totals last and
     // recompute outstanding against the post-calculation grand total.
-    current = syncDocumentResultExactAmounts(current)
     if (existingTotals) {
       const round = createRounder(resolveDecimalPlaces(context.amountDecimalPlaces))
       const paidTotalAmount = maxOf(

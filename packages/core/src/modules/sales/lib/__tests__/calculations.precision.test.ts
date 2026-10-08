@@ -103,4 +103,34 @@ describe('sales calculations with arbitrary precision', () => {
     expect(result.netAmountExact).toBe('42')
     expect(result.grossAmountExact).toBe('1.000000000000000001')
   })
+
+  it('keeps a hook change made only to the exact field', async () => {
+    const registry = createSalesCalculationRegistry()
+    registry.registerLineCalculator(({ current }) => ({ ...current, netAmountExact: '0.000000000000000007' }))
+
+    const result = await registry.calculateLine({
+      documentKind: 'order',
+      line: { kind: 'product', quantity: 1, currencyCode: 'ETH', unitPriceNet: 1, unitPriceNetExact: '1' },
+      context: ethContext,
+    })
+
+    expect(result.netAmountExact).toBe('0.000000000000000007')
+    expect(result.netAmount).toBe(7e-18)
+  })
+
+  it('keeps a totals hook change made only to the exact field', async () => {
+    const registry = createSalesCalculationRegistry()
+    registry.registerTotalsCalculator(({ current }) => ({
+      ...current,
+      totals: { ...current.totals, grandTotalGrossAmountExact: '2.000000000000000001' },
+    }))
+
+    const result = await registry.calculateDocument({
+      documentKind: 'order',
+      lines: [{ kind: 'product', quantity: 1, currencyCode: 'ETH', unitPriceNet: 1, unitPriceNetExact: '1' }],
+      context: ethContext,
+    })
+
+    expect(result.totals.grandTotalGrossAmountExact).toBe('2.000000000000000001')
+  })
 })
