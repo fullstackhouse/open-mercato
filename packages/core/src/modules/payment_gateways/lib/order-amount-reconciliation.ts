@@ -1,4 +1,10 @@
 import { conflict } from '@open-mercato/shared/lib/crud/errors'
+import {
+  countDecimalPlaces,
+  resolveExactDecimal,
+  toDecimal,
+  type DecimalValue,
+} from '@open-mercato/shared/lib/decimal'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { createFallbackTranslator, type TranslateWithFallbackFn } from '@open-mercato/shared/lib/i18n/translate'
 import type {
@@ -7,8 +13,13 @@ import type {
   PaymentOrderTotalResolver,
 } from '@open-mercato/shared/modules/payment_gateways/types'
 
-/** Amounts are stored as numeric(18,4); anything below that is rounding noise, not a mismatch. */
-const AMOUNT_TOLERANCE = 0.0001
+/**
+ * Below the last stored decimal (at least the 4th) is rounding noise, not a mismatch:
+ * 0.0001 for fiat amounts, finer for amounts carrying more decimals.
+ */
+function amountTolerance(amountDue: string): DecimalValue {
+  return toDecimal(`1e-${Math.max(4, countDecimalPlaces(amountDue))}`)
+}
 
 function normalizeCurrencyCode(currencyCode: string): string {
   return currencyCode.trim().toUpperCase()
@@ -36,7 +47,7 @@ export function isPaymentOrderTotalResolver(candidate: unknown): candidate is Pa
 }
 
 export function assertSessionAmountMatchesOrderTotal(
-  requested: { orderId: string; amount: number; currencyCode: string },
+  requested: { orderId: string; amount: number; amountExact?: string | null; currencyCode: string },
   orderTotal: PaymentOrderTotal,
   translate: TranslateWithFallbackFn,
 ): void {
@@ -47,7 +58,9 @@ export function assertSessionAmountMatchesOrderTotal(
       { currencyCode: normalizeCurrencyCode(requested.currencyCode), orderId: requested.orderId },
     ))
   }
-  if (Math.abs(requested.amount - orderTotal.amountDue) > AMOUNT_TOLERANCE) {
+  const requestedAmount = toDecimal(resolveExactDecimal(requested.amountExact, requested.amount) ?? 0)
+  const amountDue = resolveExactDecimal(orderTotal.amountDueExact, orderTotal.amountDue) ?? '0'
+  if (requestedAmount.minus(amountDue).abs().gt(amountTolerance(amountDue))) {
     throw conflict(translate(
       'payment_gateways.errors.sessionAmountMismatch',
       'Payment session amount {amount} does not match the amount due for order {orderId}',
@@ -68,6 +81,7 @@ export function assertSessionAmountMatchesOrderTotal(
 export async function reconcileSessionAmountWithOrder(input: {
   orderId?: string
   amount: number
+  amountExact?: string | null
   currencyCode: string
   scope: PaymentGatewayScope
   resolver?: PaymentOrderTotalResolver | null
@@ -86,7 +100,7 @@ export async function reconcileSessionAmountWithOrder(input: {
   }
 
   assertSessionAmountMatchesOrderTotal(
-    { orderId, amount: input.amount, currencyCode: input.currencyCode },
+    { orderId, amount: input.amount, amountExact: input.amountExact, currencyCode: input.currencyCode },
     orderTotal,
     translate,
   )

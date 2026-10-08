@@ -151,7 +151,9 @@ export interface CreateSessionInput {
   idempotencyKey?: string
   tenantId: string
   organizationId: string
+  /** Float copy of `amountExact`; prefer the exact field. */
   amount: number
+  amountExact?: string
   currencyCode: string
   captureMethod?: 'automatic' | 'manual'
   paymentTypes?: string[]
@@ -167,7 +169,9 @@ export interface CreateSessionInput {
 export interface SessionLineItem {
   name: string
   quantity: number
+  /** Float copy of `unitAmountExact`; prefer the exact field. */
   unitAmount: number
+  unitAmountExact?: string
   currencyCode: string
 }
 
@@ -182,7 +186,9 @@ export interface CreateSessionResult {
 
 export interface CaptureInput {
   sessionId: string
+  /** Float copy of `amountExact`; prefer the exact field. */
   amount?: number
+  amountExact?: string
   credentials: Record<string, unknown>
   metadata?: Record<string, unknown>
   idempotencyKey?: string
@@ -190,13 +196,17 @@ export interface CaptureInput {
 
 export interface CaptureResult {
   status: UnifiedPaymentStatus
+  /** Float copy of `capturedAmountExact`; prefer the exact field. */
   capturedAmount: number
+  capturedAmountExact?: string
   providerData?: Record<string, unknown>
 }
 
 export interface RefundInput {
   sessionId: string
+  /** Float copy of `amountExact`; prefer the exact field. */
   amount?: number
+  amountExact?: string
   reason?: string
   credentials: Record<string, unknown>
   metadata?: Record<string, unknown>
@@ -206,7 +216,9 @@ export interface RefundInput {
 export interface RefundResult {
   refundId: string
   status: UnifiedPaymentStatus
+  /** Float copy of `refundedAmountExact`; prefer the exact field. */
   refundedAmount: number
+  refundedAmountExact?: string
   providerData?: Record<string, unknown>
 }
 
@@ -229,8 +241,12 @@ export interface GetStatusInput {
 
 export interface GatewayPaymentStatus {
   status: UnifiedPaymentStatus
+  /** Float copy of `amountExact`; prefer the exact field. */
   amount: number
+  amountExact?: string
+  /** Float copy of `amountReceivedExact`; prefer the exact field. */
   amountReceived: number
+  amountReceivedExact?: string
   currencyCode: string
   providerData?: Record<string, unknown>
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveExactDecimal } from '@open-mercato/shared/lib/decimal'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
@@ -59,7 +60,7 @@ export async function POST(req: Request) {
   try {
     const result = await service.refundPayment(
       parsed.data.transactionId,
-      parsed.data.amount,
+      parsed.data.amount === undefined ? undefined : (resolveExactDecimal((payload as Record<string, unknown> | null)?.amount, parsed.data.amount) ?? parsed.data.amount),
       parsed.data.reason,
       { organizationId: auth.orgId as string, tenantId: auth.tenantId },
       parsed.data.operationId,

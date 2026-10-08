@@ -85,8 +85,8 @@ describe('capture ledger amounts', () => {
   it('treats an omitted amount as the amount still capturable', () => {
     const amounts = resolveCaptureAmounts(makeTransaction('100.0000', '60.0000'), undefined)
 
-    expect(amounts.remainingUnits).toBe(400_000n)
-    expect(amounts.requestedUnits).toBe(400_000n)
+    expect(amounts.remainingAmount.toFixed()).toBe('40')
+    expect(amounts.requestedAmount.toFixed()).toBe('40')
   })
 })
 
@@ -94,7 +94,7 @@ describe('assertCaptureWithinRemaining', () => {
   it('accepts a partial capture that fits under the running total', () => {
     const amounts = assertCaptureWithinRemaining(makeTransaction('100.0000', '60.0000'), 40)
 
-    expect(amounts.requestedUnits).toBe(400_000n)
+    expect(amounts.requestedAmount.toFixed()).toBe('40')
   })
 
   it('rejects the cumulative overrun that a per-capture check would have allowed', () => {
@@ -121,10 +121,10 @@ describe('reserveCaptureAmount', () => {
 
     const reserved = await reserveCaptureAmount(em as never, { transaction, operation, amount: 40, scope })
 
-    expect(reserved).toBe(400_000n)
-    expect(operation.reservedAmount).toBe('40.0000')
+    expect(reserved).toBe('40')
+    expect(operation.reservedAmount).toBe('40')
     expect(nativeUpdate.mock.calls[0]?.[1]).toMatchObject({ capturedAmount: '60.0000', deletedAt: null, ...scope })
-    expect(nativeUpdate.mock.calls[0]?.[2]).toMatchObject({ capturedAmount: '100.0000' })
+    expect(nativeUpdate.mock.calls[0]?.[2]).toMatchObject({ capturedAmount: '100' })
   })
 
   it('rejects a capture that lost the compare-and-swap to a concurrent capture', async () => {
@@ -148,7 +148,7 @@ describe('reserveCaptureAmount', () => {
       scope,
     })
 
-    expect(reserved).toBe(600_000n)
+    expect(reserved).toBe('60')
     expect(nativeUpdate).not.toHaveBeenCalled()
   })
 })
@@ -157,7 +157,7 @@ describe('settleCapturedAmount', () => {
   it('leaves the ledger alone when the provider captured exactly what was reserved', () => {
     const transaction = makeTransaction('100.0000', '60.0000')
 
-    settleCapturedAmount(transaction, 600_000n, 60)
+    settleCapturedAmount(transaction, '60', 60)
 
     expect(transaction.capturedAmount).toBe('60.0000')
   })
@@ -165,15 +165,15 @@ describe('settleCapturedAmount', () => {
   it('adjusts the ledger down when the provider captured less than reserved', () => {
     const transaction = makeTransaction('100.0000', '60.0000')
 
-    settleCapturedAmount(transaction, 600_000n, 45)
+    settleCapturedAmount(transaction, '60', 45)
 
-    expect(transaction.capturedAmount).toBe('45.0000')
+    expect(transaction.capturedAmount).toBe('45')
   })
 
   it('keeps the reservation when the provider reports an unusable amount', () => {
     const transaction = makeTransaction('100.0000', '60.0000')
 
-    settleCapturedAmount(transaction, 600_000n, Number.NaN)
+    settleCapturedAmount(transaction, '60', Number.NaN)
 
     expect(transaction.capturedAmount).toBe('60.0000')
   })
@@ -185,7 +185,7 @@ describe('alignCapturedAmountWithStatus', () => {
 
     alignCapturedAmountWithStatus(transaction, 'captured')
 
-    expect(transaction.capturedAmount).toBe('100.0000')
+    expect(transaction.capturedAmount).toBe('100')
   })
 
   it('never lowers a ledger that already recorded more than the reported status implies', () => {
@@ -213,6 +213,17 @@ describe('alignCapturedAmountWithStatus', () => {
   })
 })
 
+describe('exact decimal captures', () => {
+  it('captures amounts beyond four decimals without rounding', () => {
+    const transaction = makeTransaction('1.000000000000000001', '0')
+    const amounts = assertCaptureWithinRemaining(transaction, '0.000000000000000001')
+
+    expect(amounts.requestedAmount.toFixed()).toBe('0.000000000000000001')
+    expect(amounts.remainingAmount.toFixed()).toBe('1.000000000000000001')
+    expect(() => assertCaptureWithinRemaining(transaction, '1.000000000000000002')).toThrow(/exceeds/)
+  })
+})
+
 describe('releaseCaptureAmount', () => {
   it('gives the reserved slice back and stops the operation holding it', async () => {
     const transaction = makeTransaction('100.0000', '60.0000')
@@ -223,11 +234,11 @@ describe('releaseCaptureAmount', () => {
     await expect(releaseCaptureAmount(em as never, {
       transactionId: transaction.id,
       operation,
-      reservedUnits: 600_000n,
+      reservedAmount: '60',
       scope,
     })).resolves.toBe(true)
 
-    expect(nativeUpdate.mock.calls[0]?.[2]).toMatchObject({ capturedAmount: '0.0000' })
+    expect(nativeUpdate.mock.calls[0]?.[2]).toMatchObject({ capturedAmount: '0' })
     expect(operation.reservedAmount).toBeNull()
   })
 
@@ -239,7 +250,7 @@ describe('releaseCaptureAmount', () => {
     await expect(releaseCaptureAmount(em as never, {
       transactionId: 'txn_1',
       operation,
-      reservedUnits: 600_000n,
+      reservedAmount: '60',
       scope,
     })).resolves.toBe(false)
 

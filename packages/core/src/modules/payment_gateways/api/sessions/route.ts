@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveExactDecimal } from '@open-mercato/shared/lib/decimal'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
@@ -62,6 +63,7 @@ export async function POST(req: Request) {
       paymentId: crypto.randomUUID(),
       orderId: parsed.data.orderId,
       amount: parsed.data.amount,
+      amountExact: resolveExactDecimal((payload as Record<string, unknown> | null)?.amount, parsed.data.amount) ?? undefined,
       currencyCode: parsed.data.currencyCode,
       captureMethod: parsed.data.captureMethod,
       description: parsed.data.description,
