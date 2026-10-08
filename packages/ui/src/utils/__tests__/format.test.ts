@@ -13,6 +13,11 @@ const PL = 'pl-PL'
 const LOCAL_MIDDAY = '2026-06-09T12:00:00'
 
 describe('formatCurrency', () => {
+  it('formats decimal strings exactly with the currency precision', () => {
+    expect(formatCurrency('0.000000000000000001', 'ETH', 'en-US', 18)?.replace(/\s/g, ' ')).toBe('ETH 0.000000000000000001')
+    expect(formatCurrency('12345678901234567890.12', 'USD', 'en-US')).toBe('$12,345,678,901,234,567,890.12')
+  })
+
   it('returns null for empty input', () => {
     expect(formatCurrency(null)).toBeNull()
     expect(formatCurrency(undefined)).toBeNull()
