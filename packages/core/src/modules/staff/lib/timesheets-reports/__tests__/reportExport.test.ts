@@ -330,3 +330,61 @@ describe('normalizeReportExportFormat', () => {
     expect(normalizeReportExportFormat(null)).toBeNull()
   })
 })
+
+describe('exports print amounts with the currency decimals', () => {
+  const preciseEntries: ReportInputEntry[] = [
+    { ...entries[0], durationMinutes: 7, roundedMinutes: 7, rateOverrideAmount: null, rateOverrideAmountExact: '123.4567' },
+  ]
+
+  function currencyInput(currencyCode: string, amountDecimalPlaces: number): ReportExportInput {
+    const totals = computeReportTotals({
+      entries: preciseEntries,
+      projects,
+      directory,
+      options: { grouping: 'project_task', nonbillableMode: 'separate', includeAlreadyReported: false, amountDecimalPlaces },
+      labels,
+    })
+    return makeExportInput({
+      currencyCode,
+      amountDecimalPlaces,
+      groups: totals.groups,
+      rows: buildReportRows({ entries: preciseEntries, projects, directory, labels, amountDecimalPlaces }),
+      totals: {
+        billableMinutes: totals.billableMinutes,
+        nonbillableMinutes: totals.nonbillableMinutes,
+        totalAmount: totals.totalAmount,
+        totalAmountExact: totals.totalAmountExact,
+      },
+    })
+  }
+
+  function pdfTexts(input: ReportExportInput): string[] {
+    return buildReportPdfLines(input).flatMap((line) =>
+      line.kind === 'cells' ? line.cells.map((cell) => cell.text.trim()) : [],
+    )
+  }
+
+  it('prints 0 decimals for JPY in the CSV table and the PDF total', () => {
+    const input = currencyInput('JPY', 0)
+    const table = buildReportTable(input)
+    expect(table.rows[0].amount).toBe('14')
+    expect(table.rows[0].rate).toBe('123')
+    expect(pdfTexts(input)).toContain('14 JPY')
+  })
+
+  it('prints 3 decimals for KWD in the CSV table and the PDF total', () => {
+    const input = currencyInput('KWD', 3)
+    const table = buildReportTable(input)
+    expect(table.rows[0].amount).toBe('14.403')
+    expect(table.rows[0].rate).toBe('123.457')
+    expect(pdfTexts(input)).toContain('14.403 KWD')
+    const csv = serializeReportExport('csv', input).body.toString('utf8')
+    expect(csv).toContain('14.403')
+  })
+
+  it('pads to 2 decimals when no precision is given', () => {
+    const input = currencyInput('USD', 2)
+    const table = buildReportTable({ ...input, amountDecimalPlaces: undefined })
+    expect(table.rows[0].amount).toBe('14.40')
+  })
+})

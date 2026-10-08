@@ -1,4 +1,5 @@
 import {
+  resolveProjectAmountDecimalPlaces,
   summarizeProjectEntryGroups,
   type ProjectEntryGroup,
 } from '../computeProjectFinancials'
@@ -86,5 +87,64 @@ describe('summarizeProjectEntryGroups', () => {
     const result = summarizeProjectEntryGroups(groups, new Map([['p1', 320]]), ['p1'])
     expect(result.get('p1')).toEqual({ totalMinutes: 0, billableMinutes: 0, cost: null, costExact: null })
     expect(result.has('other')).toBe(false)
+  })
+})
+
+describe('summarizeProjectEntryGroups - currency decimals (D10)', () => {
+  const groups = [
+    group({ projectId: 'p-jpy', billingMinutes: 7, rawMinutes: 7 }),
+    group({ projectId: 'p-kwd', billingMinutes: 7, rawMinutes: 7 }),
+    group({ projectId: 'p-unknown', billingMinutes: 7, rawMinutes: 7 }),
+  ]
+  const rates = new Map<string, string | null>([
+    ['p-jpy', '123.4567'],
+    ['p-kwd', '123.4567'],
+    ['p-unknown', '123.4567'],
+  ])
+
+  it('rounds each project cost to its own currency decimals, 2 when unknown', () => {
+    const result = summarizeProjectEntryGroups(groups, rates, ['p-jpy', 'p-kwd', 'p-unknown'], {
+      'p-jpy': 0,
+      'p-kwd': 3,
+    })
+    expect(result.get('p-jpy')?.costExact).toBe('14')
+    expect(result.get('p-kwd')?.costExact).toBe('14.403')
+    expect(result.get('p-unknown')?.costExact).toBe('14.4')
+  })
+
+  it('keeps an hourly rate beyond float precision exact', () => {
+    const result = summarizeProjectEntryGroups(
+      [group({ billingMinutes: 60, rawMinutes: 60 })],
+      new Map([['p1', '12345678901234567.89']]),
+      ['p1'],
+    )
+    expect(result.get('p1')?.costExact).toBe('12345678901234567.89')
+  })
+})
+
+describe('resolveProjectAmountDecimalPlaces', () => {
+  const scope = { tenantId: 'tenant-1', organizationId: 'org-1' }
+
+  it('resolves each distinct currency once and falls back to 2 without a currency', async () => {
+    const getDecimalPlaces = jest.fn(async ({ code }: { code: string }) => (code === 'KWD' ? 3 : null))
+    const container = {
+      resolve: <T,>(name: string): T => {
+        if (name !== 'currencyPrecisionService') throw new Error('[internal] not registered')
+        return { getDecimalPlaces } as unknown as T
+      },
+    }
+    const result = await resolveProjectAmountDecimalPlaces(
+      container,
+      [
+        { id: 'p-jpy', currencyCode: 'JPY' },
+        { id: 'p-usd', currencyCode: 'usd' },
+        { id: 'p-kwd', currencyCode: 'KWD' },
+        { id: 'p-kwd-2', currencyCode: 'KWD' },
+        { id: 'p-none', currencyCode: null },
+      ],
+      scope,
+    )
+    expect(result).toEqual({ 'p-jpy': 0, 'p-usd': 2, 'p-kwd': 3, 'p-kwd-2': 3, 'p-none': 2 })
+    expect(getDecimalPlaces).toHaveBeenCalledTimes(3)
   })
 })

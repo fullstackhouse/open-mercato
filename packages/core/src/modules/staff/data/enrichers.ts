@@ -15,7 +15,10 @@ import {
 } from './entities'
 import { decorateTimeEntryRows } from '../lib/timesheets/timeEntryDecoration'
 import { computeProjectHoursTrend } from '../lib/timesheets-projects/computeProjectHoursTrend'
-import { computeProjectFinancials } from '../lib/timesheets-projects/computeProjectFinancials'
+import {
+  computeProjectFinancials,
+  resolveProjectAmountDecimalPlaces,
+} from '../lib/timesheets-projects/computeProjectFinancials'
 import type { ProjectBudgetKind } from '../lib/timesheets-projects/budgetBurn'
 import {
   listProjectMembersPreview,
@@ -199,9 +202,11 @@ const portfolioEnricher: ResponseEnricher<EntityRecord, StaffEnrichment> = {
       deletedAt: null,
     })
     const projectById = new Map(projects.map((project) => [project.id, project]))
-    const hourlyRateByProjectId = new Map(
-      projects.map((project) => [project.id, toNullableNumber(project.hourlyRate)]),
-    )
+    const hourlyRateByProjectId = new Map(projects.map((project) => [project.id, project.hourlyRate ?? null]))
+    const amountDecimalPlacesByProjectId = await resolveProjectAmountDecimalPlaces(ctx.container, projects, {
+      tenantId: ctx.tenantId,
+      organizationId: ctx.organizationId,
+    })
 
     const customerIdsMissingSnapshot = projects
       .filter((project) => !resolveCustomerName(project.customerSnapshot))
@@ -229,6 +234,7 @@ const portfolioEnricher: ResponseEnricher<EntityRecord, StaffEnrichment> = {
         organizationId: ctx.organizationId,
         projectIds,
         hourlyRateByProjectId,
+        amountDecimalPlacesByProjectId,
         staffMemberId: ownEntriesOnly,
       }),
       loadCustomerNames(ctx.em.fork(), ctx.tenantId, ctx.organizationId, customerIdsMissingSnapshot),
@@ -511,6 +517,7 @@ const timeEntryEnricher: ResponseEnricher<EntityRecord, TimeEntryEnrichment> = {
       tenantId: ctx.tenantId,
       organizationId: ctx.organizationId,
       canSeeRates: await callerHasFeature(ctx, RATES_FEATURE),
+      container: ctx.container,
     })
     return rows as (EntityRecord & TimeEntryEnrichment)[]
   },

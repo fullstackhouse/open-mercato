@@ -42,7 +42,10 @@ import {
   StaffTimeProjectMember,
   StaffTimeTask,
 } from '../../../data/entities'
-import { computeProjectFinancials } from '../../../lib/timesheets-projects/computeProjectFinancials'
+import {
+  computeProjectFinancials,
+  resolveProjectAmountDecimalPlaces,
+} from '../../../lib/timesheets-projects/computeProjectFinancials'
 import { computeBudgetBurn } from '../../../lib/timesheets-projects/budgetBurn'
 import {
   addUtcDays,
@@ -291,12 +294,13 @@ export async function GET(req: Request) {
           )
         : []
 
-    const hourlyRateByProjectId = new Map<string, number | null>(
-      projects.map((project) => [
-        project.id,
-        project.hourlyRate === null || project.hourlyRate === undefined ? null : Number(project.hourlyRate),
-      ]),
+    const hourlyRateByProjectId = new Map<string, string | null>(
+      projects.map((project) => [project.id, project.hourlyRate ?? null]),
     )
+    const amountDecimalPlacesByProjectId = await resolveProjectAmountDecimalPlaces(container, projects, {
+      tenantId,
+      organizationId,
+    })
     const [mine, everyone] = await Promise.all([
       computeProjectFinancials({
         em,
@@ -304,6 +308,7 @@ export async function GET(req: Request) {
         organizationId,
         projectIds: projects.map((project) => project.id),
         hourlyRateByProjectId,
+        amountDecimalPlacesByProjectId,
         staffMemberId: staffMember.id,
       }),
       computeProjectFinancials({
@@ -312,6 +317,7 @@ export async function GET(req: Request) {
         organizationId,
         projectIds: projects.map((project) => project.id),
         hourlyRateByProjectId,
+        amountDecimalPlacesByProjectId,
       }),
     ])
 
@@ -413,7 +419,8 @@ export async function GET(req: Request) {
           totalMinutes: allFinancials?.totalMinutes ?? 0,
           ...(canSeeMoney
             ? {
-                hourlyRate: hourlyRateByProjectId.get(project.id) ?? null,
+                hourlyRate:
+                  project.hourlyRate === null || project.hourlyRate === undefined ? null : Number(project.hourlyRate),
                 currencyCode: project.currencyCode ?? null,
               }
             : {}),

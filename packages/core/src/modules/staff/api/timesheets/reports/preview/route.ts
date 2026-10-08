@@ -46,13 +46,15 @@ import { MANAGE_PROJECTS_FEATURE, resolveProjectAccess } from '../../../../lib/t
 import { resolveFeatureAccess } from '../../../../lib/time-tracking/featureAccess'
 import { readTimeTrackingSettings } from '../../../../lib/time-tracking/settings'
 import { loadReportData } from '../../../../lib/timesheets-reports/loadReportData'
-import { sumAmountsExact } from '../../../../lib/time-tracking/cost'
+import { DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES } from '../../../../lib/time-tracking/cost'
 import {
   computeReportTotals,
   resolveEntryValues,
+  sumResolvedAmounts,
   resolveReportCurrency,
   type ReportGroup,
   type ReportInputEntry,
+  type ResolvedEntryValues,
 } from '../../../../lib/timesheets-reports/reportTotals'
 
 const logger = createLogger('staff').child({ component: 'api/timesheets/reports/preview' })
@@ -104,7 +106,7 @@ export function summarizeProjectsForPreview(
     const projectEntries = byProject.get(project.id) ?? []
     let billableMinutes = 0
     let nonbillableMinutes = 0
-    const amounts: Array<string | null> = []
+    const billableValues: ResolvedEntryValues[] = []
     let entryCount = 0
 
     for (const entry of projectEntries) {
@@ -117,7 +119,7 @@ export function summarizeProjectsForPreview(
         continue
       }
       billableMinutes += values.minutes
-      amounts.push(values.amountExact)
+      billableValues.push(values)
       entryCount += 1
     }
 
@@ -129,7 +131,11 @@ export function summarizeProjectsForPreview(
       entryCount,
       billableMinutes,
       nonbillableMinutes,
-      amount: options.canSeeMoney ? decimalToNumber(sumAmountsExact(amounts, options.amountDecimalPlaces)) : null,
+      amount: options.canSeeMoney
+        ? decimalToNumber(
+            sumResolvedAmounts(billableValues, options.amountDecimalPlaces ?? DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES),
+          )
+        : null,
     }
   })
 }

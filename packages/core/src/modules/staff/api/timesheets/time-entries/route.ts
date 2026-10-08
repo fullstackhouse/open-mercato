@@ -395,6 +395,7 @@ export async function decorateTimeEntryList(payload: unknown, ctx: CrudCtx): Pro
     tenantId,
     organizationId,
     canSeeRates: await callerHasRatesView(ctx),
+    container: ctx.container,
     onError: (err) => logger.error('staff.timesheets.time-entries response decoration failed', { err }),
   })
 }

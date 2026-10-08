@@ -37,7 +37,7 @@ import {
   sumAmountsExact,
   DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES,
 } from '../time-tracking/cost'
-import { decimalToNumber, decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
+import { decimalToNumber, decimalToString, parseDecimal, sumDecimals } from '@open-mercato/shared/lib/decimal'
 import {
   getReportGrouping,
   isBuiltInReportGrouping,
@@ -281,8 +281,17 @@ function distinctRate(values: readonly ResolvedEntryValues[]): string | null {
   return rate
 }
 
-function sumValues(values: readonly ResolvedEntryValues[], amountDecimalPlaces: number): string {
-  return sumAmountsExact(values.map((value) => value.amountExact), amountDecimalPlaces)
+/**
+ * Live amounts round to the currency's decimals (D10); a frozen amount is summed
+ * exactly as it was billed, so a closed report keeps totalling to what it froze.
+ */
+export function sumResolvedAmounts(values: readonly ResolvedEntryValues[], amountDecimalPlaces: number): string {
+  const live = values.filter((value) => !value.isFrozen).map((value) => value.amountExact)
+  const frozen = values.flatMap((value) => {
+    const parsed = value.isFrozen ? parseDecimal(value.amountExact) : null
+    return parsed ? [parsed] : []
+  })
+  return decimalToString(sumDecimals([sumAmountsExact(live, amountDecimalPlaces), ...frozen]))
 }
 
 type LineBucket = {
@@ -304,7 +313,7 @@ function bucketToLine(bucket: LineBucket, amountDecimalPlaces: number): ReportLi
   // exactly; entries are used so the rule is visible in the code.
   const allValues = collectValues(bucket)
   const rateExact = distinctRate(allValues)
-  const amountExact = sumValues(allValues, amountDecimalPlaces)
+  const amountExact = sumResolvedAmounts(allValues, amountDecimalPlaces)
   return {
     key: bucket.key,
     label: bucket.label,
@@ -481,7 +490,7 @@ export function computeReportTotals(input: ComputeReportTotalsInput): ReportTota
     // Exact sum of already-rounded entry amounts — never a re-derivation from
     // the group's minutes and rate, which would disagree the moment a line
     // carries an override.
-    const groupAmountExact = sumValues(values, amountDecimalPlaces)
+    const groupAmountExact = sumResolvedAmounts(values, amountDecimalPlaces)
     groups.push({
       key: projectId,
       kind: 'project',
@@ -514,7 +523,7 @@ export function computeReportTotals(input: ComputeReportTotalsInput): ReportTota
   }
 
   const billableValues = Array.from(projectValues.values()).flat()
-  const totalAmountExact = sumValues(billableValues, amountDecimalPlaces)
+  const totalAmountExact = sumResolvedAmounts(billableValues, amountDecimalPlaces)
 
   return {
     groups,

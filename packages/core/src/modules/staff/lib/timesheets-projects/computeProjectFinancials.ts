@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { entryAmountExact, sumAmountsExact } from '../time-tracking/cost'
+import { DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES, entryAmountExact, sumAmountsExact } from '../time-tracking/cost'
 import { decimalToNumber, decimalToString, multiplyDecimals, parseDecimal } from '@open-mercato/shared/lib/decimal'
+import { resolveCurrencyDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
 
 /**
  * Per-project hours and cost for the projects list.
@@ -38,7 +39,38 @@ export type ProjectFinancialsScope = {
   organizationId: string
   projectIds: string[]
   hourlyRateByProjectId: ReadonlyMap<string, number | string | null>
+  /** Decimals each project's amounts round to (its currency's); 2 when absent. */
+  amountDecimalPlacesByProjectId?: Readonly<Record<string, number>>
   staffMemberId?: string | null
+}
+
+type CurrencyPrecisionContainer = Parameters<typeof resolveCurrencyDecimalPlaces>[0]
+
+/**
+ * Resolves each distinct project currency's decimals once, so a batch of
+ * projects costs one lookup per currency rather than one per project or entry.
+ */
+export async function resolveProjectAmountDecimalPlaces(
+  container: CurrencyPrecisionContainer,
+  projects: readonly { id: string; currencyCode?: string | null }[],
+  scope: { tenantId: string; organizationId: string },
+): Promise<Record<string, number>> {
+  const codeOf = (project: { currencyCode?: string | null }) =>
+    typeof project.currencyCode === 'string' ? project.currencyCode.trim().toUpperCase() : ''
+  const codes = Array.from(new Set(projects.map(codeOf).filter((code) => code.length > 0)))
+  const resolved = await Promise.all(
+    codes.map(async (code) => {
+      const decimalPlaces = await resolveCurrencyDecimalPlaces(container, { code, ...scope })
+      return [code, decimalPlaces ?? DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES] as const
+    }),
+  )
+  const decimalPlacesByCode: Record<string, number> = Object.fromEntries(resolved)
+  return Object.fromEntries(
+    projects.map((project) => [
+      project.id,
+      decimalPlacesByCode[codeOf(project)] ?? DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES,
+    ]),
+  )
 }
 
 type FinancialsRow = {
@@ -69,7 +101,10 @@ export function summarizeProjectEntryGroups(
   groups: readonly ProjectEntryGroup[],
   hourlyRateByProjectId: ReadonlyMap<string, number | string | null>,
   projectIds: readonly string[],
+  amountDecimalPlacesByProjectId: Readonly<Record<string, number>> = {},
 ): Map<string, ProjectFinancials> {
+  const decimalPlacesOf = (projectId: string) =>
+    amountDecimalPlacesByProjectId[projectId] ?? DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES
   const result = new Map<string, ProjectFinancials>()
   for (const id of projectIds) result.set(id, emptyFinancials())
 
@@ -87,6 +122,8 @@ export function summarizeProjectEntryGroups(
         rateOverrideAmount: group.rateOverrideAmount,
       },
       { hourlyRate: hourlyRateByProjectId.get(group.projectId) ?? null },
+      null,
+      decimalPlacesOf(group.projectId),
     )
     if (amount === null) continue
     const amounts = amountsByProject.get(group.projectId) ?? []
@@ -97,7 +134,7 @@ export function summarizeProjectEntryGroups(
   for (const [projectId, amounts] of amountsByProject) {
     const bucket = result.get(projectId)
     if (!bucket) continue
-    bucket.costExact = sumAmountsExact(amounts)
+    bucket.costExact = sumAmountsExact(amounts, decimalPlacesOf(projectId))
     bucket.cost = decimalToNumber(bucket.costExact)
   }
 
@@ -141,5 +178,10 @@ export async function computeProjectFinancials(
     entryCount: toNumber(row.entry_count),
   }))
 
-  return summarizeProjectEntryGroups(groups, scope.hourlyRateByProjectId, scope.projectIds)
+  return summarizeProjectEntryGroups(
+    groups,
+    scope.hourlyRateByProjectId,
+    scope.projectIds,
+    scope.amountDecimalPlacesByProjectId,
+  )
 }
