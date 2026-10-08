@@ -26,6 +26,8 @@ import type { SalesAdjustmentKind } from '../../data/entities'
 import { E } from '#generated/entities.ids.generated'
 import { Settings } from 'lucide-react'
 import { extractCustomFieldValues, normalizeCustomFieldSubmitValue } from './customFieldHelpers'
+import { grossFromNet, netFromGross, resolveMoneyDecimalPlaces, toExactAmount } from './lineItemUtils'
+import { compareDecimals, countDecimalPlaces, roundDecimal, type DecimalInput } from '@open-mercato/shared/lib/decimal'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 
 const logger = createLogger('sales')
@@ -61,8 +63,8 @@ export type AdjustmentRowData = {
   kind: SalesAdjustmentKind
   calculatorKey: string | null
   rate: number | null
-  amountNet: number | null
-  amountGross: number | null
+  amountNet: number | string | null
+  amountGross: number | string | null
   currencyCode: string | null
   position: number
   customFields?: Record<string, unknown> | null
@@ -77,8 +79,8 @@ export type AdjustmentSubmitPayload = {
   kind: SalesAdjustmentKind
   calculatorKey: string | null
   rate?: number | null
-  amountNet?: number | null
-  amountGross?: number | null
+  amountNet?: string | null
+  amountGross?: string | null
   position?: number | null
   currencyCode: string
   customFields?: Record<string, unknown> | null
@@ -150,7 +152,10 @@ const mergeTaxRateOptions = (
   return [selected, ...options]
 }
 
-const roundAmount = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100
+const formatAutoFilledAmount = (value: DecimalInput, source: DecimalInput): string => {
+  const rounded = roundDecimal(value, resolveMoneyDecimalPlaces(source))
+  return rounded.toFixed(Math.max(2, countDecimalPlaces(rounded)))
+}
 
 const resolveModeFromAdjustment = (adjustment?: AdjustmentRowData | null): 'rate' | 'amount' => {
   if (!adjustment) return 'amount'
@@ -302,15 +307,13 @@ export function AdjustmentDialog({
       }
       const rateValue = resolveTaxRateValue(values)
       if (!Number.isFinite(rateValue)) return
-      const numeric = normalizeNumber(rawValue)
-      if (!Number.isFinite(numeric)) return
+      const exact = toExactAmount(rawValue)
+      if (exact === null) return
       if (!setFormValue) return
       if (source === 'net') {
-        const gross = roundAmount(numeric * (1 + rateValue / 100))
-        setFormValue('amountGross', Number.isFinite(gross) ? gross.toFixed(2) : '')
+        setFormValue('amountGross', formatAutoFilledAmount(grossFromNet(exact, rateValue), exact))
       } else {
-        const net = roundAmount(numeric / (1 + rateValue / 100))
-        setFormValue('amountNet', Number.isFinite(net) ? net.toFixed(2) : '')
+        setFormValue('amountNet', formatAutoFilledAmount(netFromGross(exact, rateValue), exact))
       }
     },
     [mode, resolveTaxRateValue]
@@ -561,17 +564,15 @@ export function AdjustmentDialog({
             const lastChanged = lastAmountChangedRef.current
             if (mode !== 'amount') return
             if (lastChanged === 'gross') {
-              const gross = normalizeNumber((values as any)?.amountGross)
-              if (Number.isFinite(gross)) {
-                const net = roundAmount(gross / (1 + rateNumeric / 100))
-                setFormValue?.('amountNet', net.toFixed(2))
+              const gross = toExactAmount((values as any)?.amountGross)
+              if (gross !== null) {
+                setFormValue?.('amountNet', formatAutoFilledAmount(netFromGross(gross, rateNumeric), gross))
               }
               return
             }
-            const net = normalizeNumber((values as any)?.amountNet)
-            if (Number.isFinite(net)) {
-              const gross = roundAmount(net * (1 + rateNumeric / 100))
-              setFormValue?.('amountGross', gross.toFixed(2))
+            const net = toExactAmount((values as any)?.amountNet)
+            if (net !== null) {
+              setFormValue?.('amountGross', formatAutoFilledAmount(grossFromNet(net, rateNumeric), net))
             }
           }
           return (
@@ -684,8 +685,8 @@ export function AdjustmentDialog({
         )
       }
       const percentageRate = normalizeNumber(values.rate)
-      const amountNet = normalizeNumber(values.amountNet)
-      const amountGross = normalizeNumber(values.amountGross)
+      const amountNet = toExactAmount(values.amountNet)
+      const amountGross = toExactAmount(values.amountGross)
       if (calculationMode === 'rate') {
         if (!Number.isFinite(percentageRate)) {
           throw createCrudFormError(
@@ -694,7 +695,7 @@ export function AdjustmentDialog({
           )
         }
       } else {
-        if (!Number.isFinite(amountNet) && !Number.isFinite(amountGross)) {
+        if (amountNet === null && amountGross === null) {
           throw createCrudFormError(
             t('sales.documents.adjustments.errorAmount', 'Provide at least one amount.'),
             { amountNet: t('sales.documents.adjustments.errorAmount', 'Provide at least one amount.') }
@@ -707,8 +708,8 @@ export function AdjustmentDialog({
         const hasNonZeroValue =
           calculationMode === 'rate'
             ? Number.isFinite(percentageRate) && percentageRate !== 0
-            : (Number.isFinite(amountNet) && amountNet !== 0) ||
-              (Number.isFinite(amountGross) && amountGross !== 0)
+            : (amountNet !== null && compareDecimals(amountNet, 0) !== 0) ||
+              (amountGross !== null && compareDecimals(amountGross, 0) !== 0)
         if (!hasNonZeroValue) {
           const message = t(
             'sales.documents.adjustments.errorReturnZero',
@@ -756,8 +757,8 @@ export function AdjustmentDialog({
             ? values.calculatorKey.trim()
             : null,
         rate: calculationMode === 'rate' && Number.isFinite(percentageRate) ? percentageRate : null,
-        amountNet: calculationMode === 'amount' && Number.isFinite(amountNet) ? amountNet : null,
-        amountGross: calculationMode === 'amount' && Number.isFinite(amountGross) ? amountGross : null,
+        amountNet: calculationMode === 'amount' ? amountNet : null,
+        amountGross: calculationMode === 'amount' ? amountGross : null,
         position: Number.isFinite(normalizeNumber(values.position)) ? Number(normalizeNumber(values.position)) : null,
         currencyCode: resolvedCurrency,
         customFields: Object.keys(customFields).length ? normalizeCustomFieldValues(customFields) : null,

@@ -5,6 +5,7 @@ import {
   buildVariantMetadata,
   mapPriceItemToDraft,
   findInvalidVariantPriceKinds,
+  resolveVariantPriceAmount,
 } from '../variantForm'
 import type { VariantFormValues } from '../variantForm'
 import type { PriceKindSummary } from '../productForm'
@@ -406,5 +407,21 @@ describe('findInvalidVariantPriceKinds', () => {
       regular: { priceKindId: 'regular', amount: '0.000000000000000001', displayMode: 'excluding-tax' as const },
     }
     expect(findInvalidVariantPriceKinds(priceKinds, drafts)).toEqual([])
+  })
+})
+
+describe('resolveVariantPriceAmount', () => {
+  const draft = (amount: string) => ({ priceKindId: 'kind-1', amount, displayMode: 'excluding-tax' as const })
+
+  it('returns the exact decimal string for a valid amount', () => {
+    expect(resolveVariantPriceAmount(draft(' 19.90 '))).toBe('19.9')
+    expect(resolveVariantPriceAmount(draft('0.123456789012345678'))).toBe('0.123456789012345678')
+  })
+
+  it('returns null for blank, invalid or negative amounts', () => {
+    expect(resolveVariantPriceAmount(undefined)).toBeNull()
+    expect(resolveVariantPriceAmount(draft('   '))).toBeNull()
+    expect(resolveVariantPriceAmount(draft('abc'))).toBeNull()
+    expect(resolveVariantPriceAmount(draft('-1'))).toBeNull()
   })
 })

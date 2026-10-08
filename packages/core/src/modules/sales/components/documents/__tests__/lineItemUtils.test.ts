@@ -1,4 +1,12 @@
-import { resolveLineDiscountDisplay } from '../lineItemUtils'
+import {
+  formatMoney,
+  grossFromNet,
+  netFromGross,
+  resolveLineDiscountDisplay,
+  resolveMoneyDecimalPlaces,
+  roundMoney,
+  toExactAmount,
+} from '../lineItemUtils'
 
 describe('resolveLineDiscountDisplay', () => {
   it('returns null when neither a discount amount nor a percentage is recorded', () => {
@@ -66,5 +74,42 @@ describe('resolveLineDiscountDisplay', () => {
     expect(
       resolveLineDiscountDisplay({ discountAmount: 0, discountPercent: 10, unitPriceNet: 100, quantity: 2 }),
     ).toEqual({ amount: null, percent: 10 })
+  })
+})
+
+describe('exact money helpers', () => {
+  it('formats a decimal string without passing it through a float', () => {
+    expect(formatMoney('12345678901234567.89', 'USD', 'en-US')).toBe('$12,345,678,901,234,567.89')
+    expect(formatMoney(110.7, 'USD', 'en-US')).toBe('$110.70')
+    expect(formatMoney('0.123456789012345678', 'USD', 'en-US', 18)).toBe('$0.123456789012345678')
+  })
+
+  it('keeps two decimals without a currency, like before', () => {
+    expect(formatMoney(110.7, null)).toBe('110.70')
+    expect(formatMoney('1.005', undefined)).toBe('1.01')
+  })
+
+  it('reads amounts as exact decimal strings', () => {
+    expect(toExactAmount('110.7000')).toBe('110.7')
+    expect(toExactAmount(' 0.000000000000000001 ')).toBe('0.000000000000000001')
+    expect(toExactAmount(12.5)).toBe('12.5')
+    expect(toExactAmount('abc')).toBeNull()
+    expect(toExactAmount(Number.NaN)).toBeNull()
+    expect(toExactAmount(null)).toBeNull()
+  })
+
+  it('rounds to 4 decimals unless the source carries more', () => {
+    expect(resolveMoneyDecimalPlaces('12.5')).toBe(4)
+    expect(resolveMoneyDecimalPlaces('0.000000000000000001')).toBe(18)
+    expect(roundMoney('81.30081300813')).toBe('81.3008')
+    expect(roundMoney('0.00005')).toBe('0.0001')
+  })
+
+  it('converts between net and gross with exact decimal math', () => {
+    expect(grossFromNet('90', 23)).toBe('110.7')
+    expect(netFromGross('110.7', 23)).toBe('90')
+    expect(grossFromNet('0.000000000000000001', 0)).toBe('0.000000000000000001')
+    expect(netFromGross('100', 23)).toBe('81.300813008130081')
+    expect(netFromGross('100', null)).toBe('100')
   })
 })

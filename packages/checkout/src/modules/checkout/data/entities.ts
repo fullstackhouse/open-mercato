@@ -116,7 +116,7 @@ export class CheckoutLinkTemplate {
   customAmountCurrencyCode?: string | null
 
   @Property({ name: 'price_list_items', type: 'jsonb', nullable: true })
-  priceListItems?: Array<{ id: string; description: string; amount: number; currencyCode: string }> | null
+  priceListItems?: Array<{ id: string; description: string; amount: number; amountExact?: string | null; currencyCode: string }> | null
 
   @Property({ name: 'gateway_provider_key', type: 'text', nullable: true })
   gatewayProviderKey?: string | null

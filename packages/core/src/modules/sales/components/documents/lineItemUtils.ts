@@ -1,5 +1,19 @@
 "use client"
 
+import {
+  DEFAULT_AMOUNT_DECIMAL_PLACES,
+  addDecimals,
+  countDecimalPlaces,
+  decimalToString,
+  divideDecimals,
+  multiplyDecimals,
+  parseDecimal,
+  roundDecimal,
+  type DecimalInput,
+  type DecimalValue,
+} from '@open-mercato/shared/lib/decimal'
+import { formatCurrency } from '@open-mercato/ui/utils/format'
+
 export function normalizeNumber(value: unknown, fallback = 0): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string' && value.trim().length) {
@@ -14,9 +28,52 @@ export function normalizeNumber(value: unknown, fallback = 0): number {
  * Omitting it keeps the runtime default, which varies per machine and is therefore not
  * assertable in tests.
  */
-export function formatMoney(value: number, currency: string | null | undefined, locale?: string): string {
-  if (!currency) return value.toFixed(2)
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value)
+export function formatMoney(
+  value: number | string,
+  currency: string | null | undefined,
+  locale?: string,
+  decimalPlaces?: number | null,
+): string {
+  const exact = parseDecimal(value)
+  if (!exact) return String(value)
+  if (!currency) {
+    const digits =
+      typeof decimalPlaces === 'number' && Number.isInteger(decimalPlaces) && decimalPlaces >= 0 ? decimalPlaces : 2
+    return exact.toFixed(digits)
+  }
+  return formatCurrency(decimalToString(exact), currency, locale, decimalPlaces) ?? decimalToString(exact)
+}
+
+export function toExactAmount(value: unknown): string | null {
+  const exact = parseDecimal(typeof value === 'string' ? value.trim() : value)
+  return exact ? decimalToString(exact) : null
+}
+
+export function resolveMoneyDecimalPlaces(...values: Array<DecimalInput | null | undefined>): number {
+  return values.reduce<number>((places, value) => {
+    if (value === null || value === undefined) return places
+    return Math.max(places, countDecimalPlaces(value))
+  }, DEFAULT_AMOUNT_DECIMAL_PLACES)
+}
+
+export function roundMoney(value: DecimalInput, decimalPlaces: number = DEFAULT_AMOUNT_DECIMAL_PLACES): string {
+  return decimalToString(roundDecimal(value, decimalPlaces))
+}
+
+function resolveTaxMultiplier(taxRate: DecimalInput | null | undefined): DecimalValue | null {
+  const rate = parseDecimal(taxRate)
+  const multiplier = addDecimals(1, rate ? divideDecimals(rate, 100) : 0)
+  return multiplier.gt(0) ? multiplier : null
+}
+
+export function grossFromNet(net: DecimalInput, taxRate: DecimalInput | null | undefined): string {
+  const multiplier = resolveTaxMultiplier(taxRate)
+  return decimalToString(multiplier ? multiplyDecimals(net, multiplier) : net)
+}
+
+export function netFromGross(gross: DecimalInput, taxRate: DecimalInput | null | undefined): string {
+  const multiplier = resolveTaxMultiplier(taxRate)
+  return decimalToString(multiplier ? divideDecimals(gross, multiplier, DEFAULT_AMOUNT_DECIMAL_PLACES) : gross)
 }
 
 export type LineDiscountDisplay = {

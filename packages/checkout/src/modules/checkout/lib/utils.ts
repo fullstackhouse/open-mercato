@@ -111,10 +111,15 @@ export function parseCheckoutInput<TInput>(raw: unknown, parser: (value: unknown
   const source = isRecord(raw) ? { ...raw } : {}
   const customFields = isRecord(source.customFields) ? source.customFields : {}
   delete source.customFields
-  return {
-    parsed: withExactAmounts(parser(source) as TInput & object, source, CHECKOUT_MONEY_FIELDS),
-    customFields,
+  const parsed = withExactAmounts(parser(source) as TInput & object, source, CHECKOUT_MONEY_FIELDS)
+  const items = (parsed as { priceListItems?: unknown }).priceListItems
+  if (Array.isArray(items)) {
+    const rawItems = Array.isArray(source.priceListItems) ? source.priceListItems : []
+    ;(parsed as { priceListItems?: unknown }).priceListItems = items.map((item, index) =>
+      isRecord(item) ? withExactAmounts(item, rawItems[index], ['amount'] as const) : item,
+    )
   }
+  return { parsed, customFields }
 }
 
 export function resolveLoadedCheckoutCustomFields(
@@ -466,7 +471,7 @@ export function resolveSubmittedAmount(
       fieldErrors: { selectedPriceItemId: 'checkout.payPage.validation.priceSelectionRequired' },
     })
   }
-  const itemAmount = parseDecimal(selectedPriceItem.amount)
+  const itemAmount = parseDecimal(resolveExactDecimal(selectedPriceItem.amountExact, selectedPriceItem.amount))
   if (!itemAmount || (input.amount != null && (!submitted || !submitted.eq(itemAmount)))) {
     throw new CrudHttpError(422, { error: 'checkout.payPage.errors.submit' })
   }
