@@ -13,6 +13,10 @@ import {
   toMoneyString,
 } from '../lib/utils'
 import { assertValidCheckoutStatusTransition } from '../lib/transaction-status-machine'
+import { decimalToString, roundDecimal } from '@open-mercato/shared/lib/decimal'
+import { resolveCurrencyDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
+
+const DEFAULT_CHECKOUT_DECIMAL_PLACES = 2
 
 function resolveTransactionScope(input: { tenantId?: string | null; organizationId?: string | null }) {
   if (!input.organizationId || !input.tenantId) {
@@ -47,6 +51,15 @@ const createTransactionCommand: CommandHandler<Record<string, unknown>, { id: st
     const { parsed } = parseCheckoutInput(rawInput, transactionCreateSchema.parse)
     const scope = resolveTransactionScope(parsed)
     const em = ctx.container.resolve('em') as EntityManager
+    // The gateway charges in the currency's own minor units, so the stored amount is
+    // rounded the same way and always equals what is charged.
+    const currencyDecimalPlaces =
+      (await resolveCurrencyDecimalPlaces(ctx.container, {
+        code: parsed.currencyCode,
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+      })) ?? DEFAULT_CHECKOUT_DECIMAL_PLACES
+    const chargedAmount = roundDecimal(parsed.amountExact ?? parsed.amount, currencyDecimalPlaces)
     let lockedLinkId: string | null = null
     let lockedLinkSlug: string | null = null
     let lockedLinkTemplateId: string | null = null
@@ -96,7 +109,7 @@ const createTransactionCommand: CommandHandler<Record<string, unknown>, { id: st
         ...parsed,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
-        amount: toMoneyString(parsed.amountExact ?? parsed.amount) ?? '0.00',
+        amount: decimalToString(chargedAmount),
         status: 'processing',
       })
       tx.persist(transaction)
