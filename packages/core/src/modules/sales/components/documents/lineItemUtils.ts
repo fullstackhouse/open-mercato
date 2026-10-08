@@ -2,6 +2,7 @@
 
 import {
   DEFAULT_AMOUNT_DECIMAL_PLACES,
+  FX_DECIMAL_PLACES,
   addDecimals,
   countDecimalPlaces,
   decimalToString,
@@ -68,12 +69,14 @@ function resolveTaxMultiplier(taxRate: DecimalInput | null | undefined): Decimal
 
 export function grossFromNet(net: DecimalInput, taxRate: DecimalInput | null | undefined): string {
   const multiplier = resolveTaxMultiplier(taxRate)
-  return decimalToString(multiplier ? multiplyDecimals(net, multiplier) : net)
+  return multiplier ? roundMoney(multiplyDecimals(net, multiplier), resolveMoneyDecimalPlaces(net)) : decimalToString(net)
 }
 
 export function netFromGross(gross: DecimalInput, taxRate: DecimalInput | null | undefined): string {
   const multiplier = resolveTaxMultiplier(taxRate)
-  return decimalToString(multiplier ? divideDecimals(gross, multiplier, DEFAULT_AMOUNT_DECIMAL_PLACES) : gross)
+  return multiplier
+    ? roundMoney(divideDecimals(gross, multiplier, FX_DECIMAL_PLACES), resolveMoneyDecimalPlaces(gross))
+    : decimalToString(gross)
 }
 
 export type LineDiscountDisplay = {
