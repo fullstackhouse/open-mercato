@@ -140,8 +140,24 @@ export function countDecimalPlaces(value: DecimalInput): number {
   return fraction ? fraction.length : 0
 }
 
+/** Plain decimal string with at least `minDecimalPlaces` decimals (`12.5` -> `12.50`), never cut. */
+export function padDecimalPlaces(value: DecimalInput, minDecimalPlaces: number): string {
+  const decimal = toDecimal(value)
+  return decimal.toFixed(Math.max(minDecimalPlaces, countDecimalPlaces(decimal)))
+}
+
 export function decimalToNumber(value: DecimalInput): number {
   return Number(decimalToString(value))
+}
+
+/**
+ * Whether `exact` is the decimal the validated `legacy` number stands for. A value
+ * that underflows to zero (`-1e-400`) must itself be zero, so it cannot slip past
+ * a sign or range check made on the number.
+ */
+function matchesLegacyNumber(exact: DecimalValue, legacy: number): boolean {
+  if (decimalToNumber(exact) !== legacy) return false
+  return legacy !== 0 || exact.eq(0)
 }
 
 /**
@@ -152,7 +168,7 @@ export function decimalToNumber(value: DecimalInput): number {
 export function resolveExactDecimal(exact: unknown, legacy: unknown): string | null {
   const exactDecimal = parseDecimal(exact)
   const legacyDecimal = parseDecimal(legacy)
-  if (exactDecimal && (typeof legacy !== 'number' || decimalToNumber(exactDecimal) === legacy)) {
+  if (exactDecimal && (typeof legacy !== 'number' || matchesLegacyNumber(exactDecimal, legacy))) {
     return decimalToString(exactDecimal)
   }
   return legacyDecimal ? decimalToString(legacyDecimal) : null

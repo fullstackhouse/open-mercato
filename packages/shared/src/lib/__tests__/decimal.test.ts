@@ -8,6 +8,7 @@ import {
   minDecimal,
   multiplyDecimals,
   nonNegativeDecimalStringSchema,
+  padDecimalPlaces,
   parseDecimal,
   positiveDecimalStringSchema,
   resolveAmountDecimalPlaces,
@@ -95,6 +96,12 @@ describe('decimal', () => {
     expect(() => toDecimal(Number.POSITIVE_INFINITY)).toThrow()
   })
 
+  it('pads to a minimum number of decimals without cutting digits', () => {
+    expect(padDecimalPlaces('12.5', 2)).toBe('12.50')
+    expect(padDecimalPlaces('12', 0)).toBe('12')
+    expect(padDecimalPlaces('0.000000000000000001', 2)).toBe('0.000000000000000001')
+  })
+
   it('resolves amount precision with a 4 decimal floor', () => {
     expect(resolveAmountDecimalPlaces(2)).toBe(4)
     expect(resolveAmountDecimalPlaces(8)).toBe(8)
@@ -129,6 +136,12 @@ describe('resolveExactDecimal', () => {
 
   it('falls back to the legacy number once it was changed on its own', () => {
     expect(resolveExactDecimal('10.123456789', 12)).toBe('12')
+  })
+
+  it('rejects exact values that underflow to zero', () => {
+    expect(resolveExactDecimal('-1e-400', -0)).toBe('0')
+    expect(resolveExactDecimal('1e-400', 0)).toBe('0')
+    expect(resolveExactDecimal('0.000', 0)).toBe('0')
   })
 
   it('handles missing values', () => {
