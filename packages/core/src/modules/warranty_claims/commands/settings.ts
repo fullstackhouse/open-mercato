@@ -20,6 +20,7 @@ import {
   ensureTenantScope,
   exactMoneyInput,
   withWarrantyExactAmounts,
+  withoutWarrantyExactKeys,
 } from './shared'
 import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
 
@@ -32,7 +33,7 @@ export type SaveWarrantyClaimSettingsResult = WarrantyClaimEffectiveSettings & {
 }
 
 function parseCommandInput(rawInput: unknown): WarrantyClaimSettingsSaveInput {
-  const parsed = warrantyClaimSettingsSaveSchema.safeParse(rawInput ?? {})
+  const parsed = warrantyClaimSettingsSaveSchema.safeParse(withoutWarrantyExactKeys(rawInput) ?? {})
   if (!parsed.success) {
     throw new CrudHttpError(400, { error: 'warranty_claims.errors.invalidInput' })
   }
@@ -110,6 +111,7 @@ function buildResult(settings: WarrantyClaimSettings): SaveWarrantyClaimSettings
     slaAtRiskThresholdPct: settings.slaAtRiskThresholdPct,
     autoApproveEnabled: settings.autoApproveEnabled,
     autoApproveMaxAmount: amountNumber(settings.autoApproveMaxAmount),
+    autoApproveMaxAmountExact: amountString(settings.autoApproveMaxAmount),
     autoApproveCurrencyCode: settings.autoApproveCurrencyCode ?? null,
     autoApproveRequireInWarranty: settings.autoApproveRequireInWarranty,
     defaultWarrantyMonths: settings.defaultWarrantyMonths ?? null,
