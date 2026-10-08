@@ -44,6 +44,7 @@ import {
   type DecimalValue,
 } from '@open-mercato/shared/lib/decimal'
 import { resolveDictionaryEntryValue } from '../lib/dictionaries'
+import { PAYMENT_EXACT_AMOUNT_FIELDS } from '../lib/exactAmountFields'
 import { resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
 import { invalidateCrudCache } from '@open-mercato/shared/lib/crud/cache'
 import { emitCrudSideEffects } from '@open-mercato/shared/lib/commands/helpers'
@@ -97,8 +98,6 @@ type PaymentUndoPayload = {
   orderPaymentMethodIdBefore?: string | null
   orderPaymentMethodCodeBefore?: string | null
 }
-
-const PAYMENT_EXACT_AMOUNT_FIELDS = ['amount', 'capturedAmount', 'refundedAmount'] as const
 
 function toExactDecimal(value: unknown): DecimalValue {
   return parseDecimal(value) ?? toDecimal(0)

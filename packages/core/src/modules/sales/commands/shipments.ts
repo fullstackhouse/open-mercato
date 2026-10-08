@@ -43,6 +43,7 @@ import {
   type DecimalInput,
 } from '@open-mercato/shared/lib/decimal'
 import { resolveDictionaryEntryValue } from '../lib/dictionaries'
+import { SHIPMENT_EXACT_AMOUNT_FIELDS } from '../lib/exactAmountFields'
 import { resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { emitCrudSideEffects } from '@open-mercato/shared/lib/commands/helpers'
@@ -64,8 +65,6 @@ const shipmentCrudEvents: CrudEventsConfig = {
 }
 
 const ADDRESS_SNAPSHOT_KEY = 'shipmentAddressSnapshot'
-
-const SHIPMENT_EXACT_AMOUNT_FIELDS = ['declaredValueNet', 'declaredValueGross'] as const
 
 /**
  * Whether `amount` settles `grandTotal`. Rows written by the old float math can be

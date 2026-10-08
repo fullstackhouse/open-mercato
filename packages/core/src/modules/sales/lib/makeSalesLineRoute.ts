@@ -17,6 +17,7 @@ import {
   defaultOkResponseSchema,
 } from '../api/openapi'
 import { withScopedPayload } from '../api/utils'
+import { withExactLineInput } from './exactAmountFields'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- MikroORM entity class constructor
 type EntityClass = new (...args: any[]) => unknown
@@ -240,10 +241,8 @@ export function makeSalesLineRoute(config: SalesLineRouteConfig) {
         schema: rawBodySchema,
         mapInput: async ({ raw, ctx }: { raw: unknown; ctx: CrudCtx }) => {
           const { translate } = await resolveTranslations()
-          const payload = upsertSchema.parse(
-            withScopedPayload(resolveRawBody(raw) ?? {}, ctx, translate),
-          )
-          return { body: payload }
+          const scoped = withScopedPayload(resolveRawBody(raw) ?? {}, ctx, translate)
+          return { body: withExactLineInput(upsertSchema.parse(scoped), scoped) }
         },
         response: ({ result }: { result: Record<string, unknown> | null }) => ({
           id: result?.lineId ?? null,
@@ -256,10 +255,8 @@ export function makeSalesLineRoute(config: SalesLineRouteConfig) {
         schema: rawBodySchema,
         mapInput: async ({ raw, ctx }: { raw: unknown; ctx: CrudCtx }) => {
           const { translate } = await resolveTranslations()
-          const payload = upsertSchema.parse(
-            withScopedPayload(resolveRawBody(raw) ?? {}, ctx, translate),
-          )
-          return { body: payload }
+          const scoped = withScopedPayload(resolveRawBody(raw) ?? {}, ctx, translate)
+          return { body: withExactLineInput(upsertSchema.parse(scoped), scoped) }
         },
         response: ({ result }: { result: Record<string, unknown> | null }) => ({
           id: result?.lineId ?? null,

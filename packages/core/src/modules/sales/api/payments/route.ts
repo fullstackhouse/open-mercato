@@ -8,6 +8,7 @@ import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { SalesPayment, SalesPaymentMethod } from '../../data/entities'
 import { paymentCreateSchema, paymentUpdateSchema } from '../../data/validators'
 import { withScopedPayload } from '../utils'
+import { withExactPaymentInput } from '../../lib/exactAmountFields'
 import {
   createPagedListResponseSchema,
   createSalesCrudOpenApi,
@@ -97,10 +98,11 @@ const crud = makeCrudRoute({
         const { translate } = await resolveTranslations()
         const scoped = withScopedPayload(raw ?? {}, ctx, translate)
         const { base, custom } = splitCustomFieldPayload(scoped)
-        return paymentCreateSchema.parse({
+        const payload = {
           ...base,
           ...(Object.keys(custom).length ? { customFields: custom } : {}),
-        })
+        }
+        return withExactPaymentInput(paymentCreateSchema.parse(payload), payload)
       },
       response: ({ result }) => ({
         id: result?.paymentId ?? null,
@@ -115,10 +117,11 @@ const crud = makeCrudRoute({
         const { translate } = await resolveTranslations()
         const scoped = withScopedPayload(raw ?? {}, ctx, translate)
         const { base, custom } = splitCustomFieldPayload(scoped)
-        return paymentUpdateSchema.parse({
+        const payload = {
           ...base,
           ...(Object.keys(custom).length ? { customFields: custom } : {}),
-        })
+        }
+        return withExactPaymentInput(paymentUpdateSchema.parse(payload), payload)
       },
       response: ({ result }) => ({
         id: result?.paymentId ?? null,

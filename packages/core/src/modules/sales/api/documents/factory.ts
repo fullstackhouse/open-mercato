@@ -22,6 +22,7 @@ import {
   defaultDeleteRequestSchema,
 } from '../openapi'
 import { parseScopedCommandInput, resolveCrudRecordId } from '../utils'
+import { withExactDocumentInput } from '../../lib/exactAmountFields'
 import { documentUpdateSchema } from '../../commands/documents'
 import { buildIlikeTerm } from '@open-mercato/shared/lib/db/buildIlikeTerm'
 import { parseBooleanToken } from '@open-mercato/shared/lib/boolean'
@@ -577,13 +578,8 @@ export function buildDocumentCrudOptions(binding: DocumentBinding) {
         mapInput: async ({ raw, ctx }: { raw: unknown; ctx: CrudCtx }) => {
           const { translate } = await resolveTranslations()
           const { base, custom } = splitCustomFieldPayload(raw ?? {})
-          const parsed = parseScopedCommandInput(
-            createSchema,
-            Object.keys(custom).length ? { ...base, customFields: custom } : base,
-            ctx,
-            translate,
-          )
-          return parsed
+          const payload = Object.keys(custom).length ? { ...base, customFields: custom } : base
+          return withExactDocumentInput(parseScopedCommandInput(createSchema, payload, ctx, translate), payload)
         },
         response: ({ result }: { result?: DocumentCreateResult | null }) => ({
           id: result?.orderId ?? result?.quoteId ?? result?.id ?? null,
@@ -606,13 +602,8 @@ export function buildDocumentCrudOptions(binding: DocumentBinding) {
           if (typeof numberValue === 'string') {
             await ensureNumberEditPermission(ctx, translate)
           }
-          const parsed = parseScopedCommandInput(
-            documentUpdateSchema,
-            Object.keys(custom).length ? { ...base, customFields: custom } : base,
-            ctx,
-            translate,
-          )
-          return parsed
+          const payload = Object.keys(custom).length ? { ...base, customFields: custom } : base
+          return withExactDocumentInput(parseScopedCommandInput(documentUpdateSchema, payload, ctx, translate), payload)
         },
         response: ({ result }: { result: any }) =>
           mapUpdateResponse((result as any)?.order ?? (result as any)?.quote ?? result),

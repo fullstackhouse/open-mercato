@@ -160,6 +160,11 @@ import { loadShippedQuantityByLine } from "../lib/shipments/snapshots";
 import { resolveDictionaryEntryValue, resolveCachedDictionaryEntryValue } from "../lib/dictionaries";
 import type { CacheStrategy } from "@open-mercato/cache";
 import { resolveStatusEntryIdByValue } from "../lib/statusHelpers";
+import {
+  ADJUSTMENT_EXACT_AMOUNT_FIELDS,
+  DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS,
+  LINE_EXACT_AMOUNT_FIELDS,
+} from "../lib/exactAmountFields";
 import { SalesDocumentNumberGenerator } from "../services/salesDocumentNumberGenerator";
 import { loadSalesSettings } from "./settings";
 import { notificationTypes } from "../notifications";
@@ -3129,28 +3134,6 @@ function isStoredRowSourcedTotalsLine(line: DocumentLineCreateInput): boolean {
       .totalsFromStoredRow === true
   );
 }
-
-const LINE_EXACT_AMOUNT_FIELDS = [
-  "unitPriceNet",
-  "unitPriceGross",
-  "discountAmount",
-  "taxAmount",
-  "totalNetAmount",
-  "totalGrossAmount",
-] as const;
-
-const ADJUSTMENT_EXACT_AMOUNT_FIELDS = ["amountNet", "amountGross"] as const;
-
-const DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS = [
-  "subtotalNetAmount",
-  "subtotalGrossAmount",
-  "discountTotalAmount",
-  "taxTotalAmount",
-  "grandTotalNetAmount",
-  "grandTotalGrossAmount",
-  "paidTotalAmount",
-  "outstandingAmount",
-] as const;
 
 /**
  * Exact decimal string for `value`: the first candidate whose float equals it
@@ -6286,6 +6269,9 @@ const createOrderCommand: CommandHandler<
               parsed.exchangeRate,
               rawInput && typeof rawInput === "object"
                 ? (rawInput as Record<string, unknown>).exchangeRate
+                : undefined,
+              rawInput && typeof rawInput === "object"
+                ? (rawInput as Record<string, unknown>).exchangeRateExact
                 : undefined,
             )
           : null,
