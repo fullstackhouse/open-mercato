@@ -1,4 +1,4 @@
-import { decimalToNumber, decimalToString } from '@open-mercato/shared/lib/decimal'
+import { decimalToNumber, decimalToString, isDecimalInput } from '@open-mercato/shared/lib/decimal'
 
 /** @deprecated Prices are no longer limited in integer digits. */
 export const CATALOG_PRICE_MAX_INTEGER_DIGITS = 12
@@ -32,7 +32,7 @@ export function validateCatalogPriceAmountInput(
   const raw = normalizeCatalogPriceRawValue(value)
   if (!raw) return { ok: false, reason: 'invalid_format' }
   if (raw.startsWith('-')) return { ok: false, reason: 'negative' }
-  if (!/^\d+(?:\.\d+)?$/.test(raw)) {
+  if (!/^\d+(?:\.\d+)?$/.test(raw) || !isDecimalInput(raw)) {
     return { ok: false, reason: 'invalid_format' }
   }
 
