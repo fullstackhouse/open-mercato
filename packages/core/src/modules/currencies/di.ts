@@ -1,5 +1,6 @@
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/core'
+import type { EntityManager as PostgreSqlEntityManager } from '@mikro-orm/postgresql'
 import { RateFetchingService } from './services/rateFetchingService'
 import { ExchangeRateService } from './services/exchangeRateService'
 import { NBPProvider } from './services/providers/nbp'
@@ -34,7 +35,7 @@ export function register(container: AppContainer) {
       resolve: (c) => new BaseCurrencyService(c.resolve<EntityManager>('em')),
     },
     currencyPrecisionService: {
-      resolve: (c) => new CurrencyPrecisionService(c.resolve<EntityManager>('em')),
+      resolve: (c) => new CurrencyPrecisionService(c.resolve<PostgreSqlEntityManager>('em')),
     },
   })
 }

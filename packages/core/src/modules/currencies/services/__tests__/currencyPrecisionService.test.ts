@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from '@jest/globals'
-import type { EntityManager } from '@mikro-orm/core'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import { CurrencyPrecisionService } from '../currencyPrecisionService'
 
 function createService(record: { decimalPlaces: number } | null) {

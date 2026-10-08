@@ -1,4 +1,4 @@
-import type { EntityManager } from '@mikro-orm/core'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { CurrencyPrecisionLookup, CurrencyPrecisionResolver } from '@open-mercato/shared/lib/currencyPrecision'
 import { Currency } from '../data/entities'
