@@ -18,8 +18,11 @@ describe('DefaultTaxCalculationService', () => {
 
     expect(result).toEqual({
       netAmount: 100,
+      netAmountExact: '100',
       grossAmount: 120,
+      grossAmountExact: '120',
       taxAmount: 20,
+      taxAmountExact: '20',
       taxRate: 20,
     })
     expect(em.findOne).toHaveBeenCalled()
@@ -42,6 +45,22 @@ describe('DefaultTaxCalculationService', () => {
     expect(result.taxAmount).toBeCloseTo(6.2559, 4)
     expect(result.taxRate).toBe(5.5)
     expect(em.findOne).not.toHaveBeenCalled()
+  })
+
+  it('keeps exact amounts and rounds to the requested precision', async () => {
+    const em = { findOne: jest.fn() }
+    const service = new DefaultTaxCalculationService(em as any)
+    const result = await service.calculateUnitAmounts({
+      ...baseInput,
+      amount: Number('0.000000000000000123'),
+      amountExact: '0.000000000000000123',
+      amountDecimalPlaces: 18,
+      taxRate: 23,
+    })
+
+    expect(result.netAmountExact).toBe('0.000000000000000123')
+    expect(result.taxAmountExact).toBe('0.000000000000000028')
+    expect(result.grossAmountExact).toBe('0.000000000000000151')
   })
 
   it('throws for invalid amount or mode', async () => {
@@ -71,7 +90,15 @@ describe('DefaultTaxCalculationService', () => {
 
     const result = await service.calculateUnitAmounts({ ...baseInput, amount: 10, taxRateId: 'ignored' })
 
-    expect(result).toEqual({ netAmount: 10, grossAmount: 11, taxAmount: 1, taxRate: 10 })
+    expect(result).toEqual({
+      netAmount: 10,
+      netAmountExact: '10',
+      grossAmount: 11,
+      grossAmountExact: '11',
+      taxAmount: 1,
+      taxAmountExact: '1',
+      taxRate: 10,
+    })
     expect(before).toHaveBeenCalled()
     expect(after).toHaveBeenCalled()
     expect(em.findOne).not.toHaveBeenCalled()

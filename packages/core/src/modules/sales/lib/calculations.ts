@@ -5,7 +5,6 @@ import {
   decimalToNumber,
   decimalToString,
   divideDecimals,
-  parseDecimal,
   resolveExactDecimal,
   roundDecimal,
   toDecimal,
