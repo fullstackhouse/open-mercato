@@ -101,8 +101,8 @@ export class ExchangeRate {
   @Property()
   toCurrencyCode: string
 
-  @Property({ columnType: 'decimal(18,8)' })
-  rate: string // High precision decimal
+  @Property({ type: 'numeric', columnType: 'numeric' })
+  rate: string // Unconstrained decimal string, never rounded to a fixed scale
 
   @Property()
   date: Date
@@ -112,6 +112,9 @@ export class ExchangeRate {
 
   @Property({ nullable: true })
   type?: 'buy' | 'sell' // Bank's perspective
+
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null // Free-form context, e.g. the NBP table number
 
   @Property()
   tenantId: string
@@ -218,8 +221,8 @@ interface RateResult {
 }
 
 if (result.rates.length > 0) {
-  const rate = parseFloat(result.rates[0].rate)
-  const convertedAmount = 100 * rate
+  // Keep rates exact: never parse them into a JS number for money math
+  const convertedAmount = multiplyDecimals('100', result.rates[0].rate) // from '@open-mercato/shared/lib/decimal'
 }
 ```
 
@@ -380,9 +383,10 @@ export class MyCustomProvider implements RateProvider {
     return rates.map(r => ({
       fromCurrencyCode: r.from,
       toCurrencyCode: r.to,
-      rate: r.value.toString(),
+      rate: r.value, // decimal string; for inversions use divideDecimals(1, value, FX_DECIMAL_PLACES)
       source: this.name,
       type: r.type, // 'buy', 'sell', or undefined
+      metadata: { reference: r.reference }, // optional, stored on the exchange rate
     }))
   }
 

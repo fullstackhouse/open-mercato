@@ -40,8 +40,10 @@ Open Mercato stores money in fixed-scale columns: `(18,4)` in sales, `(16,4)` fo
 | D4 | Amount precision is `max(4, currency.decimalPlaces)`, falling back to the `Intl` ISO digits and then to 4 | Fiat keeps today's 4 dp internal precision (currencies AGENTS rule 1). Crypto gets its full precision |
 | D5 | FX division precision is 50 dp | Far beyond any real rate. Combined with D3, tiny rates still keep 17 significant digits |
 | D6 | Rounding mode is half-up (away from zero) | Matches `Math.round` for positive values. Negative halves now round away from zero, the accounting convention |
-| D7 | Dual fields: keep `number` fields as deprecated and derived, add `<field>Exact: string` | Follows the deprecation protocol for TS contracts and API payloads |
-| D8 | Validators accept `number | string` and output a canonical decimal string | JSON numbers lose precision before parsing. Strings do not |
+| D7 | Dual fields: keep `number` fields as float copies (documented "prefer the exact field"), add optional `<field>Exact: string` | Additive for TS contracts and API payloads; existing consumers keep compiling |
+| D8 | Validator output types stay unchanged (`number`); commands read exact digits from the raw request with `withExactAmounts`. Validators that only accepted JSON numbers (gateway, staff rate override) also accept decimal strings | Changing parsed output types would silently break arithmetic in `@ts-nocheck` command files (`documents.ts`, `payments.ts`, `shipments.ts`) and change exported `z.infer` types |
+| D10 | Staff amounts round to the currency's own decimals (2 when unknown), not `max(4, dp)` | Staff always billed in minor units (2 for fiat); keeps fiat behaviour unchanged |
+| D11 | Precision for amounts is resolved centrally in `salesCalculationService` when the context lacks `amountDecimalPlaces` | Every caller gets currency precision without touching each context builder |
 | D9 | Exchange rate `metadata` is free-form `jsonb`, editable as JSON in the backend form | Providers and operators can attach arbitrary context |
 
 ### Alternatives considered
@@ -67,7 +69,12 @@ Plain functions over `big.js`:
 - `compareDecimals`, `isZeroDecimal`, `minDecimal`, `maxDecimal`, `absDecimal`, `negateDecimal`.
 - Constants: `FX_DECIMAL_PLACES = 50`, `MIN_SIGNIFICANT_DIGITS = 17`, `DEFAULT_AMOUNT_DECIMAL_PLACES = 4`.
 - `resolveAmountDecimalPlaces(currencyDecimalPlaces)`: applies D4.
-- `decimalStringSchema` (zod): accepts `number | string` and outputs a canonical string. Comes with non-negative, positive and nullable variants.
+- `decimalStringSchema` (zod): accepts `number | string` and outputs a canonical string. Comes with non-negative and positive variants.
+- `resolveExactDecimal(exact, legacy)` - the bridge rule: the exact string wins unless the float was changed on its own.
+- `withExactAmounts(parsed, raw, fields)` - adds `<field>Exact` strings from the raw request next to coerced numbers.
+- `amountComparisonTolerance(dp)` - half a minor unit at the given precision (0.005 at 4).
+- `@open-mercato/shared/lib/currencyPrecision`: `resolveCurrencyDecimalPlaces` (raw currency digits) and `resolveCurrencyAmountDecimalPlaces` (`max(4, dp)`).
+- `parseLocaleDecimal(input, locale)` in `lib/number.ts` - exact variant of `parseLocaleNumber` for user-typed money.
 
 ### Currency precision source
 
@@ -153,6 +160,15 @@ Existing rows keep their stored scale (`40.0000`). New rows store the value as w
 - **Optimistic locking:** `updatedAt` handling is unchanged.
 - **i18n:** new user-facing strings use locale files.
 
+## Implementation Notes
+
+- MikroORM maps a bare `type: 'numeric'` to `numeric(10,0)`; entities declare `columnType: 'numeric'` to get an unconstrained column.
+- Hook bridge lives in `calculations.ts` (`syncLineResultExactAmounts`, `syncDocumentResultExactAmounts`) and runs after every calculator and event hook.
+- Payment capture ledger works on exact decimal strings; `parseAmountUnits`/`formatAmountUnits` are deprecated.
+- CrudForm builtin field type `'decimal'` keeps exact decimal strings (used by the exchange rate form).
+- Money redaction paths (staff reports without `rates.view`) null the `*Exact` fields together with the floats.
+
 ## Changelog
 
 - 2026-10-08: Spec created.
+- 2026-10-08: Implemented. D7/D8 refined (float copies instead of `@deprecated`, validators keep `number` output); added D10 (staff rounding) and D11 (central precision resolution).

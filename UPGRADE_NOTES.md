@@ -24,6 +24,24 @@ most of the patterns listed below in a user's codebase.
 
 ## 0.8.0 → 0.8.1 (unreleased)
 
+### Money and exchange-rate amounts are arbitrary precision (exact decimals)
+
+Money columns and `exchange_rates.rate` are now unconstrained `numeric`, and all built-in money math
+uses exact decimals. Public contracts keep their `number` fields (a float copy) and gain
+`<field>Exact` decimal strings, e.g. `SalesDocumentAmounts.grandTotalGrossAmountExact`,
+`SalesLineCalculationResult.netAmountExact`, `CaptureResult.capturedAmountExact`.
+
+**Action for module authors:**
+- Calculation hooks / shipping or payment providers that only change `number` fields keep working; to
+  keep full precision set the matching `<field>Exact` string too and do the math with
+  `@open-mercato/shared/lib/decimal` instead of JS numbers.
+- Payment gateway adapters should prefer `input.amountExact` and may return `capturedAmountExact` /
+  `refundedAmountExact` / `amountExact`.
+- Code that compared stored amount strings literally (`'40.0000'`) must compare numerically: new rows
+  are stored without scale padding.
+- `parseAmountUnits` / `formatAmountUnits` from `payment_gateways/lib/capture-ledger` are deprecated; the
+  capture-ledger reserve/settle/release helpers now take and return exact decimal strings.
+
 ### Catalog product bulk-delete jobs require tenant, organization and user scope (#3826)
 
 The `catalog-product-bulk-delete` worker used to run `catalog.products.delete` with `auth: null`, so
