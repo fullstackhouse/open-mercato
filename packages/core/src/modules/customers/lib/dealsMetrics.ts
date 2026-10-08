@@ -1,4 +1,5 @@
 import type { RateResult } from '@open-mercato/core/modules/currencies/services/exchangeRateService'
+import { decimalToNumber, parseDecimal, roundDecimal, toDecimal, type DecimalValue } from '@open-mercato/shared/lib/decimal'
 
 /**
  * Quarter / period helpers for the deals KPI summary. Computed in **UTC** so the
@@ -103,10 +104,10 @@ export function computeDelta(current: number, previous: number): Delta {
   return { value: 0, direction: 'unchanged' }
 }
 
-function extractRate(result: RateResult | undefined): number | null {
+function extractRate(result: RateResult | undefined): DecimalValue | null {
   if (!result || result.rates.length === 0) return null
-  const rate = Number(result.rates[0].rate)
-  if (!Number.isFinite(rate) || rate <= 0) return null
+  const rate = parseDecimal(result.rates[0].rate)
+  if (!rate || rate.lte(0)) return null
   return rate
 }
 
@@ -136,18 +137,19 @@ export function convertSumsToBase(
     return { total: 0, convertedAll: missing.length === 0, missingRateCurrencies: missing }
   }
 
-  let total = 0
+  let total = toDecimal(0)
   let convertedAll = true
   const missingRateCurrencies: string[] = []
   for (const entry of perCurrency) {
     if (!entry.currency) continue
+    const amount = parseDecimal(entry.total) ?? toDecimal(0)
     if (entry.currency === baseCode) {
-      total += entry.total
+      total = total.plus(amount)
       continue
     }
     const rate = extractRate(rates.get(`${entry.currency}/${baseCode}`))
     if (rate !== null) {
-      total += entry.total * rate
+      total = total.plus(amount.times(rate))
     } else {
       convertedAll = false
       if (!missingRateCurrencies.includes(entry.currency)) {
@@ -155,5 +157,5 @@ export function convertSumsToBase(
       }
     }
   }
-  return { total: Math.round(total), convertedAll, missingRateCurrencies }
+  return { total: decimalToNumber(roundDecimal(total, 0)), convertedAll, missingRateCurrencies }
 }
