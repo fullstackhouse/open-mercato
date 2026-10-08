@@ -19,7 +19,7 @@ const ORDER_ID = '11111111-1111-4111-8111-111111111111'
 
 const scope = { organizationId: 'org_1', tenantId: 'tenant_1' }
 
-function buildService(resolver?: PaymentOrderTotalResolver | null) {
+function buildService(resolver?: PaymentOrderTotalResolver | null, currencyDecimalPlaces?: number | null) {
   const createSession = jest.fn(async () => ({
     sessionId: 'sess_1',
     status: 'pending' as UnifiedPaymentStatus,
@@ -48,6 +48,9 @@ function buildService(resolver?: PaymentOrderTotalResolver | null) {
     em: em as never,
     integrationCredentialsService,
     paymentOrderTotalResolver: resolver,
+    currencyPrecisionResolver: currencyDecimalPlaces === undefined
+      ? undefined
+      : { getDecimalPlaces: jest.fn(async () => currencyDecimalPlaces) },
   })
   return { service, createSession, flush }
 }
@@ -104,6 +107,24 @@ describe('payment gateway service — session amount reconciliation (#4488)', ()
     await service.createPaymentSession(sessionInput())
 
     expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the float tolerance for a resolver reporting only a float amount due', async () => {
+    const resolver = makeResolver({ ...matchingTotal, amountDue: 0.1 + 0.2 })
+    const { service, createSession } = buildService(resolver)
+
+    await service.createPaymentSession(sessionInput({ amount: 0.3, amountExact: '0.3' }))
+
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('compares exact amounts at the tenant currency precision', async () => {
+    const resolver = makeResolver({ ...matchingTotal, amountDue: 100, amountDueExact: '100' })
+    const { service, createSession } = buildService(resolver, 8)
+
+    await expect(service.createPaymentSession(sessionInput({ amount: 100.00001, amountExact: '100.00001' })))
+      .rejects.toMatchObject({ status: 409 })
+    expect(createSession).not.toHaveBeenCalled()
   })
 
   it('rejects an amount lower than the amount due before calling the provider', async () => {

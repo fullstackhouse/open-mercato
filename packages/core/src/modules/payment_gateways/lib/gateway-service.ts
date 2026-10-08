@@ -25,6 +25,7 @@ import { emitPaymentGatewayEvent } from '../events'
 import { readGatewayMetadata, readWebhookLog } from './transaction-fields'
 import { reconcileSessionAmountWithOrder } from './order-amount-reconciliation'
 import { decimalToNumber, resolveExactDecimal, toDecimal } from '@open-mercato/shared/lib/decimal'
+import { resolveCurrencyDecimalPlaces, type CurrencyPrecisionResolver } from '@open-mercato/shared/lib/currencyPrecision'
 import {
   alignCapturedAmountWithStatus,
   assertCaptureWithinRemaining,
@@ -84,6 +85,11 @@ export interface PaymentGatewayServiceDeps {
    * When absent, session amounts cannot be reconciled and are accepted as-is.
    */
   paymentOrderTotalResolver?: PaymentOrderTotalResolver | null
+  /**
+   * Optional tenant currency precision lookup (`currencyPrecisionService`). When absent,
+   * the ISO 4217 digits are used to compare session amounts with the order total.
+   */
+  currencyPrecisionResolver?: CurrencyPrecisionResolver | null
   sessionClaimOptions?: {
     staleAfterMs?: number
     heartbeatIntervalMs?: number
@@ -119,6 +125,11 @@ export function createPaymentGatewayService(deps: PaymentGatewayServiceDeps) {
     deps.sessionClaimOptions?.heartbeatIntervalMs ?? Math.floor(claimStaleAfterMs / 3),
   )
   const claimPollIntervalMs = Math.max(1, deps.sessionClaimOptions?.pollIntervalMs ?? PAYMENT_SESSION_WAIT_INTERVAL_MS)
+  const currencyPrecisionContainer = {
+    resolve<T = unknown>(): T {
+      return (deps.currencyPrecisionResolver ?? null) as T
+    },
+  }
 
   async function findTransactionOrThrow(
     transactionId: string,
@@ -419,6 +430,13 @@ export function createPaymentGatewayService(deps: PaymentGatewayServiceDeps) {
         amount: input.amount,
         amountExact: input.amountExact,
         currencyCode: input.currencyCode,
+        currencyDecimalPlaces: input.orderId && deps.paymentOrderTotalResolver
+          ? await resolveCurrencyDecimalPlaces(currencyPrecisionContainer, {
+            code: input.currencyCode.trim().toUpperCase(),
+            tenantId: input.tenantId,
+            organizationId: input.organizationId,
+          })
+          : null,
         scope,
         resolver: deps.paymentOrderTotalResolver,
       })

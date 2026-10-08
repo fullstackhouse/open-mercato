@@ -1,6 +1,7 @@
 import { conflict } from '@open-mercato/shared/lib/crud/errors'
 import {
-  countDecimalPlaces,
+  parseDecimal,
+  resolveAmountDecimalPlaces,
   resolveExactDecimal,
   toDecimal,
   type DecimalValue,
@@ -13,12 +14,16 @@ import type {
   PaymentOrderTotalResolver,
 } from '@open-mercato/shared/modules/payment_gateways/types'
 
+const FLOAT_AMOUNT_DUE_TOLERANCE = '0.0001'
+
 /**
- * Below the last stored decimal (at least the 4th) is rounding noise, not a mismatch:
- * 0.0001 for fiat amounts, finer for amounts carrying more decimals.
+ * Below the currency's amount precision (at least the 4th decimal) is rounding noise,
+ * not a mismatch. A resolver that only reports a float `amountDue` keeps the historical
+ * 0.0001 tolerance, so binary float noise (`0.30000000000000004`) is never a mismatch.
  */
-function amountTolerance(amountDue: string): DecimalValue {
-  return toDecimal(`1e-${Math.max(4, countDecimalPlaces(amountDue))}`)
+function amountTolerance(orderTotal: PaymentOrderTotal, currencyDecimalPlaces?: number | null): DecimalValue {
+  if (parseDecimal(orderTotal.amountDueExact) === null) return toDecimal(FLOAT_AMOUNT_DUE_TOLERANCE)
+  return toDecimal(`1e-${resolveAmountDecimalPlaces(currencyDecimalPlaces)}`)
 }
 
 function normalizeCurrencyCode(currencyCode: string): string {
@@ -31,7 +36,7 @@ function normalizeCurrencyCode(currencyCode: string): string {
  * fall back to the English template shipped with each call, so a missing
  * dictionary degrades the wording of a rejection but never its outcome.
  */
-async function resolveConflictTranslator(): Promise<TranslateWithFallbackFn> {
+export async function resolvePaymentGatewayTranslator(): Promise<TranslateWithFallbackFn> {
   try {
     const { translate } = await resolveTranslations()
     return translate
@@ -50,6 +55,7 @@ export function assertSessionAmountMatchesOrderTotal(
   requested: { orderId: string; amount: number; amountExact?: string | null; currencyCode: string },
   orderTotal: PaymentOrderTotal,
   translate: TranslateWithFallbackFn,
+  currencyDecimalPlaces?: number | null,
 ): void {
   if (normalizeCurrencyCode(requested.currencyCode) !== normalizeCurrencyCode(orderTotal.currencyCode)) {
     throw conflict(translate(
@@ -60,7 +66,7 @@ export function assertSessionAmountMatchesOrderTotal(
   }
   const requestedAmount = toDecimal(resolveExactDecimal(requested.amountExact, requested.amount) ?? 0)
   const amountDue = resolveExactDecimal(orderTotal.amountDueExact, orderTotal.amountDue) ?? '0'
-  if (requestedAmount.minus(amountDue).abs().gt(amountTolerance(amountDue))) {
+  if (requestedAmount.minus(amountDue).abs().gt(amountTolerance(orderTotal, currencyDecimalPlaces))) {
     throw conflict(translate(
       'payment_gateways.errors.sessionAmountMismatch',
       'Payment session amount {amount} does not match the amount due for order {orderId}',
@@ -83,6 +89,7 @@ export async function reconcileSessionAmountWithOrder(input: {
   amount: number
   amountExact?: string | null
   currencyCode: string
+  currencyDecimalPlaces?: number | null
   scope: PaymentGatewayScope
   resolver?: PaymentOrderTotalResolver | null
 }): Promise<void> {
@@ -90,7 +97,7 @@ export async function reconcileSessionAmountWithOrder(input: {
   if (!orderId || !resolver) return
 
   const orderTotal = await resolver.resolveOrderTotal(orderId, input.scope)
-  const translate = await resolveConflictTranslator()
+  const translate = await resolvePaymentGatewayTranslator()
   if (!orderTotal) {
     throw conflict(translate(
       'payment_gateways.errors.sessionOrderNotFound',
@@ -103,5 +110,6 @@ export async function reconcileSessionAmountWithOrder(input: {
     { orderId, amount: input.amount, amountExact: input.amountExact, currencyCode: input.currencyCode },
     orderTotal,
     translate,
+    input.currencyDecimalPlaces,
   )
 }

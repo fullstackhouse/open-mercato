@@ -7,7 +7,7 @@ import { decimalToNumber, isDecimalInput, toDecimal } from '@open-mercato/shared
  */
 const positiveAmountSchema = z
   .union([z.number(), z.string()])
-  .refine((value) => isDecimalInput(value) && toDecimal(value).gt(0), { message: 'Amount must be greater than zero' })
+  .refine((value) => isDecimalInput(value) && toDecimal(value).gt(0), { message: 'payment_gateways.errors.amountMustBePositive' })
   .transform((value) => decimalToNumber(value))
 
 const unifiedPaymentStatusSchema = z.enum([

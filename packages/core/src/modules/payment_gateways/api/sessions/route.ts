@@ -6,6 +6,7 @@ import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { createSessionSchema } from '../../data/validators'
 import type { PaymentGatewayService } from '../../lib/gateway-service'
+import { buildInvalidPayloadBody, findAmountPrecisionError } from '../../lib/amount-precision'
 import { paymentGatewaysTag } from '../openapi'
 import {
   resolveUserFeatures,
@@ -29,10 +30,19 @@ export async function POST(req: Request) {
   const payload = await readJsonSafe<unknown>(req)
   const parsed = createSessionSchema.safeParse(payload)
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid payload', details: parsed.error.flatten() }, { status: 422 })
+    return NextResponse.json(await buildInvalidPayloadBody(parsed.error), { status: 422 })
   }
 
+  const amountExact = resolveExactDecimal((payload as Record<string, unknown> | null)?.amount, parsed.data.amount) ?? undefined
   const container = await createRequestContainer()
+  const precisionError = await findAmountPrecisionError(container, {
+    amount: amountExact ?? parsed.data.amount,
+    currencyCode: parsed.data.currencyCode,
+    scope: { organizationId: auth.orgId, tenantId: auth.tenantId },
+  })
+  if (precisionError) {
+    return NextResponse.json(precisionError, { status: 400 })
+  }
   const guardResult = await runPaymentGatewayMutationGuards(
     container,
     {
@@ -63,7 +73,7 @@ export async function POST(req: Request) {
       paymentId: crypto.randomUUID(),
       orderId: parsed.data.orderId,
       amount: parsed.data.amount,
-      amountExact: resolveExactDecimal((payload as Record<string, unknown> | null)?.amount, parsed.data.amount) ?? undefined,
+      amountExact,
       currencyCode: parsed.data.currencyCode,
       captureMethod: parsed.data.captureMethod,
       description: parsed.data.description,
@@ -117,6 +127,7 @@ export const openApi = {
       tags: [paymentGatewaysTag],
       responses: [
         { status: 201, description: 'Payment session created' },
+        { status: 400, description: 'Amount has more decimal places than the currency supports' },
         { status: 409, description: 'Amount or currency does not match the referenced order' },
         { status: 422, description: 'Invalid payload or unknown provider' },
         { status: 502, description: 'Gateway provider error' },
