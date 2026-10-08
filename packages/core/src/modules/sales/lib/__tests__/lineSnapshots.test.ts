@@ -143,13 +143,14 @@ describe('resolveUpsertDiscountFields', () => {
   it('treats a caller-supplied amount as a caller assertion, defaulting to the unit basis', () => {
     const fields = resolveUpsertDiscountFields(5, undefined, { discountAmount: 99 })
 
-    expect(fields).toEqual({ discountAmount: 5, discountAmountBasis: 'unit' })
+    expect(fields).toEqual({ discountAmount: 5, discountAmountExact: '5', discountAmountBasis: 'unit' })
     expect(fields.discountAmountFromStoredRow).toBeUndefined()
   })
 
   it('honours an explicit caller basis', () => {
     expect(resolveUpsertDiscountFields(5, 'line', null)).toEqual({
       discountAmount: 5,
+      discountAmountExact: '5',
       discountAmountBasis: 'line',
     })
   })
@@ -160,6 +161,7 @@ describe('resolveUpsertDiscountFields', () => {
     // value.
     expect(resolveUpsertDiscountFields(0, undefined, { discountAmount: 99 })).toEqual({
       discountAmount: 0,
+      discountAmountExact: '0',
       discountAmountBasis: 'unit',
     })
   })
@@ -167,7 +169,7 @@ describe('resolveUpsertDiscountFields', () => {
   it('falls back to the stored amount as a line total when the caller sends nothing', () => {
     const fields = resolveUpsertDiscountFields(undefined, undefined, { discountAmount: 12.75 })
 
-    expect(fields).toEqual({ discountAmount: 12.75, discountAmountFromStoredRow: true })
+    expect(fields).toEqual({ discountAmount: 12.75, discountAmountExact: '12.75', discountAmountFromStoredRow: true })
     expect(fields.discountAmountBasis).toBeUndefined()
   })
 
@@ -176,8 +178,14 @@ describe('resolveUpsertDiscountFields', () => {
     // "not supplied" before the engine ever sees it.
     expect(resolveUpsertDiscountFields(undefined, undefined, null)).toEqual({
       discountAmount: null,
+      discountAmountExact: null,
       discountAmountFromStoredRow: false,
     })
+  })
+
+  it('keeps the exact caller amount beyond float precision', () => {
+    const exact = '0.123456789012345678901'
+    expect(resolveUpsertDiscountFields(Number(exact), 'line', null, exact).discountAmountExact).toBe(exact)
   })
 
   it('never sets both origin fields at once', () => {

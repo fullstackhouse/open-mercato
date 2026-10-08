@@ -11,11 +11,13 @@ import {
   parseDecimal,
   positiveDecimalStringSchema,
   resolveAmountDecimalPlaces,
+  resolveExactDecimal,
   resolveIsoCurrencyDecimalPlaces,
   roundDecimal,
   subtractDecimals,
   sumDecimals,
   toDecimal,
+  withExactAmounts,
 } from '../decimal'
 
 describe('decimal', () => {
@@ -107,5 +109,35 @@ describe('decimal', () => {
     expect(nonNegativeDecimalStringSchema.parse('0')).toBe('0')
     expect(positiveDecimalStringSchema.safeParse('0').success).toBe(false)
     expect(positiveDecimalStringSchema.parse('0.1')).toBe('0.1')
+  })
+})
+
+describe('resolveExactDecimal', () => {
+  it('prefers the exact string while the legacy number still matches it', () => {
+    expect(resolveExactDecimal('0.000000000000000000123', 1.23e-19)).toBe('0.000000000000000000123')
+    expect(resolveExactDecimal('12345678901234567890.1', Number('12345678901234567890.1'))).toBe('12345678901234567890.1')
+  })
+
+  it('falls back to the legacy number once it was changed on its own', () => {
+    expect(resolveExactDecimal('10.123456789', 12)).toBe('12')
+  })
+
+  it('handles missing values', () => {
+    expect(resolveExactDecimal(null, 5)).toBe('5')
+    expect(resolveExactDecimal('7.5', undefined)).toBe('7.5')
+    expect(resolveExactDecimal(undefined, null)).toBeNull()
+    expect(resolveExactDecimal('abc', 'def')).toBeNull()
+  })
+})
+
+describe('withExactAmounts', () => {
+  it('keeps raw string digits next to the coerced numbers', () => {
+    const raw = { amount: '0.123456789012345678901', other: 'x', fee: 5 }
+    const parsed = { amount: Number(raw.amount), other: 'x', fee: 5, missing: undefined as number | undefined }
+    const result = withExactAmounts(parsed, raw, ['amount', 'fee', 'missing'] as const)
+    expect(result.amountExact).toBe('0.123456789012345678901')
+    expect(result.feeExact).toBe('5')
+    expect('missingExact' in result).toBe(false)
+    expect(result.amount).toBe(parsed.amount)
   })
 })

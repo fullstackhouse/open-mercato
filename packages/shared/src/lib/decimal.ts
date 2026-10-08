@@ -126,6 +126,41 @@ export function decimalToNumber(value: DecimalInput): number {
   return Number(decimalToString(value))
 }
 
+/**
+ * Picks the exact decimal string for a dual `number` + `<field>Exact` pair.
+ * The exact value wins unless the legacy `number` was changed on its own
+ * (e.g. by a hook unaware of the exact field) - then the number is used.
+ */
+export function resolveExactDecimal(exact: unknown, legacy: unknown): string | null {
+  const exactDecimal = parseDecimal(exact)
+  const legacyDecimal = parseDecimal(legacy)
+  if (exactDecimal && (typeof legacy !== 'number' || decimalToNumber(exactDecimal) === legacy)) {
+    return decimalToString(exactDecimal)
+  }
+  return legacyDecimal ? decimalToString(legacyDecimal) : null
+}
+
+export type WithExactAmounts<T, K extends string> = T & { [P in K as `${P}Exact`]?: string | null }
+
+/**
+ * Adds `<field>Exact` strings next to number fields a zod schema coerced, taken
+ * from the raw input so digits beyond float precision survive the parse.
+ */
+export function withExactAmounts<T extends object, K extends string>(
+  parsed: T,
+  raw: unknown,
+  fields: readonly K[],
+): WithExactAmounts<T, K> {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const values = parsed as Record<string, unknown>
+  const exact: Record<string, string | null> = {}
+  for (const field of fields) {
+    if (values[field] === undefined) continue
+    exact[`${field}Exact`] = resolveExactDecimal(source[field], values[field])
+  }
+  return { ...parsed, ...exact } as WithExactAmounts<T, K>
+}
+
 export function resolveAmountDecimalPlaces(currencyDecimalPlaces?: number | null): number {
   if (typeof currencyDecimalPlaces !== 'number' || !Number.isInteger(currencyDecimalPlaces) || currencyDecimalPlaces < 0) {
     return DEFAULT_AMOUNT_DECIMAL_PLACES
