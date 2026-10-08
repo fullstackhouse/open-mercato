@@ -38,17 +38,19 @@ import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import type { ModuleConfigService } from '@open-mercato/core/modules/configs/lib/module-config-service'
 import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
+import { resolveCurrencyDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
+import { decimalToNumber } from '@open-mercato/shared/lib/decimal'
 import { staffTimeReportPreviewSchema } from '../../../../data/validators'
 import { runTimesheetInterceptors } from '../../_shared/withTimesheetInterceptors'
 import { MANAGE_PROJECTS_FEATURE, resolveProjectAccess } from '../../../../lib/time-tracking/access'
 import { resolveFeatureAccess } from '../../../../lib/time-tracking/featureAccess'
 import { readTimeTrackingSettings } from '../../../../lib/time-tracking/settings'
 import { loadReportData } from '../../../../lib/timesheets-reports/loadReportData'
+import { sumAmountsExact } from '../../../../lib/time-tracking/cost'
 import {
   computeReportTotals,
   resolveEntryValues,
   resolveReportCurrency,
-  sumAmounts,
   type ReportGroup,
   type ReportInputEntry,
 } from '../../../../lib/timesheets-reports/reportTotals'
@@ -84,7 +86,12 @@ export type PreviewProjectTotals = {
 export function summarizeProjectsForPreview(
   projects: readonly { id: string; name: string; hourlyRate: number | null; currencyCode: string | null }[],
   entries: readonly ReportInputEntry[],
-  options: { includeAlreadyReported: boolean; excludeNonBillable: boolean; canSeeMoney: boolean },
+  options: {
+    includeAlreadyReported: boolean
+    excludeNonBillable: boolean
+    canSeeMoney: boolean
+    amountDecimalPlaces?: number
+  },
 ): PreviewProjectTotals[] {
   const byProject = new Map<string, ReportInputEntry[]>()
   for (const entry of entries) {
@@ -97,12 +104,12 @@ export function summarizeProjectsForPreview(
     const projectEntries = byProject.get(project.id) ?? []
     let billableMinutes = 0
     let nonbillableMinutes = 0
-    const amounts: Array<number | null> = []
+    const amounts: Array<string | null> = []
     let entryCount = 0
 
     for (const entry of projectEntries) {
       if (entry.frozen && !options.includeAlreadyReported) continue
-      const values = resolveEntryValues(entry, project)
+      const values = resolveEntryValues(entry, project, options.amountDecimalPlaces)
       if (!values.isBillable) {
         if (options.excludeNonBillable) continue
         nonbillableMinutes += values.minutes
@@ -110,7 +117,7 @@ export function summarizeProjectsForPreview(
         continue
       }
       billableMinutes += values.minutes
-      amounts.push(values.amount)
+      amounts.push(values.amountExact)
       entryCount += 1
     }
 
@@ -122,7 +129,7 @@ export function summarizeProjectsForPreview(
       entryCount,
       billableMinutes,
       nonbillableMinutes,
-      amount: options.canSeeMoney ? sumAmounts(amounts) : null,
+      amount: options.canSeeMoney ? decimalToNumber(sumAmountsExact(amounts, options.amountDecimalPlaces)) : null,
     }
   })
 }
@@ -261,6 +268,12 @@ export async function POST(req: Request) {
       })
     }
 
+    const amountDecimalPlaces =
+      (await resolveCurrencyDecimalPlaces(container, {
+        code: currency.currencyCode ?? '',
+        tenantId,
+        organizationId,
+      })) ?? undefined
     const totals = computeReportTotals({
       entries: data.entries,
       projects: data.projects,
@@ -269,6 +282,7 @@ export async function POST(req: Request) {
         grouping: parsed.grouping,
         nonbillableMode: parsed.nonbillableMode,
         includeAlreadyReported: parsed.includeAlreadyReported,
+        amountDecimalPlaces,
       },
       labels: reportLabels(translate),
     })
@@ -288,6 +302,7 @@ export async function POST(req: Request) {
         includeAlreadyReported: parsed.includeAlreadyReported,
         excludeNonBillable: parsed.nonbillableMode === 'exclude',
         canSeeMoney,
+        amountDecimalPlaces,
       }),
       groups: canSeeMoney ? totals.groups : stripMoney(totals.groups),
       totals: {

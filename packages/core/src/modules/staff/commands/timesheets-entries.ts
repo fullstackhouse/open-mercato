@@ -1566,10 +1566,7 @@ const duplicateTimeEntryCommand: CommandHandler<StaffTimeEntryDuplicateInput, { 
         dealId: source.dealId ?? null,
         orderId: source.orderId ?? null,
         isBillable: source.isBillable,
-        rateOverrideAmount:
-          source.rateOverrideAmount === null || source.rateOverrideAmount === undefined
-            ? null
-            : Number(source.rateOverrideAmount),
+        rateOverrideAmount: source.rateOverrideAmount ?? null,
         description: source.notes ?? null,
         // A copy is typed, not timed: carrying `started_at`/`ended_at` over would
         // manufacture an overlap with the entry it was copied from (US-D7).
