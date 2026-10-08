@@ -176,6 +176,8 @@ export type SalesLineCalculationResult = {
   taxAmountExact?: string
   discountAmount: number
   discountAmountExact?: string
+  /** Decimal places the line's amounts were rounded to (the currency precision). */
+  amountDecimalPlaces?: number
   adjustments: SalesAdjustmentDraft[]
 }
 

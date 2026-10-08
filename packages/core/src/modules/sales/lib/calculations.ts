@@ -239,6 +239,7 @@ function buildBaseLineResult(line: SalesLineSnapshot, decimalPlaces: number): Sa
     grossAmount: 0,
     taxAmount: 0,
     discountAmount: 0,
+    amountDecimalPlaces: decimalPlaces,
     adjustments: [],
   }
   result = withExactAmount(result, 'netAmount', round(netSubtotal))

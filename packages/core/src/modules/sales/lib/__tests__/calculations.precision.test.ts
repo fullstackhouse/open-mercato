@@ -63,6 +63,7 @@ describe('sales calculations with arbitrary precision', () => {
 
     expect(result.taxAmountExact).toBe('0.02839506147')
     expect(result.grossAmountExact).toBe('0.15185185047')
+    expect(result.amountDecimalPlaces).toBe(18)
   })
 
   it('keeps the 4 decimal default for fiat currencies', async () => {

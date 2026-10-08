@@ -3276,10 +3276,15 @@ function deriveUnitAmount(
   totalExact: string | null | undefined,
   total: number,
   quantity: number | null | undefined,
+  amountDecimalPlaces?: number,
 ): string {
   const divisor = Math.max(quantity || 1, 1);
   const totalAmount = exactAmountString(totalExact, total) ?? "0";
-  const decimalPlaces = Math.max(DEFAULT_AMOUNT_DECIMAL_PLACES, countDecimalPlaces(totalAmount));
+  const decimalPlaces = Math.max(
+    DEFAULT_AMOUNT_DECIMAL_PLACES,
+    amountDecimalPlaces ?? 0,
+    countDecimalPlaces(totalAmount),
+  );
   return decimalToString(
     roundDecimal(divideDecimals(totalAmount, divisor, FX_DECIMAL_PLACES), decimalPlaces),
   );
@@ -3316,10 +3321,10 @@ function convertLineCalculationToEntityInput(
     currencyCode: line.currencyCode,
     unitPriceNet:
       exactAmountString(line.unitPriceNetExact, line.unitPriceNet) ??
-      deriveUnitAmount(lineResult.netAmountExact, lineResult.netAmount, line.quantity),
+      deriveUnitAmount(lineResult.netAmountExact, lineResult.netAmount, line.quantity, lineResult.amountDecimalPlaces),
     unitPriceGross:
       exactAmountString(line.unitPriceGrossExact, line.unitPriceGross) ??
-      deriveUnitAmount(lineResult.grossAmountExact, lineResult.grossAmount, line.quantity),
+      deriveUnitAmount(lineResult.grossAmountExact, lineResult.grossAmount, line.quantity, lineResult.amountDecimalPlaces),
     discountAmount: exactAmountString(lineResult.discountAmountExact, lineResult.discountAmount) ?? "0",
     discountPercent: toNumericString(line.discountPercent) ?? "0",
     taxRate: toNumericString(line.taxRate) ?? "0",
