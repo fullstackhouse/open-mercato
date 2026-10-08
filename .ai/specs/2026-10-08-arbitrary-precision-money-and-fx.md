@@ -37,7 +37,7 @@ Open Mercato stores money in fixed-scale columns: `(18,4)` in sales, `(16,4)` fo
 | D1 | Money and FX columns become unconstrained `numeric` | Postgres allows 131072 integer and 16383 fractional digits. `ALTER ... TYPE numeric` from `numeric(p,s)` does not rewrite the table |
 | D2 | `big.js` is a production dependency of `@open-mercato/shared` | Small (~3 KB), immutable, exact `plus`/`minus`/`times`. Decimal places apply only to `div`/`sqrt`. `decimal.js` rounds every operation to N significant digits, which would re-introduce a limit |
 | D3 | Division keeps `max(decimalPlaces, 17 significant digits)` decimals. `decimalPlaces` is a lower bound, not a rounding step | Infinite expansions (`1/3`) must be cut somewhere. 17 significant digits is what an IEEE 754 double needs to round-trip, so the result is never worse than `number`. Only FX values and intermediate results keep the extra digits; stored amounts are rounded afterwards (D4) |
-| D4 | Every stored amount derived by division is rounded with `roundDecimal(value, amountDecimalPlaces)`, where `amountDecimalPlaces` is `max(4, currency.decimalPlaces)`, falling back to the `Intl` ISO digits and then to 4 | Fiat keeps today's 4 dp internal precision (currencies AGENTS rule 1): `100 / 1.23` is stored as `81.3008`. Crypto gets its full precision |
+| D4 | Every stored amount derived by division is rounded with `roundDecimal(value, amountDecimalPlaces)`, where `amountDecimalPlaces` is `max(4, currency.decimalPlaces)`, falling back to the `Intl` ISO digits and then to 4 | Fiat keeps today's 4 dp internal precision (currencies AGENTS rule 1): `100 / 1.23` is stored as `81.3008`. Crypto gets its full precision. Catalog prices and client-supplied sales line amounts (discount, tax, gross total) are also rounded to this precision, as the old `(16,4)` and `(18,4)` columns did for fiat |
 | D5 | FX division precision is 50 dp | Far beyond any real rate. Combined with D3, tiny rates still keep 17 significant digits |
 | D6 | Rounding mode is half-up (away from zero) | Matches `Math.round` for positive values. Negative halves now round away from zero, the accounting convention |
 | D7 | Dual fields: keep `number` fields as float copies (documented "prefer the exact field"), add optional `<field>Exact: string` | Additive for TS contracts and API payloads; existing consumers keep compiling |
@@ -71,7 +71,8 @@ Plain functions over `big.js`:
 - `resolveAmountDecimalPlaces(currencyDecimalPlaces)`: applies D4.
 - `decimalStringSchema` (zod): accepts `number | string` and outputs a canonical string. Comes with non-negative and positive variants.
 - `resolveExactDecimal(exact, legacy)` - the bridge rule: the exact string wins unless the float was changed on its own.
-- `withExactAmounts(parsed, raw, fields)` - adds `<field>Exact` strings from the raw request next to coerced numbers.
+- `withExactAmounts(parsed, raw, fields)` - adds `<field>Exact` strings from the raw request next to coerced numbers. When the raw field is already a number, it reads the `<field>Exact` string attached to the raw input instead.
+- `withExactListAmounts(items, raw, key, fields)` - the same for each item of a nested list (document lines, payment allocations).
 - `amountComparisonTolerance(dp)` - half a minor unit at the given precision (0.005 at 4).
 - `@open-mercato/shared/lib/currencyPrecision`: `resolveCurrencyDecimalPlaces` (raw currency digits) and `resolveCurrencyAmountDecimalPlaces` (`max(4, dp)`).
 - `parseLocaleDecimal(input, locale)` in `lib/number.ts` - exact variant of `parseLocaleNumber` for user-typed money.
@@ -90,6 +91,7 @@ The currencies module registers a `currencyPrecisionService` DI service with `ge
 
 ### Persistence
 
+- API routes parse the body before the command runs, which turns amounts into floats. Each route attaches `<field>Exact` strings taken from the raw body (`withExactAmounts`, `withExactListAmounts`, the sales helpers in `sales/lib/exactAmountFields.ts`), and the command reads them. Routes use a passthrough action schema, because `makeCrudRoute` builds `raw` from that schema's output. Commands with strict schemas (warranty claims) strip the `<field>Exact` keys before parsing.
 - Commands write `Exact` strings to entities, never `number.toString()`. `toNumericString` accepts strings and never pads or emits exponent notation.
 - Checkout transactions store the charged amount rounded to the currency's own decimals, so the stored amount matches what the gateway charges.
 - Settlement checks (fully paid, refunded or shipped) keep a tolerance of one unit at `max(4, decimals of either amount)`.
@@ -124,8 +126,8 @@ Existing rows keep their stored scale (`40.0000`). New rows store the value as w
 ## API Contracts
 
 - `GET /api/currencies/exchange-rates` items gain `metadata: Record<string, unknown> | null`. `POST` and `PUT` accept `metadata`. `rate` accepts any number of decimals.
-- **Endpoints that return amounts as JSON numbers** keep them and add a `<field>Exact` string sibling: sales document list/detail totals, checkout templates/links/transactions, payment gateway status, customer deal stats/summary.
-- **Endpoints that return amounts as strings** keep strings. Their OpenAPI schemas are corrected from `number` to `string`: sales lines, adjustments, payments, catalog prices, warranty claim totals.
+- **Endpoints that return amounts as JSON numbers** keep them and add a `<field>Exact` string sibling: sales document list/detail totals, checkout templates/links/transactions, payment gateway status (`amountExact`, `amountReceivedExact`), capture (`capturedAmountExact`) and refund (`refundedAmountExact`), customer deal stats (`dealValueExact`) and summary (`valueExact`, `avgDealExact`; the number fields stay rounded to whole units), customer group terms, warranty claim settings (`autoApproveMaxAmountExact`), staff report totals.
+- **Endpoints that return amounts as strings** keep strings. Their OpenAPI schemas are corrected from `number` to `string`: sales lines, adjustments, payments, shipments, catalog prices, warranty claim totals.
 - **Write endpoints** accept amounts as `number` or decimal `string`. Strings are recommended for exactness.
 
 ## Integration Coverage
@@ -135,14 +137,16 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 | Test | Covers |
 |------|--------|
 | `currencies/__integration__/TC-CUR-016` | Exchange rate with 30 decimals and `metadata`: create, read back exactly, update metadata |
-| `sales/__integration__/TC-SALES-PRECISION-001` | 18-dp currency order (currency, order, line, tax, payment); totals read back as exact strings |
-| `catalog/__integration__/TC-CAT-PRECISION-001` | Product price with 18 decimals through the prices API |
-| `checkout/__integration__/TC-CHKT-PRECISION-001` | Link template and link fixed/custom amounts read back with `*Exact`; transaction amount rounded to the currency decimals |
-| `payment_gateways/__integration__/TC-PGWY-PRECISION-001` | Gateway status returns `amountExact` / `capturedAmountExact` / `refundedAmountExact` / `amountDueExact` for an 18-dp order |
-| `customers/__integration__/TC-CRM-PRECISION-001` | Deal `valueAmount` and company `annualRevenue` beyond 2 decimals; deal stats/summary `*Exact` |
+| `sales/__integration__/TC-SALES-PRECISION-001` | 18-dp currency order (currency, order, line, tax, payment, 25-digit exchange rate); totals read back as exact strings |
+| `sales/__integration__/TC-SALES-PRECISION-002` | Shipping method base rates and invoice totals and lines beyond float precision |
+| `catalog/__integration__/TC-CAT-PRECISION-001` | Variant price with 18 decimals through the prices API: create and update |
+| `checkout/__integration__/TC-CHKT-PRECISION-001` | Link template and link fixed/custom amounts read back with `*Exact`; template amount changes reach linked links; transaction amount rounded to the currency decimals |
+| `payment_gateways/__integration__/TC-PGWY-PRECISION-001` | 18-dp order: session, status (`amountExact`, `amountReceivedExact`), partial capture, capture ceiling and refund keep exact amounts |
+| `customers/__integration__/TC-CRM-PRECISION-001` | Deal `valueAmount` and company `annualRevenue` beyond 2 decimals; deal stats `dealValueExact`; summary exact fields |
 | `customer_groups/__integration__/TC-CGRP-PRECISION-001` | Group terms (`defaultCreditLimit`, `approvalRequiredAbove`, `minOrderValue`) beyond 2 decimals |
-| `staff/__integration__/TC-STAFF-PRECISION-001` | Project hourly rate and time entry rate override beyond 4 decimals; report totals `*Exact` |
-| `warranty_claims/__integration__/TC-WC-PRECISION-001` | Claim line credit amounts beyond 4 decimals; claim totals read back exactly |
+| `staff/__integration__/TC-STAFF-PRECISION-001` | Project hourly rate and time entry rate override beyond 4 decimals; preview and report totals `*Exact` |
+| `warranty_claims/__integration__/TC-WC-PRECISION-001` | Claim line amounts beyond 4 decimals; claim totals read back exactly |
+| `warranty_claims/__integration__/TC-WC-PRECISION-002` | Settings `autoApproveMaxAmount` beyond float precision |
 
 ## Migration & Backward Compatibility
 
@@ -186,3 +190,4 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 - 2026-10-08: Spec created.
 - 2026-10-08: Implementation in progress on `pb/exchange-rate-metadata`. D7/D8 refined (float copies instead of `@deprecated`, validators keep `number` output); added D10 (staff rounding) and D11 (central precision resolution).
 - 2026-10-08: Review fixes. D3/D4 state that stored amounts are rounded after division; TLDR and BC table match D7/D8; integration coverage lists every module that gains exact fields; exponent cap and hook bridge rules documented.
+- 2026-10-08: API routes attach `<field>Exact` strings before the command parses the body (`withExactListAmounts` added). Coverage table lists the shipped tests; D4 notes that catalog prices and client-supplied line amounts round to the amount precision.
