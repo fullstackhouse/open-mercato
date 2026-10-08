@@ -6,6 +6,7 @@ import { NBPProvider } from './services/providers/nbp'
 import { RaiffeisenPolandProvider } from './services/providers/raiffeisen'
 import { listCurrencyRateProviders } from './services/providers/registry'
 import { BaseCurrencyService } from './services/baseCurrencyService'
+import { CurrencyPrecisionService } from './services/currencyPrecisionService'
 
 export function register(container: AppContainer) {
   container.register({
@@ -31,6 +32,9 @@ export function register(container: AppContainer) {
     },
     baseCurrencyService: {
       resolve: (c) => new BaseCurrencyService(c.resolve<EntityManager>('em')),
+    },
+    currencyPrecisionService: {
+      resolve: (c) => new CurrencyPrecisionService(c.resolve<EntityManager>('em')),
     },
   })
 }

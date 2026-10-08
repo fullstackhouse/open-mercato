@@ -12,6 +12,8 @@ export function truncateToMinute(date: Date): Date {
   return truncated
 }
 
+export const MAX_CURRENCY_DECIMAL_PLACES = 50
+
 // Currency Code validation (ISO 4217 format)
 const currencyCodeSchema = z
   .string()
@@ -47,7 +49,7 @@ export const currencyCreateSchema = z.object({
   code: currencyCodeSchema,
   name: z.string().min(1).max(200),
   symbol: z.string().max(10).nullable().optional(),
-  decimalPlaces: z.number().int().min(0).max(8).optional(),
+  decimalPlaces: z.number().int().min(0).max(MAX_CURRENCY_DECIMAL_PLACES).optional(),
   thousandsSeparator: z.string().max(5).nullable().optional(),
   decimalSeparator: z.string().max(5).nullable().optional(),
   isBase: z.boolean().optional(),
@@ -61,7 +63,7 @@ export const currencyUpdateSchema = z.object({
   code: currencyCodeSchema.optional(),
   name: z.string().min(1).max(200).optional(),
   symbol: z.string().max(10).nullable().optional(),
-  decimalPlaces: z.number().int().min(0).max(8).optional(),
+  decimalPlaces: z.number().int().min(0).max(MAX_CURRENCY_DECIMAL_PLACES).optional(),
   thousandsSeparator: z.string().max(5).nullable().optional(),
   decimalSeparator: z.string().max(5).nullable().optional(),
   isBase: z.boolean().optional(),
