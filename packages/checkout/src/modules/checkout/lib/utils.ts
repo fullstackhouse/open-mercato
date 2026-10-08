@@ -90,8 +90,9 @@ export function pickExplicitParsedOverrides<TInput extends Record<string, unknow
   if (!isRecord(rawInput)) return {}
 
   const overrides: Partial<TInput> = {}
-  for (const key of Object.keys(parsed) as Array<keyof TInput>) {
-    if (!Object.prototype.hasOwnProperty.call(rawInput, key)) continue
+  for (const key of Object.keys(parsed) as Array<keyof TInput & string>) {
+    const sourceKey = key.endsWith('Exact') ? key.slice(0, -'Exact'.length) : key
+    if (!Object.prototype.hasOwnProperty.call(rawInput, key) && !Object.prototype.hasOwnProperty.call(rawInput, sourceKey)) continue
     overrides[key] = parsed[key]
   }
 

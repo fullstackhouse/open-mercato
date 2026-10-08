@@ -3,17 +3,20 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { clearPaymentGatewayDescriptors, registerPaymentGatewayDescriptor } from '@open-mercato/shared/modules/payment_gateways/types'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { CheckoutLink, CheckoutTransaction } from '../../data/entities'
+import { createLinkSchema } from '../../data/validators'
 import {
   applyTerminalTransactionState,
   buildConsentProof,
   ensureUniqueSlug,
   getCheckoutCustomerFieldSemanticType,
+  parseCheckoutInput,
   pickExplicitParsedOverrides,
   resolveLoadedCheckoutCustomFields,
   resolveSubmittedAmount,
   serializeTemplateOrLink,
   serializeTransaction,
   signCheckoutAccessToken,
+  toTemplateOrLinkMutationInput,
   validateCheckoutCustomerData,
   validateDescriptorCurrencies,
   verifyCheckoutAccessToken,
@@ -431,6 +434,26 @@ describe('checkout utils', () => {
       name: 'Community Donation',
       title: 'Community donation',
     })
+  })
+
+  it('keeps the exact digits of a money field a template-based link overrides', () => {
+    const template = createLink({
+      fixedPriceAmount: '1.123456789012345678',
+      fixedPriceOriginalAmount: '2.987654321098765432',
+    })
+    const rawInput = {
+      templateId: '7a1f6c1e-2c55-4d8e-9a43-3d1f0b6a9c11',
+      name: 'Precision link',
+      pricingMode: 'fixed',
+      fixedPriceAmount: '3.000000000000000007',
+      fixedPriceCurrencyCode: 'USD',
+      gatewayProviderKey: 'mock',
+    }
+    const { parsed } = parseCheckoutInput(rawInput, createLinkSchema.parse)
+    const merged = toTemplateOrLinkMutationInput(template, pickExplicitParsedOverrides(rawInput, parsed))
+
+    expect(merged.fixedPriceAmountExact).toBe('3.000000000000000007')
+    expect(merged.fixedPriceOriginalAmountExact).toBe('2.987654321098765432')
   })
 
   it('normalizes loaded checkout custom fields back to bare keys', () => {
