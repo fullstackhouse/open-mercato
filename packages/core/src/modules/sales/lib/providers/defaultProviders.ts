@@ -68,10 +68,18 @@ function createSurchargeAdjustment(params: {
   }
 }
 
+function nullToUndefined(value: unknown): unknown {
+  return value === null || value === '' ? undefined : value
+}
+
+function nullToZero(value: unknown): unknown {
+  return value === null || value === '' ? 0 : value
+}
+
 const cashOnDeliverySettings = z.object({
-  feeFlat: nonNegativeDecimalStringSchema.default('0'),
+  feeFlat: z.preprocess(nullToZero, nonNegativeDecimalStringSchema).default('0'),
   feePercent: z.coerce.number().min(0).max(100).default(0),
-  maxOrderTotal: nonNegativeDecimalStringSchema.optional(),
+  maxOrderTotal: z.preprocess(nullToUndefined, nonNegativeDecimalStringSchema.optional()),
 })
 
 const stripeSettings = z.object({
@@ -79,7 +87,7 @@ const stripeSettings = z.object({
   secretKey: z.string().trim().min(1).max(200).optional(),
   webhookSecret: z.string().trim().max(200).optional(),
   applicationFeePercent: z.coerce.number().min(0).max(100).default(0),
-  applicationFeeFlat: nonNegativeDecimalStringSchema.default('0'),
+  applicationFeeFlat: z.preprocess(nullToZero, nonNegativeDecimalStringSchema).default('0'),
   captureMethod: z.enum(['automatic', 'manual']).default('automatic'),
   successUrl: z.string().trim().max(400).optional(),
   cancelUrl: z.string().trim().max(400).optional(),
@@ -92,10 +100,10 @@ const flatRateSettings = z.object({
         id: z.string().optional(),
         name: z.string().trim().max(120).optional(),
         metric: z.enum(['item_count', 'weight', 'volume', 'subtotal']).default('item_count'),
-        min: nonNegativeDecimalStringSchema.default('0'),
-        max: nonNegativeDecimalStringSchema.optional(),
-        amountNet: nonNegativeDecimalStringSchema,
-        amountGross: nonNegativeDecimalStringSchema.optional(),
+        min: z.preprocess(nullToZero, nonNegativeDecimalStringSchema).default('0'),
+        max: z.preprocess(nullToUndefined, nonNegativeDecimalStringSchema.optional()),
+        amountNet: z.preprocess(nullToZero, nonNegativeDecimalStringSchema),
+        amountGross: z.preprocess(nullToUndefined, nonNegativeDecimalStringSchema.optional()),
         currencyCode: z.string().trim().length(3).optional(),
       })
     )
