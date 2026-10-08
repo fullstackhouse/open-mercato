@@ -373,7 +373,7 @@ export class SalesOrder {
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string
 
-  @Property({ name: 'exchange_rate', type: 'numeric', precision: 18, scale: 8, nullable: true })
+  @Property({ name: 'exchange_rate', type: 'numeric', columnType: 'numeric', nullable: true })
   exchangeRate?: string | null
 
   @Property({ name: 'status_entry_id', type: 'uuid', nullable: true })

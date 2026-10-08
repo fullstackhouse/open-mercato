@@ -2,6 +2,7 @@ import { RateProvider, RateProviderResult } from './base'
 import { fromZonedTime } from 'date-fns-tz'
 import { fetchWithTimeout, resolveTimeoutMs } from '@open-mercato/shared/lib/http/fetchWithTimeout'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import { decimalToString, divideDecimals, FX_DECIMAL_PLACES } from '@open-mercato/shared/lib/decimal'
 
 const logger = createLogger('currencies').child({ component: 'raiffeisen' })
 
@@ -105,11 +106,10 @@ export class RaiffeisenPolandProvider implements RateProvider {
         
         // Rate 1: PLN → XXX (inverse of SELL) - this is when bank SELLS foreign currency
         // If sell = 4.5 (1 EUR costs 4.5 PLN), then 1 PLN = 1/4.5 EUR
-        const sellRate = parseFloat(rateData.sell)
         results.push({
           fromCurrencyCode: this.providerBaseCurrency,
           toCurrencyCode: rateData.code,
-          rate: (1 / sellRate).toString(),
+          rate: decimalToString(divideDecimals(1, rateData.sell, FX_DECIMAL_PLACES)),
           source: this.source,
           date: rateDate,
           type: 'sell', // Bank sells foreign currency (from their perspective)

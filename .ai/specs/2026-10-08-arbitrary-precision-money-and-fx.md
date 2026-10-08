@@ -18,7 +18,7 @@ Public TypeScript contracts and API payloads that expose amounts as `number` kee
 
 ## Overview
 
-Open Mercato stores money in fixed-scale columns: `(18,4)` in sales, `(16,4)` for catalog prices, and `(12,2)`, `(14,2)` and `(16,2)` in checkout, staff, customers and customer_groups. FX rates use `(18,8)`. All arithmetic runs on JS `number` with hard-coded rounding to 4, 2 or 100. That rules out crypto currencies such as BTC (8 dp) and ETH (18 dp), and it truncates small or inverted FX rates. For example, IDR to USD is about `0.0000614`, which keeps only 3 significant digits at 8 dp.
+Open Mercato stores money in fixed-scale columns: `(18,4)` in sales, `(16,4)` for catalog prices, and `(12,2)`, `(14,2)` and `(16,2)` in checkout, staff, customers and customer_groups. FX rates use `(18,8)`. All arithmetic runs on JS `number` with hard-coded rounding to 4, 2 or 100. That rules out crypto currencies such as BTC (8 dp) and ETH (18 dp), and it truncates small or inverted FX rates. For example, 1 IDR is about `0.000056` USD, which keeps at most 4 significant digits at 8 dp.
 
 ## Problem Statement
 

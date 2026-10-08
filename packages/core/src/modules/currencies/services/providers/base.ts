@@ -5,6 +5,7 @@ export interface RateProviderResult {
   source: string
   date: Date
   type?: 'buy' | 'sell' | null // Rate type from bank's perspective
+  metadata?: Record<string, unknown> | null // Provider-specific context, e.g. table number
 }
 
 export interface RateProvider {

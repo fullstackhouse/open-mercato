@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isDecimalInput, toDecimal } from '@open-mercato/shared/lib/decimal'
 
 /**
  * Truncates a Date object to minute precision (zeroing seconds and milliseconds).
@@ -28,6 +29,16 @@ const sourceSchema = z
 
 // Rate type validation schema
 const rateTypeSchema = z.enum(['buy', 'sell']).nullable().optional()
+
+const RATE_PATTERN = /^\d+(\.\d+)?$/
+
+const rateSchema = z.string().trim().regex(RATE_PATTERN, 'Rate must be a positive decimal number')
+
+function isPositiveRate(rate: string): boolean {
+  return isDecimalInput(rate) && toDecimal(rate).gt(0)
+}
+
+const exchangeRateMetadataSchema = z.record(z.string(), z.unknown()).nullable().optional()
 
 // Currency validators
 export const currencyCreateSchema = z.object({
@@ -70,17 +81,18 @@ export const exchangeRateCreateSchema = z
     tenantId: z.uuid(),
     fromCurrencyCode: currencyCodeSchema,
     toCurrencyCode: currencyCodeSchema,
-    rate: z.string().regex(/^\d+(\.\d{1,8})?$/, 'Rate must be a positive decimal number'),
+    rate: rateSchema,
     date: z.coerce.date().transform(truncateToMinute),
     source: sourceSchema,
     type: rateTypeSchema,
+    metadata: exchangeRateMetadataSchema,
     isActive: z.boolean().optional(),
   })
   .refine((data) => data.fromCurrencyCode !== data.toCurrencyCode, {
     message: 'From and To currencies must be different',
     path: ['toCurrencyCode'],
   })
-  .refine((data) => parseFloat(data.rate) > 0, {
+  .refine((data) => isPositiveRate(data.rate), {
     message: 'Rate must be greater than zero',
     path: ['rate'],
   })
@@ -92,10 +104,11 @@ export const exchangeRateUpdateSchema = z
     tenantId: z.uuid().optional(),
     fromCurrencyCode: currencyCodeSchema.optional(),
     toCurrencyCode: currencyCodeSchema.optional(),
-    rate: z.string().regex(/^\d+(\.\d{1,8})?$/).optional(),
+    rate: rateSchema.optional(),
     date: z.coerce.date().transform(truncateToMinute).optional(),
     source: sourceSchema.optional(),
     type: rateTypeSchema,
+    metadata: exchangeRateMetadataSchema,
     isActive: z.boolean().optional(),
   })
   .refine(
@@ -114,7 +127,7 @@ export const exchangeRateUpdateSchema = z
   .refine(
     (data) => {
       if (data.rate) {
-        return parseFloat(data.rate) > 0
+        return isPositiveRate(data.rate)
       }
       return true
     },

@@ -2,6 +2,7 @@ import { RateProvider, RateProviderResult } from './base'
 import { fromZonedTime } from 'date-fns-tz'
 import { fetchWithTimeout, resolveTimeoutMs } from '@open-mercato/shared/lib/http/fetchWithTimeout'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import { decimalToString, divideDecimals, FX_DECIMAL_PLACES } from '@open-mercato/shared/lib/decimal'
 
 const logger = createLogger('currencies').child({ component: 'nbp' })
 
@@ -78,6 +79,7 @@ export class NBPProvider implements RateProvider {
         `${table.effectiveDate} 00:00:00`,
         'Europe/Warsaw'
       )
+      const metadata = { table: table.table, tableNo: table.no, tradingDate: table.tradingDate }
 
       for (const rate of table.rates) {
         // NBP rates are from bank's perspective:
@@ -89,10 +91,11 @@ export class NBPProvider implements RateProvider {
         results.push({
           fromCurrencyCode: this.providerBaseCurrency,
           toCurrencyCode: rate.code,
-          rate: (1 / rate.ask).toString(),
+          rate: decimalToString(divideDecimals(1, rate.ask, FX_DECIMAL_PLACES)),
           source: this.source,
           date: effectiveDate,
           type: 'sell', // Bank sells foreign currency (from their perspective)
+          metadata,
         })
 
         // Rate 2: XXX → PLN (using BID) - this is when bank BUYS foreign currency
@@ -100,10 +103,11 @@ export class NBPProvider implements RateProvider {
         results.push({
           fromCurrencyCode: rate.code,
           toCurrencyCode: this.providerBaseCurrency,
-          rate: rate.bid.toString(),
+          rate: decimalToString(rate.bid),
           source: this.source,
           date: effectiveDate,
           type: 'buy', // Bank buys foreign currency (from their perspective)
+          metadata,
         })
       }
 
