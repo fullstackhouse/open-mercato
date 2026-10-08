@@ -132,9 +132,11 @@ function stripMoney(groups: ReportGroup[]): ReportGroup[] {
   return groups.map((group) => ({
     ...group,
     rate: null,
+    rateExact: null,
     amount: 0,
+    amountExact: '0',
     lines: group.lines.map(function strip(line): ReportGroup['lines'][number] {
-      return { ...line, rate: null, amount: 0, children: line.children.map(strip) }
+      return { ...line, rate: null, rateExact: null, amount: 0, amountExact: '0', children: line.children.map(strip) }
     }),
   }))
 }
@@ -293,6 +295,7 @@ export async function POST(req: Request) {
         billableMinutes: totals.billableMinutes,
         nonbillableMinutes: totals.nonbillableMinutes,
         totalAmount: canSeeMoney ? totals.totalAmount : null,
+        totalAmountExact: canSeeMoney ? totals.totalAmountExact : null,
       },
       alreadyReportedCount: totals.alreadyReportedCount,
       alreadyReportedMinutes: totals.alreadyReportedMinutes,
@@ -398,6 +401,7 @@ const previewResponseSchema = z.object({
     billableMinutes: z.number().int(),
     nonbillableMinutes: z.number().int(),
     totalAmount: z.number().nullable(),
+    totalAmountExact: z.string().nullable().optional(),
   }),
   alreadyReportedCount: z.number().int(),
   alreadyReportedMinutes: z.number().int(),

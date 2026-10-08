@@ -18,13 +18,13 @@ function group(overrides: Partial<ProjectEntryGroup> = {}): ProjectEntryGroup {
 describe('summarizeProjectEntryGroups', () => {
   it('returns zeroed rows for projects without entries', () => {
     const result = summarizeProjectEntryGroups([], new Map([['p1', 320]]), ['p1'])
-    expect(result.get('p1')).toEqual({ totalMinutes: 0, billableMinutes: 0, cost: null })
+    expect(result.get('p1')).toEqual({ totalMinutes: 0, billableMinutes: 0, cost: null, costExact: null })
   })
 
   it('sums raw minutes for hours and rounded minutes for cost', () => {
     const groups = [group({ billingMinutes: 60, rawMinutes: 52, entryCount: 1 })]
     const result = summarizeProjectEntryGroups(groups, new Map([['p1', 320]]), ['p1'])
-    expect(result.get('p1')).toEqual({ totalMinutes: 52, billableMinutes: 52, cost: 320 })
+    expect(result.get('p1')).toEqual({ totalMinutes: 52, billableMinutes: 52, cost: 320, costExact: '320' })
   })
 
   it('multiplies a grouped bucket by its entry count', () => {
@@ -45,13 +45,13 @@ describe('summarizeProjectEntryGroups', () => {
       group({ billingMinutes: 60, rawMinutes: 60 }),
     ]
     const result = summarizeProjectEntryGroups(groups, new Map([['p1', 200]]), ['p1'])
-    expect(result.get('p1')).toEqual({ totalMinutes: 180, billableMinutes: 60, cost: 200 })
+    expect(result.get('p1')).toEqual({ totalMinutes: 180, billableMinutes: 60, cost: 200, costExact: '200' })
   })
 
   it('leaves cost null when no rate is available anywhere', () => {
     const groups = [group()]
     const result = summarizeProjectEntryGroups(groups, new Map([['p1', null]]), ['p1'])
-    expect(result.get('p1')).toEqual({ totalMinutes: 60, billableMinutes: 60, cost: null })
+    expect(result.get('p1')).toEqual({ totalMinutes: 60, billableMinutes: 60, cost: null, costExact: null })
   })
 
   it('keeps each project separate and never merges currencies', () => {
@@ -84,7 +84,7 @@ describe('summarizeProjectEntryGroups', () => {
   it('ignores groups for projects outside the requested page', () => {
     const groups = [group({ projectId: 'other' })]
     const result = summarizeProjectEntryGroups(groups, new Map([['p1', 320]]), ['p1'])
-    expect(result.get('p1')).toEqual({ totalMinutes: 0, billableMinutes: 0, cost: null })
+    expect(result.get('p1')).toEqual({ totalMinutes: 0, billableMinutes: 0, cost: null, costExact: null })
     expect(result.has('other')).toBe(false)
   })
 })

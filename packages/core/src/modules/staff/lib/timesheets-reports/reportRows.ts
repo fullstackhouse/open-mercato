@@ -27,7 +27,9 @@ export type ReportRow = {
   hours: string
   isBillable: boolean
   rate: number | null
+  rateExact?: string | null
   amount: number | null
+  amountExact?: string | null
   hasOverride: boolean
   isFrozen: boolean
 }
@@ -37,13 +39,15 @@ export type BuildReportRowsInput = {
   projects: readonly ReportInputProject[]
   directory: ReportDirectory
   labels: { unassignedTask: string; unassignedPerson: string }
+  /** Decimals amounts round to (the report currency's); defaults to 2. */
+  amountDecimalPlaces?: number
 }
 
 export function buildReportRows(input: BuildReportRowsInput): ReportRow[] {
   const projectById = new Map(input.projects.map((project) => [project.id, project]))
   const rows = input.entries.map((entry) => {
     const project = projectById.get(entry.timeProjectId) ?? null
-    const values = resolveEntryValues(entry, project)
+    const values = resolveEntryValues(entry, project, input.amountDecimalPlaces)
     const taskId = entry.taskId ?? null
     return {
       entryId: entry.id,
@@ -60,7 +64,9 @@ export function buildReportRows(input: BuildReportRowsInput): ReportRow[] {
       hours: formatReportMinutes(values.minutes),
       isBillable: values.isBillable,
       rate: values.rate,
+      rateExact: values.rateExact,
       amount: values.amount,
+      amountExact: values.amountExact,
       hasOverride: values.hasOverride,
       isFrozen: values.isFrozen,
     } satisfies ReportRow

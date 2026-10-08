@@ -111,9 +111,11 @@ describe('Staff time project billing validators', () => {
     expect(staffTimeProjectCreateSchema.parse(projectCreateInput({ hourlyRate: null })).hourlyRate).toBeNull()
   })
 
-  test('create rejects a negative rate and an over-precise amount', () => {
+  test('create rejects a negative rate and keeps any precision exactly', () => {
     expect(() => staffTimeProjectCreateSchema.parse(projectCreateInput({ hourlyRate: -1 }))).toThrow()
-    expect(() => staffTimeProjectCreateSchema.parse(projectCreateInput({ hourlyRate: '10.123456' }))).toThrow()
+    expect(staffTimeProjectCreateSchema.parse(projectCreateInput({ hourlyRate: '10.123456789012345678' })).hourlyRate).toBe(
+      '10.123456789012345678',
+    )
   })
 
   test('create defaults budgetKind to none and billable stays optional', () => {
