@@ -30,4 +30,12 @@ describe('CurrencyPrecisionService', () => {
     const { service } = createService(null)
     await expect(service.getDecimalPlaces({ code: 'ETH', tenantId: 't1', organizationId: 'o1' })).resolves.toBeNull()
   })
+
+  it('looks each currency up once per service instance', async () => {
+    const { service, findOne } = createService({ decimalPlaces: 8 })
+    const lookup = { code: 'BTC', tenantId: 't1', organizationId: 'o1' }
+    await expect(Promise.all([service.getDecimalPlaces(lookup), service.getDecimalPlaces(lookup)])).resolves.toEqual([8, 8])
+    await expect(service.getDecimalPlaces({ ...lookup, code: 'btc' })).resolves.toBe(8)
+    expect(findOne).toHaveBeenCalledTimes(1)
+  })
 })

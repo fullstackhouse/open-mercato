@@ -1,3 +1,4 @@
+import { asFunction } from 'awilix'
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/core'
 import type { EntityManager as PostgreSqlEntityManager } from '@mikro-orm/postgresql'
@@ -34,8 +35,10 @@ export function register(container: AppContainer) {
     baseCurrencyService: {
       resolve: (c) => new BaseCurrencyService(c.resolve<EntityManager>('em')),
     },
-    currencyPrecisionService: {
-      resolve: (c) => new CurrencyPrecisionService(c.resolve<PostgreSqlEntityManager>('em')),
-    },
+    currencyPrecisionService: asFunction(
+      ({ em }: { em: PostgreSqlEntityManager }) => new CurrencyPrecisionService(em),
+    )
+      .scoped()
+      .proxy(),
   })
 }
