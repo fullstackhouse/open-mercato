@@ -29,10 +29,13 @@ import {
   ensureOrganizationScope,
   ensureSameScope,
   ensureTenantScope,
+  exactAmountString,
   extractUndoPayload,
+  toNumericString,
   enforceSalesDocumentOptimisticLock,
   SALES_RESOURCE_KIND_ORDER,
 } from './shared'
+import { parseDecimal, toDecimal, withExactAmounts } from '@open-mercato/shared/lib/decimal'
 import { resolveDictionaryEntryValue } from '../lib/dictionaries'
 import { resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
@@ -56,6 +59,8 @@ const shipmentCrudEvents: CrudEventsConfig = {
 
 const ADDRESS_SNAPSHOT_KEY = 'shipmentAddressSnapshot'
 
+const SHIPMENT_EXACT_AMOUNT_FIELDS = ['declaredValueNet', 'declaredValueGross'] as const
+
 export type ShipmentSnapshot = {
   id: string
   orderId: string
@@ -72,7 +77,9 @@ export type ShipmentSnapshot = {
   weightValue: number | null
   weightUnit: string | null
   declaredValueNet: number | null
+  declaredValueNetExact?: string | null
   declaredValueGross: number | null
+  declaredValueGrossExact?: string | null
   currencyCode: string | null
   notesText: string | null
   metadata: Record<string, unknown> | null
@@ -100,7 +107,9 @@ const buildShipmentCreateRedoInput = (snapshot: ShipmentSnapshot): ShipmentCreat
   weightValue: snapshot.weightValue ?? undefined,
   weightUnit: snapshot.weightUnit ?? undefined,
   declaredValueNet: snapshot.declaredValueNet ?? undefined,
+  declaredValueNetExact: snapshot.declaredValueNetExact ?? undefined,
   declaredValueGross: snapshot.declaredValueGross ?? undefined,
+  declaredValueGrossExact: snapshot.declaredValueGrossExact ?? undefined,
   currencyCode: snapshot.currencyCode ?? undefined,
   notes: snapshot.notesText ?? undefined,
   metadata: snapshot.metadata ? cloneJson(snapshot.metadata) : undefined,
@@ -214,6 +223,8 @@ export async function loadShipmentSnapshot(em: EntityManager, id: string): Promi
       shipment.declaredValueGross !== undefined && shipment.declaredValueGross !== null
         ? Number(shipment.declaredValueGross)
         : null,
+    declaredValueNetExact: toNumericString(shipment.declaredValueNet),
+    declaredValueGrossExact: toNumericString(shipment.declaredValueGross),
     currencyCode: shipment.currencyCode ?? null,
     notesText: shipment.notesText ?? null,
     metadata: shipment.metadata ? cloneJson(shipment.metadata) : null,
@@ -248,8 +259,8 @@ export async function restoreShipmentSnapshot(em: EntityManager, snapshot: Shipm
   entity.deliveredAt = snapshot.deliveredAt ? new Date(snapshot.deliveredAt) : null
   entity.weightValue = snapshot.weightValue !== null ? snapshot.weightValue.toString() : null
   entity.weightUnit = snapshot.weightUnit ?? null
-  entity.declaredValueNet = snapshot.declaredValueNet !== null ? snapshot.declaredValueNet.toString() : null
-  entity.declaredValueGross = snapshot.declaredValueGross !== null ? snapshot.declaredValueGross.toString() : null
+  entity.declaredValueNet = exactAmountString(snapshot.declaredValueNetExact, snapshot.declaredValueNet)
+  entity.declaredValueGross = exactAmountString(snapshot.declaredValueGrossExact, snapshot.declaredValueGross)
   entity.currencyCode = snapshot.currencyCode ?? null
   entity.notesText = snapshot.notesText ?? null
   entity.metadata = snapshot.metadata ? cloneJson(snapshot.metadata) : null
@@ -439,7 +450,7 @@ function mergeAddressSnapshot(
 const createShipmentCommand: CommandHandler<ShipmentCreateInput, { shipmentId: string }> = {
   id: 'sales.shipments.create',
   async execute(rawInput, ctx) {
-    const input = shipmentCreateSchema.parse(rawInput ?? {})
+    const input = withExactAmounts(shipmentCreateSchema.parse(rawInput ?? {}), rawInput, SHIPMENT_EXACT_AMOUNT_FIELDS)
     ensureTenantScope(ctx, input.tenantId)
     ensureOrganizationScope(ctx, input.organizationId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
@@ -481,8 +492,8 @@ const createShipmentCommand: CommandHandler<ShipmentCreateInput, { shipmentId: s
         deliveredAt: input.deliveredAt ?? null,
         weightValue: input.weightValue !== undefined ? input.weightValue.toString() : null,
         weightUnit: input.weightUnit ?? null,
-        declaredValueNet: input.declaredValueNet !== undefined ? input.declaredValueNet.toString() : null,
-        declaredValueGross: input.declaredValueGross !== undefined ? input.declaredValueGross.toString() : null,
+        declaredValueNet: exactAmountString(input.declaredValueNetExact, input.declaredValueNet),
+        declaredValueGross: exactAmountString(input.declaredValueGrossExact, input.declaredValueGross),
         currencyCode: input.currencyCode ?? order.currencyCode ?? null,
         notesText: input.notes ?? null,
         metadata,
@@ -661,7 +672,7 @@ const updateShipmentCommand: CommandHandler<ShipmentUpdateInput, { shipmentId: s
     return snapshot ? { before: snapshot } : {}
   },
   async execute(rawInput, ctx) {
-    const input = shipmentUpdateSchema.parse(rawInput ?? {})
+    const input = withExactAmounts(shipmentUpdateSchema.parse(rawInput ?? {}), rawInput, SHIPMENT_EXACT_AMOUNT_FIELDS)
     ensureTenantScope(ctx, input.tenantId)
     ensureOrganizationScope(ctx, input.organizationId)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
@@ -689,19 +700,18 @@ const updateShipmentCommand: CommandHandler<ShipmentUpdateInput, { shipmentId: s
       await enforceSalesDocumentOptimisticLock(ctx, order, SALES_RESOURCE_KIND_ORDER)
 
       // Check if order is financially closed - prevent modifications to shipments
-      const paidAmount = parseFloat(order.paidTotalAmount || '0')
-      const refundedAmount = parseFloat(order.refundedTotalAmount || '0')
-      const grandTotal = parseFloat(order.grandTotalGrossAmount || '0')
-      const tolerance = 1e-4 // Tolerance for floating-point comparisons
+      const paidAmount = parseDecimal(order.paidTotalAmount) ?? toDecimal(0)
+      const refundedAmount = parseDecimal(order.refundedTotalAmount) ?? toDecimal(0)
+      const grandTotal = parseDecimal(order.grandTotalGrossAmount) ?? toDecimal(0)
 
       // Check for full refund first (higher priority than payment)
-      const isFullyRefunded = refundedAmount >= grandTotal - tolerance
+      const isFullyRefunded = refundedAmount.gte(grandTotal)
       if (isFullyRefunded) {
         throw new CrudHttpError(422, { error: translate('sales.shipments.fully_returned', 'Cannot modify shipment: order is fully returned') })
       }
 
       // Check for completed payment
-      const isFullyPaid = paidAmount >= grandTotal - tolerance
+      const isFullyPaid = paidAmount.gte(grandTotal)
       if (isFullyPaid) {
         throw new CrudHttpError(422, { error: translate('sales.shipments.payment_completed', 'Cannot modify shipment: order payment is completed') })
       }
@@ -734,10 +744,10 @@ const updateShipmentCommand: CommandHandler<ShipmentUpdateInput, { shipmentId: s
       if (input.weightValue !== undefined) shipmentEntity.weightValue = input.weightValue !== null ? input.weightValue.toString() : null
       if (input.weightUnit !== undefined) shipmentEntity.weightUnit = input.weightUnit ?? null
       if (input.declaredValueNet !== undefined) {
-        shipmentEntity.declaredValueNet = input.declaredValueNet !== null ? input.declaredValueNet.toString() : null
+        shipmentEntity.declaredValueNet = exactAmountString(input.declaredValueNetExact, input.declaredValueNet)
       }
       if (input.declaredValueGross !== undefined) {
-        shipmentEntity.declaredValueGross = input.declaredValueGross !== null ? input.declaredValueGross.toString() : null
+        shipmentEntity.declaredValueGross = exactAmountString(input.declaredValueGrossExact, input.declaredValueGross)
       }
       if (input.currencyCode !== undefined) shipmentEntity.currencyCode = input.currencyCode ?? null
       if (input.notes !== undefined) shipmentEntity.notesText = input.notes ?? null
