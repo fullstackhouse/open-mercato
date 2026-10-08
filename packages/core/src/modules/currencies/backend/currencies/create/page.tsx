@@ -117,7 +117,7 @@ export default function CreateCurrencyPage() {
               code,
               name: String(values.name || '').trim(),
               symbol: values.symbol ? String(values.symbol).trim() : null,
-              decimalPlaces: values.decimalPlaces !== undefined && values.decimalPlaces !== null && values.decimalPlaces !== '' ? parseInt(String(values.decimalPlaces)) : 2,
+              decimalPlaces: values.decimalPlaces === undefined || values.decimalPlaces === null ? 2 : parseInt(String(values.decimalPlaces)),
               thousandsSeparator: values.thousandsSeparator ? String(values.thousandsSeparator) : null,
               decimalSeparator: values.decimalSeparator ? String(values.decimalSeparator) : null,
               isBase: !!values.isBase,
