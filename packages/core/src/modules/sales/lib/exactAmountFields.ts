@@ -28,6 +28,8 @@ export const PAYMENT_ALLOCATION_EXACT_AMOUNT_FIELDS = ['amount'] as const
 
 export const SHIPMENT_EXACT_AMOUNT_FIELDS = ['declaredValueNet', 'declaredValueGross'] as const
 
+export const SHIPPING_METHOD_EXACT_AMOUNT_FIELDS = ['baseRateNet', 'baseRateGross'] as const
+
 type ParsedRecord = Record<string, unknown>
 
 function listOf(parsed: ParsedRecord, key: string): ParsedRecord[] | undefined {
@@ -56,6 +58,11 @@ export function withExactDocumentInput<T extends ParsedRecord>(parsed: T, raw: u
   return withExactList(withLines, raw, 'adjustments', ADJUSTMENT_EXACT_AMOUNT_FIELDS)
 }
 
+export function withExactInvoiceInput<T extends ParsedRecord>(parsed: T, raw: unknown): T {
+  const withTotals = withExactAmounts(parsed, raw, DOCUMENT_TOTAL_EXACT_AMOUNT_FIELDS)
+  return withExactList(withTotals, raw, 'lines', LINE_EXACT_AMOUNT_FIELDS)
+}
+
 export function withExactLineInput<T extends ParsedRecord>(parsed: T, raw: unknown): T {
   return withExactAmounts(parsed, raw, LINE_EXACT_AMOUNT_FIELDS)
 }
@@ -71,4 +78,8 @@ export function withExactPaymentInput<T extends ParsedRecord>(parsed: T, raw: un
 
 export function withExactShipmentInput<T extends ParsedRecord>(parsed: T, raw: unknown): T {
   return withExactAmounts(parsed, raw, SHIPMENT_EXACT_AMOUNT_FIELDS)
+}
+
+export function withExactShippingMethodInput<T extends ParsedRecord>(parsed: T, raw: unknown): T {
+  return withExactAmounts(parsed, raw, SHIPPING_METHOD_EXACT_AMOUNT_FIELDS)
 }

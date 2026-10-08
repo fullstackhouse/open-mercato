@@ -6268,10 +6268,10 @@ const createOrderCommand: CommandHandler<
           ? exactFor(
               parsed.exchangeRate,
               rawInput && typeof rawInput === "object"
-                ? (rawInput as Record<string, unknown>).exchangeRate
+                ? (rawInput as Record<string, unknown>).exchangeRateExact
                 : undefined,
               rawInput && typeof rawInput === "object"
-                ? (rawInput as Record<string, unknown>).exchangeRateExact
+                ? (rawInput as Record<string, unknown>).exchangeRate
                 : undefined,
             )
           : null,

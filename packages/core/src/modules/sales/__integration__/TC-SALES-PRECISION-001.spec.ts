@@ -7,11 +7,15 @@ import {
 } from '@open-mercato/core/helpers/integration/currenciesFixtures'
 
 /**
- * TC-SALES-PRECISION-001: an order in an 18-decimal currency keeps every digit.
+ * TC-SALES-PRECISION-001: an order in an 18-decimal currency keeps every digit,
+ * including a 25-significant-digit exchange rate. The order API does not expose
+ * the exchange rate, so it is read back from the order create audit snapshot.
  * Source: .ai/specs/2026-10-08-arbitrary-precision-money-and-fx.md
  */
 
 type JsonRecord = Record<string, unknown>
+
+const LONG_EXCHANGE_RATE = '1.234567890123456789012345'
 
 async function readJson(response: APIResponse): Promise<JsonRecord> {
   const raw = await response.text()
@@ -29,6 +33,22 @@ async function readOrder(request: APIRequestContext, token: string, id: string):
   const body = await readJson(response)
   const items = Array.isArray(body.items) ? (body.items as JsonRecord[]) : []
   return items[0] ?? {}
+}
+
+async function readCreateSnapshot(
+  request: APIRequestContext,
+  token: string,
+  resourceKind: string,
+  resourceId: string,
+  commandId: string,
+): Promise<JsonRecord> {
+  const query = `resourceKind=${encodeURIComponent(resourceKind)}&resourceId=${encodeURIComponent(resourceId)}`
+  const response = await apiRequest(request, 'GET', `/api/audit_logs/audit-logs/actions?${query}`, { token })
+  expect(response.status(), 'GET /api/audit_logs/audit-logs/actions should be 200').toBe(200)
+  const items = ((await readJson(response)).items ?? []) as JsonRecord[]
+  const entry = items.find((item) => item.commandId === commandId)
+  const snapshot = entry?.snapshotAfter
+  return snapshot && typeof snapshot === 'object' ? (snapshot as JsonRecord) : {}
 }
 
 test.describe('TC-SALES-PRECISION-001: 18-decimal currency order totals', () => {
@@ -50,6 +70,7 @@ test.describe('TC-SALES-PRECISION-001: 18-decimal currency order totals', () => 
         token,
         data: {
           currencyCode: currency.code,
+          exchangeRate: LONG_EXCHANGE_RATE,
           customerReference: `PRECISION-${Date.now()}`,
           lines: [
             {
@@ -79,6 +100,15 @@ test.describe('TC-SALES-PRECISION-001: 18-decimal currency order totals', () => 
       expect(order.grandTotalNetAmountExact).toBe('1.123456789012345681')
       expect(order.grandTotalGrossAmountExact).toBe('1.123456789012345681')
       expect(order.outstandingAmountExact).toBe('1.123456789012345681')
+
+      const createdOrderId = orderId
+      await expect
+        .poll(async () => {
+          const snapshot = await readCreateSnapshot(request, token, 'sales.order', createdOrderId, 'sales.orders.create')
+          const orderSnapshot = (snapshot.order ?? {}) as JsonRecord
+          return orderSnapshot.exchangeRate
+        }, { message: 'order exchange rate should keep all 25 significant digits' })
+        .toBe(LONG_EXCHANGE_RATE)
 
       const linesResponse = await apiRequest(
         request,
