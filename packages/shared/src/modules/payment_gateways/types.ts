@@ -124,7 +124,9 @@ export interface PaymentGatewayScope {
 export interface PaymentOrderTotal {
   orderId: string
   currencyCode: string
+  /** Float copy of `amountDueExact`; prefer the exact field. */
   amountDue: number
+  amountDueExact?: string
 }
 
 /**

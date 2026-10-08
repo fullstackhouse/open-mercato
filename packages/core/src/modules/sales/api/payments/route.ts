@@ -227,10 +227,10 @@ const paymentSchema = z.object({
   status_entry_id: z.string().uuid().nullable().optional(),
   status: z.string().nullable().optional(),
   status_label: z.string().nullable().optional(),
-  amount: z.number(),
+  amount: z.string(),
   currency_code: z.string(),
-  captured_amount: z.number().nullable().optional(),
-  refunded_amount: z.number().nullable().optional(),
+  captured_amount: z.string().nullable().optional(),
+  refunded_amount: z.string().nullable().optional(),
   received_at: z.string().nullable().optional(),
   captured_at: z.string().nullable().optional(),
   custom_field_set_id: z.string().uuid().nullable().optional(),
@@ -246,8 +246,11 @@ const paymentSchema = z.object({
 
 const orderTotalsSchema = z.object({
   paidTotalAmount: z.number().nullable().optional(),
+  paidTotalAmountExact: z.string().nullable().optional(),
   refundedTotalAmount: z.number().nullable().optional(),
+  refundedTotalAmountExact: z.string().nullable().optional(),
   outstandingAmount: z.number().nullable().optional(),
+  outstandingAmountExact: z.string().nullable().optional(),
 })
 
 const paymentActionResponseSchema = z.object({
