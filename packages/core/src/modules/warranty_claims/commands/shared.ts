@@ -19,6 +19,7 @@ import type {
   WarrantyClaimEventVisibility,
 } from '../data/validators'
 import { computeHeaderRollups } from '../lib/stateMachine'
+import { withExactAmounts } from '@open-mercato/shared/lib/decimal'
 
 export { assertFound } from '@open-mercato/shared/lib/crud/errors'
 export { ensureOrganizationScope, ensureSameScope, ensureTenantScope } from '@open-mercato/shared/lib/commands/scope'
@@ -47,6 +48,43 @@ export type AppendClaimEventInput = {
   payload?: Record<string, unknown> | null
   actorUserId?: string | null
   actorCustomerId?: string | null
+}
+
+export const WARRANTY_MONEY_FIELDS = [
+  'creditAmount',
+  'restockingFee',
+  'coreChargeAmount',
+  'coreCreditAmount',
+  'autoApproveMaxAmount',
+] as const
+
+/**
+ * Adds `<field>Exact` strings (raw request digits) next to the coerced money
+ * numbers, on the input and on each of its `lines`.
+ */
+export function withWarrantyExactAmounts<T>(parsed: T, raw: unknown): T {
+  if (!parsed || typeof parsed !== 'object') return parsed
+  const withExact = withExactAmounts(parsed as object, raw, WARRANTY_MONEY_FIELDS) as Record<string, unknown>
+  const lines = withExact.lines
+  if (Array.isArray(lines)) {
+    const rawLines = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).lines : undefined
+    withExact.lines = lines.map((line, index) =>
+      line && typeof line === 'object'
+        ? withExactAmounts(line as object, Array.isArray(rawLines) ? rawLines[index] : undefined, WARRANTY_MONEY_FIELDS)
+        : line,
+    )
+  }
+  return withExact as T
+}
+
+/** The exact money input for `field`: its `<field>Exact` string when present. */
+export function exactMoneyInput(
+  input: object,
+  field: (typeof WARRANTY_MONEY_FIELDS)[number],
+): number | string | null | undefined {
+  const values = input as Record<string, number | string | null | undefined>
+  const exact = values[`${field}Exact`]
+  return typeof exact === 'string' ? exact : values[field]
 }
 
 export async function enforceWarrantyClaimOptimisticLock(
@@ -171,12 +209,12 @@ export async function reconcileVendorRecoverySourceClaim(
         scope,
       )
     : []
-  const recoveredTotal = computeHeaderRollups(childLines).totalApprovedAmount
+  const recoveredTotal = computeHeaderRollups(childLines).totalApprovedAmountExact
   await withAtomicFlush(
     em,
     [
       () => {
-        sourceClaim.totalRecoveredAmount = String(recoveredTotal)
+        sourceClaim.totalRecoveredAmount = recoveredTotal
         sourceClaim.updatedAt = new Date()
       },
     ],

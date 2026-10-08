@@ -8,6 +8,8 @@ export type WarrantyClaimEffectiveSettings = {
   slaAtRiskThresholdPct: number
   autoApproveEnabled: boolean
   autoApproveMaxAmount: number | null
+  /** Exact decimal string of `autoApproveMaxAmount`. */
+  autoApproveMaxAmountExact?: string | null
   autoApproveCurrencyCode: string | null
   autoApproveRequireInWarranty: boolean
   defaultWarrantyMonths: number | null
@@ -24,6 +26,7 @@ export const WARRANTY_CLAIM_SETTINGS_DEFAULTS: WarrantyClaimEffectiveSettings = 
   slaAtRiskThresholdPct: 75,
   autoApproveEnabled: false,
   autoApproveMaxAmount: null,
+  autoApproveMaxAmountExact: null,
   autoApproveCurrencyCode: null,
   autoApproveRequireInWarranty: true,
   defaultWarrantyMonths: null,
@@ -64,6 +67,7 @@ export async function resolveEffectiveWarrantyClaimSettings(
     slaAtRiskThresholdPct: settings.slaAtRiskThresholdPct ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.slaAtRiskThresholdPct,
     autoApproveEnabled: settings.autoApproveEnabled ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.autoApproveEnabled,
     autoApproveMaxAmount: parseNullableNumber(settings.autoApproveMaxAmount),
+    autoApproveMaxAmountExact: settings.autoApproveMaxAmount ?? null,
     autoApproveCurrencyCode: settings.autoApproveCurrencyCode ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.autoApproveCurrencyCode,
     autoApproveRequireInWarranty: settings.autoApproveRequireInWarranty ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.autoApproveRequireInWarranty,
     defaultWarrantyMonths: settings.defaultWarrantyMonths ?? WARRANTY_CLAIM_SETTINGS_DEFAULTS.defaultWarrantyMonths,

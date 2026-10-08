@@ -31,6 +31,8 @@ const requiredString = (max: number) =>
 const positiveDecimal = () => z.coerce.number().positive().max(999_999_999)
 const nullableDecimal = () =>
   z.preprocess(emptyStringToNull, z.coerce.number().min(0, 'warranty_claims.errors.decimalNonNegative').max(999_999_999).nullable().optional())
+const nullableMoney = () =>
+  z.preprocess(emptyStringToNull, z.coerce.number().min(0, 'warranty_claims.errors.decimalNonNegative').nullable().optional())
 const nullableIsoDateString = () => z.preprocess(emptyStringToNull, z.string().datetime().nullable().optional())
 const jsonObjectSchema = z.record(z.string(), z.unknown())
 const optimisticLockTokenSchema = z.union([z.string().datetime(), z.date()]).nullable().optional()
@@ -159,10 +161,10 @@ const claimLineFields = {
   conditionOnReceipt: clearableString(1000),
   inspectionNotes: clearableString(4000),
   disposition: claimDispositionSchema.nullable().optional(),
-  creditAmount: nullableDecimal(),
-  restockingFee: nullableDecimal(),
-  coreChargeAmount: nullableDecimal(),
-  coreCreditAmount: nullableDecimal(),
+  creditAmount: nullableMoney(),
+  restockingFee: nullableMoney(),
+  coreChargeAmount: nullableMoney(),
+  coreCreditAmount: nullableMoney(),
   vendorName: clearableString(300),
 }
 

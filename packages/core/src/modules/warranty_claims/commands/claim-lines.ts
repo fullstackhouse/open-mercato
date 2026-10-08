@@ -44,8 +44,11 @@ import {
   extractUndoPayload,
   requireScopedClaim,
   type WarrantyClaimScope,
+  exactMoneyInput,
+  withWarrantyExactAmounts,
 } from './shared'
 import { assertPendingClaimQuantitiesWithinSold, validateClaimReferences } from './claims'
+import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
 
 const claimCrudEvents: CrudEventsConfig = {
   module: 'warranty_claims',
@@ -140,7 +143,7 @@ function parseCommandInput<T>(schema: z.ZodType<T>, rawInput: unknown): T {
   if (!result.success) {
     throw new CrudHttpError(400, { error: '[internal] invalid warranty claim line command input' })
   }
-  return result.data
+  return withWarrantyExactAmounts(result.data, rawInput)
 }
 
 function hasOwn(input: object, key: string): boolean {
@@ -183,9 +186,8 @@ function toDateOnly(value: string | null): Date | null {
 function amountString(value: number | string | null | undefined, fallback = '0'): string | null {
   if (value === null) return null
   if (value === undefined) return fallback
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return String(parsed)
+  const parsed = parseDecimal(value)
+  return parsed ? decimalToString(parsed) : fallback
 }
 
 function nullableAmountString(value: number | string | null | undefined): string | null {
@@ -322,10 +324,10 @@ function buildLineCreateData(
     disposition: input.disposition ?? null,
     vendorName: input.vendorName ?? null,
     lineStatus: 'pending',
-    creditAmount: nullableAmountString(input.creditAmount),
-    restockingFee: nullableAmountString(input.restockingFee),
-    coreChargeAmount: nullableAmountString(input.coreChargeAmount),
-    coreCreditAmount: nullableAmountString(input.coreCreditAmount),
+    creditAmount: nullableAmountString(exactMoneyInput(input, 'creditAmount')),
+    restockingFee: nullableAmountString(exactMoneyInput(input, 'restockingFee')),
+    coreChargeAmount: nullableAmountString(exactMoneyInput(input, 'coreChargeAmount')),
+    coreCreditAmount: nullableAmountString(exactMoneyInput(input, 'coreCreditAmount')),
     createdAt: new Date(),
     updatedAt: new Date(),
   }
@@ -360,10 +362,10 @@ function applyLineUpdate(line: WarrantyClaimLine, input: ClaimLineUpdateInput): 
     assertLineStatusMove(line.lineStatus, input.lineStatus)
     line.lineStatus = input.lineStatus
   }
-  if (hasOwn(input, 'creditAmount')) line.creditAmount = nullableAmountString(input.creditAmount)
-  if (hasOwn(input, 'restockingFee')) line.restockingFee = nullableAmountString(input.restockingFee)
-  if (hasOwn(input, 'coreChargeAmount')) line.coreChargeAmount = nullableAmountString(input.coreChargeAmount)
-  if (hasOwn(input, 'coreCreditAmount')) line.coreCreditAmount = nullableAmountString(input.coreCreditAmount)
+  if (hasOwn(input, 'creditAmount')) line.creditAmount = nullableAmountString(exactMoneyInput(input, 'creditAmount'))
+  if (hasOwn(input, 'restockingFee')) line.restockingFee = nullableAmountString(exactMoneyInput(input, 'restockingFee'))
+  if (hasOwn(input, 'coreChargeAmount')) line.coreChargeAmount = nullableAmountString(exactMoneyInput(input, 'coreChargeAmount'))
+  if (hasOwn(input, 'coreCreditAmount')) line.coreCreditAmount = nullableAmountString(exactMoneyInput(input, 'coreCreditAmount'))
   if ((purchaseDateChanged || warrantyMonthsChanged) && !hasExplicitWarranty) {
     const computedWarranty = computeWarrantyDates(line.purchaseDate ?? null, line.warrantyMonths ?? null)
     line.warrantyExpiresAt = computedWarranty.warrantyExpiresAt
@@ -477,8 +479,8 @@ async function recomputeClaimRollups(em: EntityManager, claim: WarrantyClaim): P
     { tenantId: claim.tenantId, organizationId: claim.organizationId },
   )
   const totals = computeHeaderRollups(lines, { claimType: claim.claimType })
-  claim.totalClaimedAmount = String(totals.totalClaimedAmount)
-  claim.totalApprovedAmount = String(totals.totalApprovedAmount)
+  claim.totalClaimedAmount = totals.totalClaimedAmountExact
+  claim.totalApprovedAmount = totals.totalApprovedAmountExact
   claim.updatedAt = new Date()
 }
 

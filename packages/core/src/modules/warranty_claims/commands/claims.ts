@@ -69,7 +69,10 @@ import {
   extractUndoPayload,
   requireScopedClaim,
   type WarrantyClaimScope,
+  exactMoneyInput,
+  withWarrantyExactAmounts,
 } from './shared'
+import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
 
 const claimCrudEvents: CrudEventsConfig = {
   module: 'warranty_claims',
@@ -260,7 +263,7 @@ function parseCommandInput<T>(schema: z.ZodType<T>, rawInput: unknown): T {
   if (!result.success) {
     throw new CrudHttpError(400, { error: 'warranty_claims.errors.invalidInput' })
   }
-  return result.data
+  return withWarrantyExactAmounts(result.data, rawInput)
 }
 
 function hasOwn(input: object, key: string): boolean {
@@ -303,9 +306,8 @@ function toDateOnly(value: string | null): Date | null {
 function amountString(value: number | string | null | undefined, fallback = '0'): string | null {
   if (value === null) return null
   if (value === undefined) return fallback
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return String(parsed)
+  const parsed = parseDecimal(value)
+  return parsed ? decimalToString(parsed) : fallback
 }
 
 function nullableAmountString(value: number | string | null | undefined): string | null {
@@ -423,10 +425,10 @@ function buildInitialLineData(
     disposition: input.disposition ?? null,
     vendorName: input.vendorName ?? null,
     lineStatus: 'pending',
-    creditAmount: nullableAmountString(input.creditAmount),
-    restockingFee: nullableAmountString(input.restockingFee),
-    coreChargeAmount: nullableAmountString(input.coreChargeAmount),
-    coreCreditAmount: nullableAmountString(input.coreCreditAmount),
+    creditAmount: nullableAmountString(exactMoneyInput(input, 'creditAmount')),
+    restockingFee: nullableAmountString(exactMoneyInput(input, 'restockingFee')),
+    coreChargeAmount: nullableAmountString(exactMoneyInput(input, 'coreChargeAmount')),
+    coreCreditAmount: nullableAmountString(exactMoneyInput(input, 'coreCreditAmount')),
     createdAt: new Date(),
     updatedAt: new Date(),
   }
@@ -1452,8 +1454,8 @@ async function recomputeClaimRollups(em: EntityManager, claim: WarrantyClaim): P
     { tenantId: claim.tenantId, organizationId: claim.organizationId },
   )
   const totals = computeHeaderRollups(lines, { claimType: claim.claimType })
-  claim.totalClaimedAmount = String(totals.totalClaimedAmount)
-  claim.totalApprovedAmount = String(totals.totalApprovedAmount)
+  claim.totalClaimedAmount = totals.totalClaimedAmountExact
+  claim.totalApprovedAmount = totals.totalApprovedAmountExact
 }
 
 function assertCanResolve(lines: readonly WarrantyClaimLine[]): void {
@@ -1591,8 +1593,8 @@ const createClaimCommand: CommandHandler<ClaimCreateInput, { claimId: string }> 
           return line
         })
         const totals = computeHeaderRollups(createdLines, { claimType: claim.claimType })
-        claim.totalClaimedAmount = String(totals.totalClaimedAmount)
-        claim.totalApprovedAmount = String(totals.totalApprovedAmount)
+        claim.totalClaimedAmount = totals.totalClaimedAmountExact
+        claim.totalApprovedAmount = totals.totalApprovedAmountExact
         appendClaimEvent(em, claim, 'system', {
           visibility: 'internal',
           payload: { action: 'created' },
@@ -2283,8 +2285,8 @@ const createVendorRecoveryCommand: CommandHandler<VendorRecoveryInput, { claimId
           return copiedLine
         })
       const totals = computeHeaderRollups(copiedLines)
-      recoveryClaim.totalClaimedAmount = String(totals.totalClaimedAmount)
-      recoveryClaim.totalApprovedAmount = String(totals.totalApprovedAmount)
+      recoveryClaim.totalClaimedAmount = totals.totalClaimedAmountExact
+      recoveryClaim.totalApprovedAmount = totals.totalApprovedAmountExact
       appendClaimEvent(tx, lockedSource, 'system', {
         visibility: 'internal',
         payload: { action: 'vendor_recovery_created', recoveryClaimId: recoveryClaim.id },

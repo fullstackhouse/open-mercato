@@ -1,5 +1,12 @@
 import { computeHeaderRollups } from './stateMachine'
 import type { WarrantyClaimLineStatus } from '../data/validators'
+import {
+  FX_DECIMAL_PLACES,
+  countDecimalPlaces,
+  divideDecimals,
+  multiplyDecimals,
+  roundDecimal,
+} from '@open-mercato/shared/lib/decimal'
 
 type AmountValue = number | string | null | undefined
 
@@ -91,16 +98,17 @@ function parseRecoveryRatePct(value: number | string | null | undefined): number
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function formatMoney(value: number): string {
-  if (!Number.isFinite(value)) return '0.00'
-  return (Math.round(value * 100) / 100).toFixed(2)
-}
-
+/**
+ * The recovery estimate keeps the approved amount's own precision (never fewer
+ * than 2 decimals), so a high-precision currency is not cut to cents.
+ */
 function estimateRecovery(line: VendorRecoveryLineInput, policy: VendorPolicyRecoveryInput): string | null {
   const rate = parseRecoveryRatePct(policy.recoveryRatePct)
   if (rate === null) return null
-  const approvedAmount = computeHeaderRollups([line]).totalApprovedAmount
-  return formatMoney(approvedAmount * (rate / 100))
+  const approvedAmount = computeHeaderRollups([line]).totalApprovedAmountExact
+  const decimalPlaces = Math.max(2, countDecimalPlaces(approvedAmount))
+  const recovery = divideDecimals(multiplyDecimals(approvedAmount, rate), 100, FX_DECIMAL_PLACES)
+  return roundDecimal(recovery, decimalPlaces).toFixed(decimalPlaces)
 }
 
 function selectMatchingPolicy(

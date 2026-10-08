@@ -18,7 +18,10 @@ import {
   enforceWarrantyClaimOptimisticLock,
   ensureOrganizationScope,
   ensureTenantScope,
+  exactMoneyInput,
+  withWarrantyExactAmounts,
 } from './shared'
+import { decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
 
 export const WARRANTY_CLAIM_SETTINGS_RESOURCE_KIND = 'warranty_claims.settings'
 
@@ -33,7 +36,7 @@ function parseCommandInput(rawInput: unknown): WarrantyClaimSettingsSaveInput {
   if (!parsed.success) {
     throw new CrudHttpError(400, { error: 'warranty_claims.errors.invalidInput' })
   }
-  return parsed.data
+  return withWarrantyExactAmounts(parsed.data, rawInput)
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -48,9 +51,10 @@ function hasOwn(input: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(input, key)
 }
 
-function amountString(value: number | null | undefined): string | null {
+function amountString(value: number | string | null | undefined): string | null {
   if (value === null || value === undefined) return null
-  return String(value)
+  const parsed = parseDecimal(value)
+  return parsed ? decimalToString(parsed) : null
 }
 
 function amountNumber(value: string | number | null | undefined): number | null {
@@ -76,7 +80,7 @@ function applySettingsUpdate(settings: WarrantyClaimSettings, input: WarrantyCla
   if (hasOwn(input, 'autoApproveEnabled') && input.autoApproveEnabled !== undefined) {
     settings.autoApproveEnabled = input.autoApproveEnabled
   }
-  if (hasOwn(input, 'autoApproveMaxAmount')) settings.autoApproveMaxAmount = amountString(input.autoApproveMaxAmount)
+  if (hasOwn(input, 'autoApproveMaxAmount')) settings.autoApproveMaxAmount = amountString(exactMoneyInput(input, 'autoApproveMaxAmount'))
   if (hasOwn(input, 'autoApproveCurrencyCode')) settings.autoApproveCurrencyCode = input.autoApproveCurrencyCode ?? null
   if (hasOwn(input, 'autoApproveRequireInWarranty') && input.autoApproveRequireInWarranty !== undefined) {
     settings.autoApproveRequireInWarranty = input.autoApproveRequireInWarranty
