@@ -5,7 +5,8 @@ import { deleteEntityIfExists } from '@open-mercato/core/helpers/integration/crm
 /**
  * TC-CRM-PRECISION-001: deal values and company revenue keep every digit beyond
  * the old numeric(14,2) / numeric(16,2) columns and float precision; deal stats
- * expose the exact value as `dealValueExact`.
+ * expose the exact value as `dealValueExact`; the deals KPI summary exposes canonical
+ * `*Exact` decimal strings next to its rounded numbers.
  * Source: .ai/specs/2026-10-08-arbitrary-precision-money-and-fx.md
  */
 
@@ -15,6 +16,7 @@ const COMPANY_REVENUE = '123456789012345.123456789'
 const COMPANY_REVENUE_UPDATED = '9876543210987654321.000000001'
 const DEAL_VALUE = '98765432109876.987654321'
 const DEAL_VALUE_WON = '12345678901234.123456789012'
+const CANONICAL_DECIMAL = /^-?(0|[1-9]\d*)(\.\d*[1-9])?$/
 
 async function readJson(response: APIResponse): Promise<JsonRecord> {
   const raw = await response.text()
@@ -53,6 +55,31 @@ async function readDealValue(request: APIRequestContext, token: string, dealId: 
   const response = await apiRequest(request, 'GET', `/api/customers/deals/${dealId}`, { token })
   expect(response.status(), 'GET /api/customers/deals/:id should be 200').toBe(200)
   return asRecord((await readJson(response)).deal).valueAmount
+}
+
+function expectExactSibling(record: JsonRecord, field: string, label: string): void {
+  const value = record[field]
+  const exact = record[`${field}Exact`]
+  expect(typeof value, `${label}.${field} should stay a number`).toBe('number')
+  expect(typeof exact, `${label}.${field}Exact should be a string`).toBe('string')
+  expect(exact as string, `${label}.${field}Exact should be a canonical decimal`).toMatch(CANONICAL_DECIMAL)
+  const numeric = value as number
+  expect(Math.abs(Number(exact) - numeric), `${label}.${field} should be ${field}Exact rounded for display`)
+    .toBeLessThanOrEqual(0.5 + Math.abs(numeric) * 1e-15)
+}
+
+async function expectSummaryExactFields(request: APIRequestContext, token: string): Promise<void> {
+  const response = await apiRequest(request, 'GET', '/api/customers/deals/summary', { token })
+  expect(response.status(), 'GET /api/customers/deals/summary should be 200').toBe(200)
+  const summary = await readJson(response)
+  const pipelineValue = asRecord(summary.pipelineValue)
+  expectExactSibling(pipelineValue, 'value', 'pipelineValue')
+  const stages = Array.isArray(pipelineValue.stages) ? (pipelineValue.stages as JsonRecord[]) : []
+  for (const stage of stages) expectExactSibling(stage, 'value', 'pipelineValue.stages[]')
+  const wonThisQuarter = asRecord(summary.wonThisQuarter)
+  expectExactSibling(wonThisQuarter, 'value', 'wonThisQuarter')
+  expect(wonThisQuarter.avgDealExact as string, 'wonThisQuarter.avgDealExact should be a canonical decimal')
+    .toMatch(CANONICAL_DECIMAL)
 }
 
 test.describe('TC-CRM-PRECISION-001: exact deal values and company revenue', () => {
@@ -101,6 +128,8 @@ test.describe('TC-CRM-PRECISION-001: exact deal values and company revenue', () 
       const dealListItem = await readListItem(request, token, '/api/customers/deals', dealId)
       expect(dealListItem.value_amount).toBe(DEAL_VALUE)
 
+      await expectSummaryExactFields(request, token)
+
       const openStats = await apiRequest(request, 'GET', `/api/customers/deals/${dealId}/stats`, { token })
       expect(openStats.status(), 'stats for an open deal should be 400').toBe(400)
 
@@ -119,6 +148,8 @@ test.describe('TC-CRM-PRECISION-001: exact deal values and company revenue', () 
       expect(stats.dealValueExact).toBe(DEAL_VALUE_WON)
       expect(stats.dealValue).toBe(Number(DEAL_VALUE_WON))
       expect(String(stats.dealValue)).not.toBe(DEAL_VALUE_WON)
+
+      await expectSummaryExactFields(request, token)
     } finally {
       await deleteEntityIfExists(request, token, '/api/customers/deals', dealId)
       await deleteEntityIfExists(request, token, '/api/customers/companies', companyId)

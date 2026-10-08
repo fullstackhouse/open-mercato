@@ -1,5 +1,15 @@
 import type { RateResult } from '@open-mercato/core/modules/currencies/services/exchangeRateService'
-import { decimalToNumber, parseDecimal, roundDecimal, toDecimal, type DecimalValue } from '@open-mercato/shared/lib/decimal'
+import {
+  absDecimal,
+  compareDecimals,
+  decimalToNumber,
+  decimalToString,
+  divideDecimals,
+  parseDecimal,
+  roundDecimal,
+  toDecimal,
+  type DecimalValue,
+} from '@open-mercato/shared/lib/decimal'
 
 /**
  * Quarter / period helpers for the deals KPI summary. Computed in **UTC** so the
@@ -32,10 +42,25 @@ export type Delta = {
 export type CurrencySum = {
   currency: string
   total: number
+  totalExact?: string
+}
+
+export type AmountEntry = {
+  currency: string | null
+  amount: string
+}
+
+export type ExactCurrencySum = CurrencySum & { totalExact: string }
+
+export type ConvertedAmount = {
+  value: number
+  valueExact: string
+  currencyCode: string | null
 }
 
 export type ConvertedSums = {
   total: number
+  totalExact: string
   convertedAll: boolean
   missingRateCurrencies: string[]
 }
@@ -119,6 +144,10 @@ function extractRate(result: RateResult | undefined): DecimalValue | null {
  *  - a currency with no usable rate is excluded from `total` and flagged in
  *    `missingRateCurrencies` (with `convertedAll: false`).
  *
+ * Amounts and rates are combined with exact decimal math, preferring each entry's
+ * `totalExact` over its float `total`. `total` is rounded to whole units for KPI
+ * display; `totalExact` carries the unrounded converted sum.
+ *
  * When `baseCode` is null there is no base currency configured, so nothing can be
  * converted: every present currency is reported as missing and `convertedAll` is false.
  *
@@ -134,7 +163,7 @@ export function convertSumsToBase(
     const missing = Array.from(
       new Set(perCurrency.map((entry) => entry.currency).filter((code): code is string => Boolean(code))),
     )
-    return { total: 0, convertedAll: missing.length === 0, missingRateCurrencies: missing }
+    return { total: 0, totalExact: '0', convertedAll: missing.length === 0, missingRateCurrencies: missing }
   }
 
   let total = toDecimal(0)
@@ -142,7 +171,7 @@ export function convertSumsToBase(
   const missingRateCurrencies: string[] = []
   for (const entry of perCurrency) {
     if (!entry.currency) continue
-    const amount = parseDecimal(entry.total) ?? toDecimal(0)
+    const amount = parseDecimal(entry.totalExact ?? entry.total) ?? toDecimal(0)
     if (entry.currency === baseCode) {
       total = total.plus(amount)
       continue
@@ -157,5 +186,65 @@ export function convertSumsToBase(
       }
     }
   }
-  return { total: decimalToNumber(roundDecimal(total, 0)), convertedAll, missingRateCurrencies }
+  return {
+    total: decimalToNumber(roundDecimal(total, 0)),
+    totalExact: decimalToString(total),
+    convertedAll,
+    missingRateCurrencies,
+  }
+}
+
+export function normalizeCurrencyCode(currency: string | null | undefined): string {
+  return (currency ?? '').toString().trim().toUpperCase()
+}
+
+/**
+ * Sums amounts per currency with exact decimal math, in first-seen currency order.
+ * Entries without a currency are skipped.
+ */
+export function sumsByCurrency(entries: AmountEntry[]): ExactCurrencySum[] {
+  const sums: Array<{ currency: string; total: DecimalValue }> = []
+  for (const entry of entries) {
+    const currency = normalizeCurrencyCode(entry.currency)
+    if (!currency) continue
+    const amount = parseDecimal(entry.amount) ?? toDecimal(0)
+    const existing = sums.find((sum) => sum.currency === currency)
+    if (existing) {
+      existing.total = existing.total.plus(amount)
+    } else {
+      sums.push({ currency, total: amount })
+    }
+  }
+  return sums.map((sum) => ({
+    currency: sum.currency,
+    total: decimalToNumber(sum.total),
+    totalExact: decimalToString(sum.total),
+  }))
+}
+
+/**
+ * Degraded path when no base currency is configured: the sum of the currency with
+ * the largest absolute total. `value` is rounded to whole units for KPI display;
+ * `valueExact` is the unrounded sum.
+ */
+export function dominantCurrencyAmount(entries: AmountEntry[]): ConvertedAmount {
+  let best: ExactCurrencySum | null = null
+  for (const sum of sumsByCurrency(entries)) {
+    if (!best || compareDecimals(absDecimal(sum.totalExact), absDecimal(best.totalExact)) > 0) best = sum
+  }
+  if (!best) return { value: 0, valueExact: '0', currencyCode: null }
+  return {
+    value: decimalToNumber(roundDecimal(best.totalExact, 0)),
+    valueExact: best.totalExact,
+    currencyCode: best.currency,
+  }
+}
+
+/**
+ * Exact average amount (`totalExact / count`) rounded to `decimalPlaces`;
+ * `'0'` when there is nothing to average.
+ */
+export function averageAmountExact(totalExact: string, count: number, decimalPlaces: number): string {
+  if (count <= 0) return '0'
+  return decimalToString(roundDecimal(divideDecimals(totalExact, count, decimalPlaces), decimalPlaces))
 }
