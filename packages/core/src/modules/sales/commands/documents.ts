@@ -106,8 +106,10 @@ import {
   ensureTenantScope,
   extractUndoPayload,
   toNumericString,
+  exactAmountString,
   reconcileLinePersistedTotals,
-  deriveLineNetFromGross,
+  deriveExactLineNetFromGross,
+  resolveOrderPaymentTotals,
   enforceSalesDocumentOptimisticLock,
   SALES_RESOURCE_KIND_ORDER,
   SALES_RESOURCE_KIND_QUOTE,
@@ -123,6 +125,19 @@ import {
   type PaymentSnapshot,
 } from "./payments";
 import type { SalesCalculationService } from "../services/salesCalculationService";
+import {
+  DEFAULT_AMOUNT_DECIMAL_PLACES,
+  FX_DECIMAL_PLACES,
+  countDecimalPlaces,
+  decimalToNumber,
+  decimalToString,
+  divideDecimals,
+  nonNegativeDecimalStringSchema,
+  parseDecimal,
+  roundDecimal,
+  withExactAmounts,
+} from "@open-mercato/shared/lib/decimal";
+import { resolveCurrencyAmountDecimalPlaces } from "@open-mercato/shared/lib/currencyPrecision";
 import type { TaxCalculationService } from "../services/taxCalculationService";
 import type {
   PaymentMethodContext,
@@ -1248,7 +1263,10 @@ async function applyDocumentUpdate({
     });
   }
   if (kind === "order" && input.exchangeRate !== undefined) {
-    (entity as SalesOrder).exchangeRate = toNumericString(input.exchangeRate);
+    (entity as SalesOrder).exchangeRate = exactAmountString(
+      (input as { exchangeRateExact?: string | null }).exchangeRateExact,
+      input.exchangeRate,
+    );
   }
   if (input.channelId !== undefined) {
     if (input.channelId === null) {
@@ -2392,11 +2410,14 @@ function resolveSnapshotToBaseFactor(snapshot: unknown): number {
   return factor;
 }
 
-function roundAutoConvertedUnitPrice(value: number): number | null {
-  if (!Number.isFinite(value) || value < 0) return null;
-  const factor = 10 ** UNIT_PRICE_AUTOCONVERT_SCALE;
-  const rounded = Math.round((value + Number.EPSILON) * factor) / factor;
-  return Number.isFinite(rounded) ? rounded : null;
+function roundAutoConvertedUnitPrice(
+  value: string,
+  amountDecimalPlaces?: number,
+): string | null {
+  const parsed = parseDecimal(value);
+  if (!parsed || parsed.lt(0)) return null;
+  const decimalPlaces = Math.max(UNIT_PRICE_AUTOCONVERT_SCALE, amountDecimalPlaces ?? 0);
+  return decimalToString(roundDecimal(parsed, decimalPlaces));
 }
 
 function convertLineUnitPricesOnUnitChange(params: {
@@ -2404,10 +2425,15 @@ function convertLineUnitPricesOnUnitChange(params: {
   nextQuantityUnit: string | null;
   nextUomSnapshot: SalesLineUomSnapshot | Record<string, unknown> | null;
   unitPriceNet: number | null;
+  unitPriceNetExact?: string | null;
   unitPriceGross: number | null;
+  unitPriceGrossExact?: string | null;
+  amountDecimalPlaces?: number;
 }): {
   unitPriceNet: number | null;
+  unitPriceNetExact?: string | null;
   unitPriceGross: number | null;
+  unitPriceGrossExact?: string | null;
   didConvert: boolean;
 } {
   if (!params.existingSnapshot) {
@@ -2471,24 +2497,42 @@ function convertLineUnitPricesOnUnitChange(params: {
   }
   const convertAmount = (
     value: number | null,
+    exact: string | null | undefined,
     shouldConvert: boolean,
-  ): number | null => {
-    if (!shouldConvert) return value;
-    if (value === null || !Number.isFinite(value)) return value;
-    const converted = roundAutoConvertedUnitPrice((value / previousFactor) * nextFactor);
-    return converted ?? value;
+  ): string | null => {
+    if (value === null || !Number.isFinite(value)) return null;
+    const source = exactFor(value, exact) ?? "0";
+    if (!shouldConvert) return source;
+    const converted = roundAutoConvertedUnitPrice(
+      decimalToString(
+        divideDecimals(source, previousFactor, FX_DECIMAL_PLACES).times(nextFactor),
+      ),
+      params.amountDecimalPlaces,
+    );
+    return converted ?? source;
   };
-  const nextUnitPriceNet = convertAmount(params.unitPriceNet, shouldConvertNet);
-  const nextUnitPriceGross = convertAmount(
+  const nextUnitPriceNetExact = convertAmount(
+    params.unitPriceNet,
+    params.unitPriceNetExact,
+    shouldConvertNet,
+  );
+  const nextUnitPriceGrossExact = convertAmount(
     params.unitPriceGross,
+    params.unitPriceGrossExact,
     shouldConvertGross,
   );
+  const nextUnitPriceNet =
+    nextUnitPriceNetExact === null ? params.unitPriceNet : decimalToNumber(nextUnitPriceNetExact);
+  const nextUnitPriceGross =
+    nextUnitPriceGrossExact === null ? params.unitPriceGross : decimalToNumber(nextUnitPriceGrossExact);
   const didConvert =
     nextUnitPriceNet !== params.unitPriceNet ||
     nextUnitPriceGross !== params.unitPriceGross;
   return {
     unitPriceNet: nextUnitPriceNet,
+    unitPriceNetExact: nextUnitPriceNetExact,
     unitPriceGross: nextUnitPriceGross,
+    unitPriceGrossExact: nextUnitPriceGrossExact,
     didConvert,
   };
 }
@@ -2634,16 +2678,20 @@ function buildUnitPriceReferenceSnapshot(params: {
     typeof params.unitPriceGross === "number" &&
     Number.isFinite(params.unitPriceGross)
   ) {
-    output.grossPerReference = toNumericString(
-      (params.unitPriceGross / params.toBaseFactor) * baseQuantityNumber,
+    output.grossPerReference = decimalToString(
+      divideDecimals(params.unitPriceGross, params.toBaseFactor, DEFAULT_AMOUNT_DECIMAL_PLACES).times(
+        baseQuantityNumber,
+      ),
     );
   }
   if (
     typeof params.unitPriceNet === "number" &&
     Number.isFinite(params.unitPriceNet)
   ) {
-    output.netPerReference = toNumericString(
-      (params.unitPriceNet / params.toBaseFactor) * baseQuantityNumber,
+    output.netPerReference = decimalToString(
+      divideDecimals(params.unitPriceNet, params.toBaseFactor, DEFAULT_AMOUNT_DECIMAL_PLACES).times(
+        baseQuantityNumber,
+      ),
     );
   }
   return output;
@@ -3008,7 +3056,9 @@ function mapOrderAdjustmentToDraft(
     promotionId: adjustment.promotionId ?? null,
     rate: toNumeric(adjustment.rate),
     amountNet: toNumeric(adjustment.amountNet),
+    amountNetExact: toNumericString(adjustment.amountNet) ?? "0",
     amountGross: toNumeric(adjustment.amountGross),
+    amountGrossExact: toNumericString(adjustment.amountGross) ?? "0",
     currencyCode: adjustment.currencyCode ?? null,
     metadata: adjustment.metadata ? cloneJson(adjustment.metadata) : null,
     position: adjustment.position ?? 0,
@@ -3028,7 +3078,9 @@ function mapQuoteAdjustmentToDraft(
     promotionId: adjustment.promotionId ?? null,
     rate: toNumeric(adjustment.rate),
     amountNet: toNumeric(adjustment.amountNet),
+    amountNetExact: toNumericString(adjustment.amountNet) ?? "0",
     amountGross: toNumeric(adjustment.amountGross),
+    amountGrossExact: toNumericString(adjustment.amountGross) ?? "0",
     currencyCode: adjustment.currencyCode ?? null,
     metadata: adjustment.metadata ? cloneJson(adjustment.metadata) : null,
     position: adjustment.position ?? 0,
@@ -3065,6 +3117,36 @@ function isStoredRowSourcedTotalsLine(line: DocumentLineCreateInput): boolean {
   );
 }
 
+const LINE_EXACT_AMOUNT_FIELDS = [
+  "unitPriceNet",
+  "unitPriceGross",
+  "discountAmount",
+  "taxAmount",
+  "totalNetAmount",
+  "totalGrossAmount",
+] as const;
+
+const ADJUSTMENT_EXACT_AMOUNT_FIELDS = ["amountNet", "amountGross"] as const;
+
+/**
+ * Exact decimal string for `value`: the first candidate whose float equals it
+ * (so digits beyond float precision survive), else `value` itself.
+ */
+function exactFor(value: number | null | undefined, ...candidates: unknown[]): string | null {
+  if (value === null || value === undefined) return null;
+  for (const candidate of candidates) {
+    const exact = parseDecimal(candidate);
+    if (exact && decimalToNumber(exact) === value) return decimalToString(exact);
+  }
+  return toNumericString(value);
+}
+
+function rawListItem(raw: unknown, key: string, index: number): unknown {
+  if (!raw || typeof raw !== "object") return undefined;
+  const list = (raw as Record<string, unknown>)[key];
+  return Array.isArray(list) ? list[index] : undefined;
+}
+
 function createLineSnapshotFromInput(
   line: DocumentLineCreateInput,
   lineNumber: number,
@@ -3094,8 +3176,11 @@ function createLineSnapshotFromInput(
         : null,
     currencyCode: line.currencyCode,
     unitPriceNet: line.unitPriceNet ?? null,
+    unitPriceNetExact: exactAmountString(line.unitPriceNetExact, line.unitPriceNet),
     unitPriceGross: line.unitPriceGross ?? null,
+    unitPriceGrossExact: exactAmountString(line.unitPriceGrossExact, line.unitPriceGross),
     discountAmount: line.discountAmount ?? null,
+    discountAmountExact: exactAmountString(line.discountAmountExact, line.discountAmount),
     // Several callers re-run an already-mapped snapshot through here — the line
     // upsert and delete paths rebuild every line of the document, not just the
     // one being edited. Those inputs already carry a line total from a stored
@@ -3113,8 +3198,11 @@ function createLineSnapshotFromInput(
     discountPercent: line.discountPercent ?? null,
     taxRate: line.taxRate ?? null,
     taxAmount: line.taxAmount ?? null,
+    taxAmountExact: exactAmountString(line.taxAmountExact, line.taxAmount),
     totalNetAmount: line.totalNetAmount ?? null,
+    totalNetAmountExact: exactAmountString(line.totalNetAmountExact, line.totalNetAmount),
     totalGrossAmount: line.totalGrossAmount ?? null,
+    totalGrossAmountExact: exactAmountString(line.totalGrossAmountExact, line.totalGrossAmount),
     configuration: line.configuration ? cloneJson(line.configuration) : null,
     promotionCode: line.promotionCode ?? null,
     metadata: line.metadata ? cloneJson(line.metadata) : null,
@@ -3151,11 +3239,26 @@ function createAdjustmentDraftFromInput(
     promotionId: adjustment.promotionId ?? null,
     rate: adjustment.rate ?? null,
     amountNet: adjustment.amountNet ?? null,
+    amountNetExact: exactAmountString(adjustment.amountNetExact, adjustment.amountNet),
     amountGross: adjustment.amountGross ?? null,
+    amountGrossExact: exactAmountString(adjustment.amountGrossExact, adjustment.amountGross),
     currencyCode: adjustment.currencyCode ?? null,
     metadata: adjustment.metadata ? cloneJson(adjustment.metadata) : null,
     position: adjustment.position ?? 0,
   };
+}
+
+function deriveUnitAmount(
+  totalExact: string | null | undefined,
+  total: number,
+  quantity: number | null | undefined,
+): string {
+  const divisor = Math.max(quantity || 1, 1);
+  const totalAmount = exactAmountString(totalExact, total) ?? "0";
+  const decimalPlaces = Math.max(DEFAULT_AMOUNT_DECIMAL_PLACES, countDecimalPlaces(totalAmount));
+  return decimalToString(
+    roundDecimal(divideDecimals(totalAmount, divisor, FX_DECIMAL_PLACES), decimalPlaces),
+  );
 }
 
 function convertLineCalculationToEntityInput(
@@ -3188,21 +3291,17 @@ function convertLineCalculationToEntityInput(
         : null,
     currencyCode: line.currencyCode,
     unitPriceNet:
-      toNumericString(
-        line.unitPriceNet ??
-          lineResult.netAmount / Math.max(line.quantity || 1, 1),
-      ) ?? "0",
+      exactAmountString(line.unitPriceNetExact, line.unitPriceNet) ??
+      deriveUnitAmount(lineResult.netAmountExact, lineResult.netAmount, line.quantity),
     unitPriceGross:
-      toNumericString(
-        line.unitPriceGross ??
-          lineResult.grossAmount / Math.max(line.quantity || 1, 1),
-      ) ?? "0",
-    discountAmount: toNumericString(lineResult.discountAmount) ?? "0",
+      exactAmountString(line.unitPriceGrossExact, line.unitPriceGross) ??
+      deriveUnitAmount(lineResult.grossAmountExact, lineResult.grossAmount, line.quantity),
+    discountAmount: exactAmountString(lineResult.discountAmountExact, lineResult.discountAmount) ?? "0",
     discountPercent: toNumericString(line.discountPercent) ?? "0",
     taxRate: toNumericString(line.taxRate) ?? "0",
-    taxAmount: toNumericString(lineResult.taxAmount) ?? "0",
-    totalNetAmount: toNumericString(lineResult.netAmount) ?? "0",
-    totalGrossAmount: toNumericString(lineResult.grossAmount) ?? "0",
+    taxAmount: exactAmountString(lineResult.taxAmountExact, lineResult.taxAmount) ?? "0",
+    totalNetAmount: exactAmountString(lineResult.netAmountExact, lineResult.netAmount) ?? "0",
+    totalGrossAmount: exactAmountString(lineResult.grossAmountExact, lineResult.grossAmount) ?? "0",
     configuration: line.configuration ? cloneJson(line.configuration) : null,
     promotionCode: line.promotionCode ?? null,
     promotionSnapshot: sourceLine.promotionSnapshot
@@ -3235,9 +3334,11 @@ function convertAdjustmentResultToEntityInput(
     calculatorKey: adjustment.calculatorKey ?? null,
     promotionId: adjustment.promotionId ?? null,
     rate: toNumericString(adjustment.rate) ?? "0",
-    amountNet: toNumericString(adjustment.amountNet) ?? "0",
+    amountNet: exactAmountString(adjustment.amountNetExact, adjustment.amountNet) ?? "0",
     amountGross:
-      toNumericString(adjustment.amountGross ?? adjustment.amountNet) ?? "0",
+      exactAmountString(adjustment.amountGrossExact, adjustment.amountGross) ??
+      exactAmountString(adjustment.amountNetExact, adjustment.amountNet) ??
+      "0",
     currencyCode: adjustment.currencyCode ?? null,
     metadata,
     position: resolvedPosition,
@@ -3655,16 +3756,16 @@ function applyQuoteTotals(
   totals: SalesDocumentCalculationResult["totals"],
   lineCount: number,
 ): void {
-  quote.subtotalNetAmount = toNumericString(totals.subtotalNetAmount) ?? "0";
+  quote.subtotalNetAmount = exactAmountString(totals.subtotalNetAmountExact, totals.subtotalNetAmount) ?? "0";
   quote.subtotalGrossAmount =
-    toNumericString(totals.subtotalGrossAmount) ?? "0";
+    exactAmountString(totals.subtotalGrossAmountExact, totals.subtotalGrossAmount) ?? "0";
   quote.discountTotalAmount =
-    toNumericString(totals.discountTotalAmount) ?? "0";
-  quote.taxTotalAmount = toNumericString(totals.taxTotalAmount) ?? "0";
+    exactAmountString(totals.discountTotalAmountExact, totals.discountTotalAmount) ?? "0";
+  quote.taxTotalAmount = exactAmountString(totals.taxTotalAmountExact, totals.taxTotalAmount) ?? "0";
   quote.grandTotalNetAmount =
-    toNumericString(totals.grandTotalNetAmount) ?? "0";
+    exactAmountString(totals.grandTotalNetAmountExact, totals.grandTotalNetAmount) ?? "0";
   quote.grandTotalGrossAmount =
-    toNumericString(totals.grandTotalGrossAmount) ?? "0";
+    exactAmountString(totals.grandTotalGrossAmountExact, totals.grandTotalGrossAmount) ?? "0";
   quote.totalsSnapshot = cloneJson(totals);
   quote.lineItemCount = lineCount;
 }
@@ -3674,44 +3775,31 @@ function applyOrderTotals(
   totals: SalesDocumentCalculationResult["totals"],
   lineCount: number,
 ): void {
-  order.subtotalNetAmount = toNumericString(totals.subtotalNetAmount) ?? "0";
+  order.subtotalNetAmount = exactAmountString(totals.subtotalNetAmountExact, totals.subtotalNetAmount) ?? "0";
   order.subtotalGrossAmount =
-    toNumericString(totals.subtotalGrossAmount) ?? "0";
+    exactAmountString(totals.subtotalGrossAmountExact, totals.subtotalGrossAmount) ?? "0";
   order.discountTotalAmount =
-    toNumericString(totals.discountTotalAmount) ?? "0";
-  order.taxTotalAmount = toNumericString(totals.taxTotalAmount) ?? "0";
-  order.shippingNetAmount = toNumericString(totals.shippingNetAmount) ?? "0";
+    exactAmountString(totals.discountTotalAmountExact, totals.discountTotalAmount) ?? "0";
+  order.taxTotalAmount = exactAmountString(totals.taxTotalAmountExact, totals.taxTotalAmount) ?? "0";
+  order.shippingNetAmount = exactAmountString(totals.shippingNetAmountExact, totals.shippingNetAmount) ?? "0";
   order.shippingGrossAmount =
-    toNumericString(totals.shippingGrossAmount) ?? "0";
+    exactAmountString(totals.shippingGrossAmountExact, totals.shippingGrossAmount) ?? "0";
   order.surchargeTotalAmount =
-    toNumericString(totals.surchargeTotalAmount) ?? "0";
+    exactAmountString(totals.surchargeTotalAmountExact, totals.surchargeTotalAmount) ?? "0";
   order.grandTotalNetAmount =
-    toNumericString(totals.grandTotalNetAmount) ?? "0";
+    exactAmountString(totals.grandTotalNetAmountExact, totals.grandTotalNetAmount) ?? "0";
   order.grandTotalGrossAmount =
-    toNumericString(totals.grandTotalGrossAmount) ?? "0";
-  order.paidTotalAmount = toNumericString(totals.paidTotalAmount) ?? "0";
+    exactAmountString(totals.grandTotalGrossAmountExact, totals.grandTotalGrossAmount) ?? "0";
+  order.paidTotalAmount = exactAmountString(totals.paidTotalAmountExact, totals.paidTotalAmount) ?? "0";
   order.refundedTotalAmount =
-    toNumericString(totals.refundedTotalAmount) ?? "0";
-  order.outstandingAmount = toNumericString(totals.outstandingAmount) ?? "0";
+    exactAmountString(totals.refundedTotalAmountExact, totals.refundedTotalAmount) ?? "0";
+  order.outstandingAmount = exactAmountString(totals.outstandingAmountExact, totals.outstandingAmount) ?? "0";
   order.totalsSnapshot = cloneJson(totals);
   order.lineItemCount = lineCount;
 }
 
-function normalizePaymentTotal(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value))
-    return Math.max(value, 0);
-  if (typeof value === "string" && value.trim().length) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? Math.max(parsed, 0) : 0;
-  }
-  return 0;
-}
-
 function resolveExistingPaymentTotals(order: SalesOrder) {
-  return {
-    paidTotalAmount: normalizePaymentTotal(order.paidTotalAmount),
-    refundedTotalAmount: normalizePaymentTotal(order.refundedTotalAmount),
-  };
+  return resolveOrderPaymentTotals(order);
 }
 
 function ensureQuoteScope(
@@ -4297,9 +4385,7 @@ async function restoreQuoteGraph(
       discountPercent: line.discountPercent,
       taxRate: line.taxRate,
       taxAmount: line.taxAmount,
-      totalNetAmount: toNumericString(
-        deriveLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
-      ),
+      totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
       totalGrossAmount: line.totalGrossAmount,
       configuration: line.configuration ? cloneJson(line.configuration) : null,
       promotionCode: line.promotionCode ?? null,
@@ -4856,9 +4942,7 @@ async function restoreOrderGraph(
       discountPercent: line.discountPercent,
       taxRate: line.taxRate,
       taxAmount: line.taxAmount,
-      totalNetAmount: toNumericString(
-        deriveLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
-      ),
+      totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
       totalGrossAmount: line.totalGrossAmount,
       configuration: line.configuration ? cloneJson(line.configuration) : null,
       promotionCode: line.promotionCode ?? null,
@@ -5160,13 +5244,17 @@ const createQuoteCommand: CommandHandler<
     });
 
     const lineInputs = (parsed.lines ?? []).map((line, index) =>
-      quoteLineCreateSchema.parse({
-        ...line,
-        organizationId: parsed.organizationId,
-        tenantId: parsed.tenantId,
-        quoteId: quote.id,
-        lineNumber: line.lineNumber ?? index + 1,
-      }),
+      withExactAmounts(
+        quoteLineCreateSchema.parse({
+          ...line,
+          organizationId: parsed.organizationId,
+          tenantId: parsed.tenantId,
+          quoteId: quote.id,
+          lineNumber: line.lineNumber ?? index + 1,
+        }),
+        rawListItem(rawInput, "lines", index),
+        LINE_EXACT_AMOUNT_FIELDS,
+      ),
     );
     const uomResolver = createUomResolver();
     const normalizedLineInputs = await Promise.all(
@@ -5189,13 +5277,17 @@ const createQuoteCommand: CommandHandler<
       }),
     );
     const adjustmentInputs = parsed.adjustments
-      ? parsed.adjustments.map((adj) =>
-          quoteAdjustmentCreateSchema.parse({
-            ...adj,
-            organizationId: parsed.organizationId,
-            tenantId: parsed.tenantId,
-            quoteId: quote.id,
-          }),
+      ? parsed.adjustments.map((adj, index) =>
+          withExactAmounts(
+            quoteAdjustmentCreateSchema.parse({
+              ...adj,
+              organizationId: parsed.organizationId,
+              tenantId: parsed.tenantId,
+              quoteId: quote.id,
+            }),
+            rawListItem(rawInput, "adjustments", index),
+            ADJUSTMENT_EXACT_AMOUNT_FIELDS,
+          ),
         )
       : null;
 
@@ -5540,7 +5632,11 @@ const updateQuoteCommand: CommandHandler<
     return snapshot ? { before: snapshot } : {};
   },
   async execute(rawInput, ctx) {
-    const parsed = documentUpdateSchema.parse(rawInput ?? {});
+    const parsed = withExactAmounts(
+      documentUpdateSchema.parse(rawInput ?? {}),
+      rawInput,
+      ["exchangeRate"] as const,
+    );
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const quote = await findOneWithDecryption(em, SalesQuote, {
       id: parsed.id,
@@ -5829,7 +5925,11 @@ const updateOrderCommand: CommandHandler<
     return snapshot ? { before: snapshot } : {};
   },
   async execute(rawInput, ctx) {
-    const parsed = documentUpdateSchema.parse(rawInput ?? {});
+    const parsed = withExactAmounts(
+      documentUpdateSchema.parse(rawInput ?? {}),
+      rawInput,
+      ["exchangeRate"] as const,
+    );
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const order = await findOneWithDecryption(em, SalesOrder, {
       id: parsed.id,
@@ -6153,7 +6253,12 @@ const createOrderCommand: CommandHandler<
       currencyCode: parsed.currencyCode,
       exchangeRate:
         typeof parsed.exchangeRate === "number"
-          ? toNumericString(parsed.exchangeRate)
+          ? exactFor(
+              parsed.exchangeRate,
+              rawInput && typeof rawInput === "object"
+                ? (rawInput as Record<string, unknown>).exchangeRate
+                : undefined,
+            )
           : null,
       taxStrategyKey: parsed.taxStrategyKey ?? null,
       discountStrategyKey: parsed.discountStrategyKey ?? null,
@@ -6259,13 +6364,17 @@ const createOrderCommand: CommandHandler<
       updatedAt: new Date(),
     });
     const lineInputs = (parsed.lines ?? []).map((line, index) =>
-      orderLineCreateSchema.parse({
-        ...line,
-        organizationId: parsed.organizationId,
-        tenantId: parsed.tenantId,
-        orderId: order.id,
-        lineNumber: line.lineNumber ?? index + 1,
-      }),
+      withExactAmounts(
+        orderLineCreateSchema.parse({
+          ...line,
+          organizationId: parsed.organizationId,
+          tenantId: parsed.tenantId,
+          orderId: order.id,
+          lineNumber: line.lineNumber ?? index + 1,
+        }),
+        rawListItem(rawInput, "lines", index),
+        LINE_EXACT_AMOUNT_FIELDS,
+      ),
     );
     const uomResolver = createUomResolver();
     const normalizedLineInputs = await Promise.all(
@@ -6288,13 +6397,17 @@ const createOrderCommand: CommandHandler<
       }),
     );
     const adjustmentInputs = parsed.adjustments
-      ? parsed.adjustments.map((adj) =>
-          orderAdjustmentCreateSchema.parse({
-            ...adj,
-            organizationId: parsed.organizationId,
-            tenantId: parsed.tenantId,
-            orderId: order.id,
-          }),
+      ? parsed.adjustments.map((adj, index) =>
+          withExactAmounts(
+            orderAdjustmentCreateSchema.parse({
+              ...adj,
+              organizationId: parsed.organizationId,
+              tenantId: parsed.tenantId,
+              orderId: order.id,
+            }),
+            rawListItem(rawInput, "adjustments", index),
+            ADJUSTMENT_EXACT_AMOUNT_FIELDS,
+          ),
         )
       : null;
 
@@ -6923,9 +7036,7 @@ const convertQuoteToOrderCommand: CommandHandler<
           discountPercent: line.discountPercent,
           taxRate: line.taxRate,
           taxAmount: line.taxAmount,
-          totalNetAmount: toNumericString(
-            deriveLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
-          ),
+          totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
           totalGrossAmount: line.totalGrossAmount,
           configuration: line.configuration
             ? cloneJson(line.configuration)
@@ -7478,7 +7589,11 @@ const orderLineUpsertCommand: CommandHandler<
   },
   async execute(input, ctx) {
     const rawBody = (input?.body as Record<string, unknown> | undefined) ?? {};
-    const parsed = orderLineUpsertSchema.parse(rawBody);
+    const parsed = withExactAmounts(
+      orderLineUpsertSchema.parse(rawBody),
+      rawBody,
+      LINE_EXACT_AMOUNT_FIELDS,
+    );
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const order = await findOneWithDecryption(em, SalesOrder, {
       id: parsed.orderId,
@@ -7514,6 +7629,12 @@ const orderLineUpsertCommand: CommandHandler<
     let unitPriceGross =
       parsed.unitPriceGross ?? existingSnapshot?.unitPriceGross ?? null;
     let taxRate = parsed.taxRate ?? existingSnapshot?.taxRate ?? null;
+    let unitPriceExactFromTax: { net?: string; gross?: string } | null = null;
+    const lineAmountDecimalPlaces = await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+      code: parsed.currencyCode ?? existingSnapshot?.currencyCode ?? order.currencyCode,
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+    });
     if (priceMode && (unitPriceNet === null || unitPriceGross === null)) {
       let taxService: TaxCalculationService | null = null;
       try {
@@ -7524,11 +7645,20 @@ const orderLineUpsertCommand: CommandHandler<
         taxService = null;
       }
       if (taxService) {
+        const taxAmountInput =
+          priceMode === "gross"
+            ? (unitPriceGross ?? unitPriceNet ?? 0)
+            : (unitPriceNet ?? unitPriceGross ?? 0);
         const taxResult = await taxService.calculateUnitAmounts({
-          amount:
-            priceMode === "gross"
-              ? (unitPriceGross ?? unitPriceNet ?? 0)
-              : (unitPriceNet ?? unitPriceGross ?? 0),
+          amount: taxAmountInput,
+          amountExact: exactFor(
+            taxAmountInput,
+            parsed.unitPriceGrossExact,
+            parsed.unitPriceNetExact,
+            existingSnapshot?.unitPriceGrossExact,
+            existingSnapshot?.unitPriceNetExact,
+          ),
+          amountDecimalPlaces: lineAmountDecimalPlaces,
           mode: priceMode,
           organizationId: parsed.organizationId,
           tenantId: parsed.tenantId,
@@ -7537,6 +7667,7 @@ const orderLineUpsertCommand: CommandHandler<
         });
         unitPriceNet = unitPriceNet ?? taxResult.netAmount;
         unitPriceGross = unitPriceGross ?? taxResult.grossAmount;
+        unitPriceExactFromTax = { net: taxResult.netAmountExact, gross: taxResult.grossAmountExact };
         taxRate = taxResult.taxRate ?? taxRate;
       }
     }
@@ -7580,11 +7711,28 @@ const orderLineUpsertCommand: CommandHandler<
       nextQuantityUnit: normalizedUom.quantityUnit,
       nextUomSnapshot: normalizedUom.uomSnapshot,
       unitPriceNet,
+      unitPriceNetExact: exactFor(
+        unitPriceNet,
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+        unitPriceExactFromTax?.net,
+      ),
       unitPriceGross,
+      unitPriceGrossExact: exactFor(
+        unitPriceGross,
+        parsed.unitPriceGrossExact,
+        existingSnapshot?.unitPriceGrossExact,
+        unitPriceExactFromTax?.gross,
+      ),
+      amountDecimalPlaces: lineAmountDecimalPlaces,
     });
     if (convertedPrices.didConvert) {
       unitPriceNet = convertedPrices.unitPriceNet;
       unitPriceGross = convertedPrices.unitPriceGross;
+      unitPriceExactFromTax = {
+        net: convertedPrices.unitPriceNetExact ?? undefined,
+        gross: convertedPrices.unitPriceGrossExact ?? undefined,
+      };
       normalizedUom = await normalizeLineUom({
         em,
         resolver: uomResolver,
@@ -7626,17 +7774,36 @@ const orderLineUpsertCommand: CommandHandler<
         existingSnapshot?.currencyCode ??
         order.currencyCode,
       unitPriceNet: unitPriceNet ?? 0,
+      unitPriceNetExact: exactFor(
+        unitPriceNet ?? 0,
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+        unitPriceExactFromTax?.net,
+      ),
       unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
+      unitPriceGrossExact: exactFor(
+        unitPriceGross ?? unitPriceNet ?? 0,
+        parsed.unitPriceGrossExact,
+        existingSnapshot?.unitPriceGrossExact,
+        unitPriceExactFromTax?.gross,
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+      ),
       ...resolveUpsertDiscountFields(
         parsed.discountAmount,
         parsed.discountAmountBasis,
         existingSnapshot,
+        parsed.discountAmountExact,
       ),
       discountPercent:
         parsed.discountPercent ?? existingSnapshot?.discountPercent ?? 0,
       taxRate: taxRate ?? 0,
       totalNetAmount:
         parsed.totalNetAmount ?? existingSnapshot?.totalNetAmount ?? null,
+      totalNetAmountExact:
+        parsed.totalNetAmount !== undefined && parsed.totalNetAmount !== null
+          ? parsed.totalNetAmountExact
+          : (existingSnapshot?.totalNetAmountExact ?? null),
       ...resolveUpsertTotalsOrigin(parsed.totalNetAmount, existingSnapshot),
       configuration:
         parsed.configuration ?? existingSnapshot?.configuration ?? null,
@@ -7975,7 +8142,11 @@ const quoteLineUpsertCommand: CommandHandler<
   },
   async execute(input, ctx) {
     const rawBody = (input?.body as Record<string, unknown> | undefined) ?? {};
-    const parsed = quoteLineUpsertSchema.parse(rawBody);
+    const parsed = withExactAmounts(
+      quoteLineUpsertSchema.parse(rawBody),
+      rawBody,
+      LINE_EXACT_AMOUNT_FIELDS,
+    );
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const quote = await findOneWithDecryption(em, SalesQuote, {
       id: parsed.quoteId,
@@ -8008,6 +8179,12 @@ const quoteLineUpsertCommand: CommandHandler<
     let unitPriceGross =
       parsed.unitPriceGross ?? existingSnapshot?.unitPriceGross ?? null;
     let taxRate = parsed.taxRate ?? existingSnapshot?.taxRate ?? null;
+    let unitPriceExactFromTax: { net?: string; gross?: string } | null = null;
+    const lineAmountDecimalPlaces = await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+      code: parsed.currencyCode ?? existingSnapshot?.currencyCode ?? quote.currencyCode,
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+    });
     if (priceMode && (unitPriceNet === null || unitPriceGross === null)) {
       let taxService: TaxCalculationService | null = null;
       try {
@@ -8018,11 +8195,20 @@ const quoteLineUpsertCommand: CommandHandler<
         taxService = null;
       }
       if (taxService) {
+        const taxAmountInput =
+          priceMode === "gross"
+            ? (unitPriceGross ?? unitPriceNet ?? 0)
+            : (unitPriceNet ?? unitPriceGross ?? 0);
         const taxResult = await taxService.calculateUnitAmounts({
-          amount:
-            priceMode === "gross"
-              ? (unitPriceGross ?? unitPriceNet ?? 0)
-              : (unitPriceNet ?? unitPriceGross ?? 0),
+          amount: taxAmountInput,
+          amountExact: exactFor(
+            taxAmountInput,
+            parsed.unitPriceGrossExact,
+            parsed.unitPriceNetExact,
+            existingSnapshot?.unitPriceGrossExact,
+            existingSnapshot?.unitPriceNetExact,
+          ),
+          amountDecimalPlaces: lineAmountDecimalPlaces,
           mode: priceMode,
           organizationId: parsed.organizationId,
           tenantId: parsed.tenantId,
@@ -8031,6 +8217,7 @@ const quoteLineUpsertCommand: CommandHandler<
         });
         unitPriceNet = unitPriceNet ?? taxResult.netAmount;
         unitPriceGross = unitPriceGross ?? taxResult.grossAmount;
+        unitPriceExactFromTax = { net: taxResult.netAmountExact, gross: taxResult.grossAmountExact };
         taxRate = taxResult.taxRate ?? taxRate;
       }
     }
@@ -8073,11 +8260,28 @@ const quoteLineUpsertCommand: CommandHandler<
       nextQuantityUnit: normalizedUom.quantityUnit,
       nextUomSnapshot: normalizedUom.uomSnapshot,
       unitPriceNet,
+      unitPriceNetExact: exactFor(
+        unitPriceNet,
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+        unitPriceExactFromTax?.net,
+      ),
       unitPriceGross,
+      unitPriceGrossExact: exactFor(
+        unitPriceGross,
+        parsed.unitPriceGrossExact,
+        existingSnapshot?.unitPriceGrossExact,
+        unitPriceExactFromTax?.gross,
+      ),
+      amountDecimalPlaces: lineAmountDecimalPlaces,
     });
     if (convertedPrices.didConvert) {
       unitPriceNet = convertedPrices.unitPriceNet;
       unitPriceGross = convertedPrices.unitPriceGross;
+      unitPriceExactFromTax = {
+        net: convertedPrices.unitPriceNetExact ?? undefined,
+        gross: convertedPrices.unitPriceGrossExact ?? undefined,
+      };
       normalizedUom = await normalizeLineUom({
         em,
         resolver: uomResolver,
@@ -8119,17 +8323,36 @@ const quoteLineUpsertCommand: CommandHandler<
         existingSnapshot?.currencyCode ??
         quote.currencyCode,
       unitPriceNet: unitPriceNet ?? 0,
+      unitPriceNetExact: exactFor(
+        unitPriceNet ?? 0,
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+        unitPriceExactFromTax?.net,
+      ),
       unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
+      unitPriceGrossExact: exactFor(
+        unitPriceGross ?? unitPriceNet ?? 0,
+        parsed.unitPriceGrossExact,
+        existingSnapshot?.unitPriceGrossExact,
+        unitPriceExactFromTax?.gross,
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+      ),
       ...resolveUpsertDiscountFields(
         parsed.discountAmount,
         parsed.discountAmountBasis,
         existingSnapshot,
+        parsed.discountAmountExact,
       ),
       discountPercent:
         parsed.discountPercent ?? existingSnapshot?.discountPercent ?? 0,
       taxRate: taxRate ?? 0,
       totalNetAmount:
         parsed.totalNetAmount ?? existingSnapshot?.totalNetAmount ?? null,
+      totalNetAmountExact:
+        parsed.totalNetAmount !== undefined && parsed.totalNetAmount !== null
+          ? parsed.totalNetAmountExact
+          : (existingSnapshot?.totalNetAmountExact ?? null),
       ...resolveUpsertTotalsOrigin(parsed.totalNetAmount, existingSnapshot),
       configuration:
         parsed.configuration ?? existingSnapshot?.configuration ?? null,
@@ -8438,8 +8661,12 @@ const orderAdjustmentUpsertCommand: CommandHandler<
     return snapshot ? { before: snapshot } : {};
   },
   async execute(input, ctx) {
-    const parsed = orderAdjustmentUpsertSchema.parse(
-      (input?.body as Record<string, unknown> | undefined) ?? {},
+    const parsed = withExactAmounts(
+      orderAdjustmentUpsertSchema.parse(
+        (input?.body as Record<string, unknown> | undefined) ?? {},
+      ),
+      input?.body,
+      ADJUSTMENT_EXACT_AMOUNT_FIELDS,
     );
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const order = await findOneWithDecryption(em, SalesOrder, {
@@ -8501,7 +8728,15 @@ const orderAdjustmentUpsertCommand: CommandHandler<
                 promotionId: parsed.promotionId ?? adj.promotionId ?? null,
                 rate: parsed.rate ?? adj.rate ?? null,
                 amountNet: parsed.amountNet ?? adj.amountNet ?? null,
+                amountNetExact:
+                  parsed.amountNet !== undefined && parsed.amountNet !== null
+                    ? parsed.amountNetExact
+                    : (adj.amountNetExact ?? null),
                 amountGross: parsed.amountGross ?? adj.amountGross ?? null,
+                amountGrossExact:
+                  parsed.amountGross !== undefined && parsed.amountGross !== null
+                    ? parsed.amountGrossExact
+                    : (adj.amountGrossExact ?? null),
                 currencyCode:
                   parsed.currencyCode ?? adj.currencyCode ?? order.currencyCode,
                 metadata,
@@ -8526,7 +8761,9 @@ const orderAdjustmentUpsertCommand: CommandHandler<
             promotionId: parsed.promotionId ?? null,
             rate: parsed.rate ?? null,
             amountNet: parsed.amountNet ?? null,
+            amountNetExact: parsed.amountNetExact ?? null,
             amountGross: parsed.amountGross ?? null,
+            amountGrossExact: parsed.amountGrossExact ?? null,
             currencyCode: parsed.currencyCode ?? order.currencyCode,
             metadata,
             customFields: parsed.customFields ?? null,
@@ -8891,8 +9128,12 @@ const quoteAdjustmentUpsertCommand: CommandHandler<
     return snapshot ? { before: snapshot } : {};
   },
   async execute(input, ctx) {
-    const parsed = quoteAdjustmentUpsertSchema.parse(
-      (input?.body as Record<string, unknown> | undefined) ?? {},
+    const parsed = withExactAmounts(
+      quoteAdjustmentUpsertSchema.parse(
+        (input?.body as Record<string, unknown> | undefined) ?? {},
+      ),
+      input?.body,
+      ADJUSTMENT_EXACT_AMOUNT_FIELDS,
     );
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const quote = await findOneWithDecryption(em, SalesQuote, {
@@ -8954,7 +9195,15 @@ const quoteAdjustmentUpsertCommand: CommandHandler<
                 promotionId: parsed.promotionId ?? adj.promotionId ?? null,
                 rate: parsed.rate ?? adj.rate ?? null,
                 amountNet: parsed.amountNet ?? adj.amountNet ?? null,
+                amountNetExact:
+                  parsed.amountNet !== undefined && parsed.amountNet !== null
+                    ? parsed.amountNetExact
+                    : (adj.amountNetExact ?? null),
                 amountGross: parsed.amountGross ?? adj.amountGross ?? null,
+                amountGrossExact:
+                  parsed.amountGross !== undefined && parsed.amountGross !== null
+                    ? parsed.amountGrossExact
+                    : (adj.amountGrossExact ?? null),
                 currencyCode:
                   parsed.currencyCode ?? adj.currencyCode ?? quote.currencyCode,
                 metadata,
@@ -8979,7 +9228,9 @@ const quoteAdjustmentUpsertCommand: CommandHandler<
             promotionId: parsed.promotionId ?? null,
             rate: parsed.rate ?? null,
             amountNet: parsed.amountNet ?? null,
+            amountNetExact: parsed.amountNetExact ?? null,
             amountGross: parsed.amountGross ?? null,
+            amountGrossExact: parsed.amountGrossExact ?? null,
             currencyCode: parsed.currencyCode ?? quote.currencyCode,
             metadata,
             customFields: parsed.customFields ?? null,
@@ -9455,9 +9706,7 @@ const createInvoiceCommand: CommandHandler<
                   discountPercent: toNumericString(line.discountPercent ?? 0),
                   taxRate: toNumericString(line.taxRate ?? 0),
                   taxAmount: toNumericString(line.taxAmount ?? 0),
-                  totalNetAmount: toNumericString(
-                    deriveLineNetFromGross(line.totalNetAmount ?? 0, line.totalGrossAmount ?? 0, line.taxRate ?? 0),
-                  ),
+                  totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount ?? 0, line.totalGrossAmount ?? 0, line.taxRate ?? 0),
                   totalGrossAmount: toNumericString(line.totalGrossAmount ?? 0),
                   metadata: line.metadata ?? null,
                 }),
@@ -9882,9 +10131,7 @@ const deleteInvoiceCommand: CommandHandler<
         discountPercent: line.discountPercent,
         taxRate: line.taxRate,
         taxAmount: line.taxAmount,
-        totalNetAmount: toNumericString(
-          deriveLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
-        ),
+        totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
         totalGrossAmount: line.totalGrossAmount,
         metadata: line.metadata,
       }));
@@ -10035,9 +10282,7 @@ const createCreditMemoCommand: CommandHandler<
                   unitPriceGross: toNumericString(line.unitPriceGross ?? 0),
                   taxRate: toNumericString(line.taxRate ?? 0),
                   taxAmount: toNumericString(line.taxAmount ?? 0),
-                  totalNetAmount: toNumericString(
-                    deriveLineNetFromGross(line.totalNetAmount ?? 0, line.totalGrossAmount ?? 0, line.taxRate ?? 0),
-                  ),
+                  totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount ?? 0, line.totalGrossAmount ?? 0, line.taxRate ?? 0),
                   totalGrossAmount: toNumericString(line.totalGrossAmount ?? 0),
                   metadata: line.metadata ?? null,
                 }),
@@ -10427,9 +10672,7 @@ const deleteCreditMemoCommand: CommandHandler<
         unitPriceGross: line.unitPriceGross,
         taxRate: line.taxRate,
         taxAmount: line.taxAmount,
-        totalNetAmount: toNumericString(
-          deriveLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
-        ),
+        totalNetAmount: deriveExactLineNetFromGross(line.totalNetAmount, line.totalGrossAmount, line.taxRate),
         totalGrossAmount: line.totalGrossAmount,
         metadata: line.metadata,
       }));

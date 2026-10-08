@@ -122,6 +122,11 @@ export function maxDecimal(...values: DecimalInput[]): DecimalValue {
   return values.map(toDecimal).reduce((highest, value) => (value.gt(highest) ? value : highest))
 }
 
+export function countDecimalPlaces(value: DecimalInput): number {
+  const fraction = decimalToString(value).split('.')[1]
+  return fraction ? fraction.length : 0
+}
+
 export function decimalToNumber(value: DecimalInput): number {
   return Number(decimalToString(value))
 }
