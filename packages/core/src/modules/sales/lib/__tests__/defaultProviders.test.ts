@@ -1,6 +1,10 @@
 import { registerDefaultSalesProviders } from '../providers/defaultProviders'
-import { getShippingProvider } from '../providers/registry'
-import type { ShippingMetrics, ShippingProviderCalculateInput } from '../providers/types'
+import { getPaymentProvider, getShippingProvider } from '../providers/registry'
+import type {
+  PaymentProviderCalculateInput,
+  ShippingMetrics,
+  ShippingProviderCalculateInput,
+} from '../providers/types'
 
 function flatRateInput(settings: Record<string, unknown>, metrics: Partial<ShippingMetrics>): ShippingProviderCalculateInput {
   return {
@@ -45,5 +49,31 @@ describe('flat-rate shipping provider settings', () => {
     )
 
     expect(result?.adjustments[0]?.amountNetExact).toBe('0.000000000000000001')
+  })
+})
+
+function paymentInput(settings: Record<string, unknown>, grandTotalGrossAmountExact: string, amountDecimalPlaces?: number): PaymentProviderCalculateInput {
+  return {
+    method: { code: 'card', name: 'Card' },
+    settings,
+    document: { totals: { grandTotalGrossAmount: Number(grandTotalGrossAmountExact), grandTotalGrossAmountExact } } as PaymentProviderCalculateInput['document'],
+    lines: [],
+    context: { tenantId: 'tenant-1', organizationId: 'org-1', currencyCode: 'USD', amountDecimalPlaces },
+  }
+}
+
+describe('percentage payment fees', () => {
+  beforeAll(() => registerDefaultSalesProviders())
+
+  it('rounds the stripe fee to the amount precision', async () => {
+    const result = await getPaymentProvider('stripe')!.calculate!(paymentInput({ applicationFeePercent: 2.9 }, '10.1234'))
+    expect(result?.adjustments[0]).toMatchObject({ amountNetExact: '0.2936', amountGrossExact: '0.2936' })
+  })
+
+  it('rounds the cash on delivery fee to the currency precision', async () => {
+    const result = await getPaymentProvider('cash-on-delivery')!.calculate!(
+      paymentInput({ feePercent: 3, feeFlat: 0 }, '1.123456789012345678', 18),
+    )
+    expect(result?.adjustments[0]).toMatchObject({ amountNetExact: '0.03370370367037037' })
   })
 })

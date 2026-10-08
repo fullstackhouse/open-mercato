@@ -1,11 +1,13 @@
 import { z } from 'zod'
 import {
+  DEFAULT_AMOUNT_DECIMAL_PLACES,
   FX_DECIMAL_PLACES,
   decimalToNumber,
   decimalToString,
   divideDecimals,
   nonNegativeDecimalStringSchema,
   resolveExactDecimal,
+  roundDecimal,
   toDecimal,
   type DecimalValue,
 } from '@open-mercato/shared/lib/decimal'
@@ -49,9 +51,10 @@ function createSurchargeAdjustment(params: {
   label: string
   currencyCode: string
   amount: DecimalValue
+  decimalPlaces?: number
   metadata?: Record<string, unknown>
 }): ProviderAdjustmentResult {
-  const amount = nonNegative(params.amount)
+  const amount = roundDecimal(nonNegative(params.amount), params.decimalPlaces ?? DEFAULT_AMOUNT_DECIMAL_PLACES)
   if (amount.lte(0)) return { adjustments: [] }
   return {
     adjustments: [
@@ -163,6 +166,7 @@ const stripeProvider: PaymentProvider = {
       label: 'Stripe processing fee',
       currencyCode: context.currencyCode,
       amount,
+      decimalPlaces: context.amountDecimalPlaces,
       metadata: parsed.data,
     })
   },
@@ -234,6 +238,7 @@ const paymentProviders: PaymentProvider[] = [
         label: 'Cash on delivery fee',
         currencyCode: context.currencyCode,
         amount,
+        decimalPlaces: context.amountDecimalPlaces,
         metadata: { feeFlat, feePercent, maxOrderTotal },
       })
     },
