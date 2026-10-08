@@ -1,8 +1,7 @@
-import { RateProvider, RateProviderResult } from './base'
+import { RateProvider, RateProviderResult, invertProviderRate, toProviderRate } from './base'
 import { fromZonedTime } from 'date-fns-tz'
 import { fetchWithTimeout, resolveTimeoutMs } from '@open-mercato/shared/lib/http/fetchWithTimeout'
 import { createLogger } from '@open-mercato/shared/lib/logger'
-import { decimalToString, divideDecimals, FX_DECIMAL_PLACES } from '@open-mercato/shared/lib/decimal'
 
 const logger = createLogger('currencies').child({ component: 'nbp' })
 
@@ -88,10 +87,16 @@ export class NBPProvider implements RateProvider {
         
         // Rate 1: PLN → XXX (inverse of ASK) - this is when bank SELLS foreign currency
         // If ask = 4.5 (1 EUR costs 4.5 PLN), then 1 PLN = 1/4.5 EUR
+        const askRate = invertProviderRate(rate.ask)
+        const bidRate = toProviderRate(rate.bid)
+        if (askRate === null || bidRate === null) {
+          logger.warn('Skipping unusable rate', { code: rate.code, ask: rate.ask, bid: rate.bid })
+          continue
+        }
         results.push({
           fromCurrencyCode: this.providerBaseCurrency,
           toCurrencyCode: rate.code,
-          rate: decimalToString(divideDecimals(1, rate.ask, FX_DECIMAL_PLACES)),
+          rate: askRate,
           source: this.source,
           date: effectiveDate,
           type: 'sell', // Bank sells foreign currency (from their perspective)
@@ -103,7 +108,7 @@ export class NBPProvider implements RateProvider {
         results.push({
           fromCurrencyCode: rate.code,
           toCurrencyCode: this.providerBaseCurrency,
-          rate: decimalToString(rate.bid),
+          rate: bidRate,
           source: this.source,
           date: effectiveDate,
           type: 'buy', // Bank buys foreign currency (from their perspective)
