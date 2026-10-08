@@ -41,6 +41,14 @@ uses exact decimals. Public contracts keep their `number` fields (a float copy) 
   are stored without scale padding.
 - `parseAmountUnits` / `formatAmountUnits` from `payment_gateways/lib/capture-ledger` are deprecated; the
   capture-ledger reserve/settle/release helpers now take and return exact decimal strings.
+- Staff `TimeRateResolver.resolve` may return a decimal string, and `CostEntry.rateOverrideAmount` /
+  `CostProject.hourlyRate` may be strings: accept `number | string` when reading them.
+- Payment gateway session, capture and refund requests with more decimals than the currency allows
+  (e.g. `10.005` USD) now get a 400. Decimals with more than 1000 significant digits or 300 integer
+  digits are rejected everywhere.
+- The money migrations' `down()` narrows the columns back to their old precision: extra decimals are
+  rounded away, and values beyond the old integer digits make the rollback fail with
+  "numeric field overflow". Back up before rolling back.
 
 ### Catalog product bulk-delete jobs require tenant, organization and user scope (#3826)
 
