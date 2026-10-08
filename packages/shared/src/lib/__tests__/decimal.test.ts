@@ -76,6 +76,14 @@ describe('decimal', () => {
     expect(decimalToString(maxDecimal('3', '-1', '2'))).toBe('3')
   })
 
+  it('rejects exponents that would expand into huge strings', () => {
+    expect(parseDecimal('1e-100000000')).toBeNull()
+    expect(parseDecimal('1e100000000')).toBeNull()
+    expect(() => toDecimal('1e-1001')).toThrow()
+    expect(decimalStringSchema.safeParse('1e-100000000').success).toBe(false)
+    expect(decimalToString('1e-20')).toBe('0.00000000000000000001')
+  })
+
   it('parses loosely and validates strictly', () => {
     expect(parseDecimal(null)).toBeNull()
     expect(parseDecimal('')).toBeNull()

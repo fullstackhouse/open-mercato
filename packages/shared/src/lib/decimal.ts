@@ -15,11 +15,24 @@ const Decimal = BigConstructor()
 Decimal.DP = FX_DECIMAL_PLACES
 Decimal.RM = ROUND_HALF_UP
 
-const DECIMAL_STRING_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?$/i
+/**
+ * Largest exponent accepted in a decimal string. Expanding `1e-100000000` to plain
+ * notation would allocate a 100M-character string, so anything beyond this bound
+ * (far past any real money or FX value) is rejected as invalid input.
+ */
+export const MAX_DECIMAL_EXPONENT = 1000
+
+const DECIMAL_STRING_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)(?:e([+-]?\d+))?$/i
+
+function isDecimalString(value: string): boolean {
+  const match = DECIMAL_STRING_PATTERN.exec(value)
+  if (!match) return false
+  return match[3] === undefined || Math.abs(Number(match[3])) <= MAX_DECIMAL_EXPONENT
+}
 
 export function isDecimalInput(value: unknown): value is DecimalInput {
   if (typeof value === 'number') return Number.isFinite(value)
-  if (typeof value === 'string') return DECIMAL_STRING_PATTERN.test(value.trim())
+  if (typeof value === 'string') return isDecimalString(value.trim())
   return value instanceof BigConstructor
 }
 
@@ -30,7 +43,7 @@ export function toDecimal(value: DecimalInput): DecimalValue {
   }
   if (typeof value === 'string') {
     const trimmed = value.trim()
-    if (!DECIMAL_STRING_PATTERN.test(trimmed)) throw new Error(`[internal] Invalid decimal value: ${value}`)
+    if (!isDecimalString(trimmed)) throw new Error(`[internal] Invalid decimal value: ${value.slice(0, 50)}`)
     return new Decimal(trimmed.startsWith('+') ? trimmed.slice(1) : trimmed)
   }
   return new Decimal(value as BigSource)
