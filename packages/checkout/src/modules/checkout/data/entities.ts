@@ -94,7 +94,7 @@ export class CheckoutLinkTemplate {
   @Property({ name: 'pricing_mode', type: 'text' })
   pricingMode!: 'fixed' | 'custom_amount' | 'price_list'
 
-  @Property({ name: 'fixed_price_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  @Property({ name: 'fixed_price_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   fixedPriceAmount?: string | null
 
   @Property({ name: 'fixed_price_currency_code', type: 'text', nullable: true })
@@ -103,13 +103,13 @@ export class CheckoutLinkTemplate {
   @Property({ name: 'fixed_price_includes_tax', type: 'boolean', default: true })
   fixedPriceIncludesTax: boolean = true
 
-  @Property({ name: 'fixed_price_original_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  @Property({ name: 'fixed_price_original_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   fixedPriceOriginalAmount?: string | null
 
-  @Property({ name: 'custom_amount_min', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  @Property({ name: 'custom_amount_min', type: 'numeric', columnType: 'numeric', nullable: true })
   customAmountMin?: string | null
 
-  @Property({ name: 'custom_amount_max', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  @Property({ name: 'custom_amount_max', type: 'numeric', columnType: 'numeric', nullable: true })
   customAmountMax?: string | null
 
   @Property({ name: 'custom_amount_currency_code', type: 'text', nullable: true })
@@ -266,7 +266,7 @@ export class CheckoutTransaction {
   @Property({ type: 'text' })
   status!: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired'
 
-  @Property({ type: 'numeric', precision: 12, scale: 2 })
+  @Property({ type: 'numeric', columnType: 'numeric' })
   amount!: string
 
   @Property({ name: 'currency_code', type: 'text' })

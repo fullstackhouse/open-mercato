@@ -821,16 +821,16 @@ export class CatalogProductPrice {
   @Property({ name: 'max_quantity', type: 'integer', nullable: true })
   maxQuantity?: number | null
 
-  @Property({ name: 'unit_price_net', type: 'numeric', precision: 16, scale: 4, nullable: true })
+  @Property({ name: 'unit_price_net', type: 'numeric', columnType: 'numeric', nullable: true })
   unitPriceNet?: string | null
 
-  @Property({ name: 'unit_price_gross', type: 'numeric', precision: 16, scale: 4, nullable: true })
+  @Property({ name: 'unit_price_gross', type: 'numeric', columnType: 'numeric', nullable: true })
   unitPriceGross?: string | null
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, nullable: true })
   taxRate?: string | null
 
-  @Property({ name: 'tax_amount', type: 'numeric', precision: 16, scale: 4, nullable: true })
+  @Property({ name: 'tax_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   taxAmount?: string | null
 
   @Property({ name: 'channel_id', type: 'uuid', nullable: true })

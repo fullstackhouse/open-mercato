@@ -218,16 +218,16 @@ export class CustomerGroupTerms {
   @Property({ name: 'allow_purchase_on_account', type: 'boolean', nullable: true })
   allowPurchaseOnAccount?: boolean | null
 
-  @Property({ name: 'default_credit_limit', type: 'numeric', precision: 16, scale: 2, nullable: true })
+  @Property({ name: 'default_credit_limit', type: 'numeric', columnType: 'numeric', nullable: true })
   defaultCreditLimit?: string | null
 
   @Property({ name: 'credit_currency_code', type: 'text', nullable: true })
   creditCurrencyCode?: string | null
 
-  @Property({ name: 'approval_required_above', type: 'numeric', precision: 16, scale: 2, nullable: true })
+  @Property({ name: 'approval_required_above', type: 'numeric', columnType: 'numeric', nullable: true })
   approvalRequiredAbove?: string | null
 
-  @Property({ name: 'min_order_value', type: 'numeric', precision: 16, scale: 2, nullable: true })
+  @Property({ name: 'min_order_value', type: 'numeric', columnType: 'numeric', nullable: true })
   minOrderValue?: string | null
 
   @Property({ type: 'jsonb', nullable: true })

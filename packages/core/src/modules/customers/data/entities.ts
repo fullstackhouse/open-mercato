@@ -281,7 +281,7 @@ export class CustomerCompanyProfile {
   @Property({ name: 'size_bucket', type: 'text', nullable: true })
   sizeBucket?: string | null
 
-  @Property({ name: 'annual_revenue', type: 'numeric', precision: 16, scale: 2, nullable: true })
+  @Property({ name: 'annual_revenue', type: 'numeric', columnType: 'numeric', nullable: true })
   annualRevenue?: string | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
@@ -334,7 +334,7 @@ export class CustomerDeal {
   @Property({ name: 'pipeline_stage_id', type: 'uuid', nullable: true })
   pipelineStageId?: string | null
 
-  @Property({ name: 'value_amount', type: 'numeric', precision: 14, scale: 2, nullable: true })
+  @Property({ name: 'value_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   valueAmount?: string | null
 
   @Property({ name: 'value_currency', type: 'text', nullable: true })

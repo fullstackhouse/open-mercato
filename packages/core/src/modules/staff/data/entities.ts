@@ -443,7 +443,7 @@ export class StaffTimeEntry {
   @Property({ name: 'rounded_minutes', type: 'integer', nullable: true })
   roundedMinutes?: number | null
 
-  @Property({ name: 'rate_override_amount', type: 'numeric', precision: 14, scale: 4, nullable: true })
+  @Property({ name: 'rate_override_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   rateOverrideAmount?: string | null
 
   @Property({ name: 'rate_currency_code', type: 'text', nullable: true })
@@ -551,7 +551,7 @@ export class StaffTimeProject {
   @Property({ name: 'start_date', type: 'date', nullable: true })
   startDate?: Date | null
 
-  @Property({ name: 'hourly_rate', type: 'numeric', precision: 14, scale: 4, nullable: true })
+  @Property({ name: 'hourly_rate', type: 'numeric', columnType: 'numeric', nullable: true })
   hourlyRate?: string | null
 
   @Property({ name: 'currency_code', type: 'text', nullable: true })
@@ -563,7 +563,7 @@ export class StaffTimeProject {
   @Enum({ items: ['none', 'hours', 'amount'], type: 'text', name: 'budget_kind', default: 'none' })
   budgetKind: StaffTimeProjectBudgetKind = 'none'
 
-  @Property({ name: 'budget_value', type: 'numeric', precision: 14, scale: 4, nullable: true })
+  @Property({ name: 'budget_value', type: 'numeric', columnType: 'numeric', nullable: true })
   budgetValue?: string | null
 
   @Property({ name: 'budget_warn_at_percent', type: 'integer', default: 80 })
@@ -927,7 +927,7 @@ export class StaffTimeReport {
   @Property({ name: 'total_nonbillable_minutes', type: 'integer', nullable: true })
   totalNonbillableMinutes?: number | null
 
-  @Property({ name: 'total_amount', type: 'numeric', precision: 14, scale: 2, nullable: true })
+  @Property({ name: 'total_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   totalAmount?: string | null
 
   @Property({ name: 'closed_at', type: Date, nullable: true })
@@ -1003,13 +1003,13 @@ export class StaffTimeReportEntry {
   @Property({ name: 'frozen_rounded_minutes', type: 'integer', default: 0 })
   frozenRoundedMinutes: number = 0
 
-  @Property({ name: 'frozen_rate_amount', type: 'numeric', precision: 14, scale: 4, nullable: true })
+  @Property({ name: 'frozen_rate_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   frozenRateAmount?: string | null
 
   @Property({ name: 'frozen_currency_code', type: 'text' })
   frozenCurrencyCode!: string
 
-  @Property({ name: 'frozen_amount', type: 'numeric', precision: 14, scale: 2, nullable: true })
+  @Property({ name: 'frozen_amount', type: 'numeric', columnType: 'numeric', nullable: true })
   frozenAmount?: string | null
 
   @Property({ name: 'frozen_is_billable', type: 'boolean', default: true })
