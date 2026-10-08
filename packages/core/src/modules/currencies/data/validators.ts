@@ -40,7 +40,23 @@ function isPositiveRate(rate: string): boolean {
   return isDecimalInput(rate) && toDecimal(rate).gt(0)
 }
 
-const exchangeRateMetadataSchema = z.record(z.string(), z.unknown()).nullable().optional()
+export const EXCHANGE_RATE_METADATA_MAX_BYTES = 16 * 1024
+
+export function isExchangeRateMetadataWithinLimit(metadata: unknown): boolean {
+  if (metadata === null || metadata === undefined) return true
+  try {
+    const serialized = JSON.stringify(metadata)
+    return new TextEncoder().encode(serialized).length <= EXCHANGE_RATE_METADATA_MAX_BYTES
+  } catch {
+    return false
+  }
+}
+
+const exchangeRateMetadataSchema = z
+  .record(z.string(), z.unknown())
+  .nullable()
+  .optional()
+  .refine(isExchangeRateMetadataWithinLimit, { message: 'exchangeRates.form.errors.metadataTooLarge' })
 
 // Currency validators
 export const currencyCreateSchema = z.object({

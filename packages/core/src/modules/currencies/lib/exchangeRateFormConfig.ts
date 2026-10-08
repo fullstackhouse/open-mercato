@@ -2,6 +2,7 @@ import type { CrudFormGroup, CrudFieldOption } from '@open-mercato/ui/backend/Cr
 import type { ApiCallResult } from '@open-mercato/ui/backend/utils/apiCall'
 import { createCrudFormError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import { isExchangeRateMetadataWithinLimit } from '../data/validators'
 import { MIN_SIGNIFICANT_DIGITS, decimalToString, isDecimalInput, parseDecimal, toDecimal } from '@open-mercato/shared/lib/decimal'
 
 const logger = createLogger('currencies').child({ component: 'exchange-rate-form' })
@@ -157,6 +158,11 @@ function parseMetadataFormValue(value: unknown, t: (key: string) => string): Rec
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw createCrudFormError(t('exchangeRates.form.errors.invalidMetadata'), {
       metadata: t('exchangeRates.form.errors.invalidMetadata'),
+    })
+  }
+  if (!isExchangeRateMetadataWithinLimit(parsed)) {
+    throw createCrudFormError(t('exchangeRates.form.errors.metadataTooLarge'), {
+      metadata: t('exchangeRates.form.errors.metadataTooLarge'),
     })
   }
   return parsed as Record<string, unknown>
