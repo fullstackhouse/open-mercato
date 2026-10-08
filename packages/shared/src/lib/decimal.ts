@@ -16,29 +16,60 @@ Decimal.DP = FX_DECIMAL_PLACES
 Decimal.RM = ROUND_HALF_UP
 
 /**
- * Largest exponent accepted in a decimal string. Expanding `1e-100000000` to plain
- * notation would allocate a 100M-character string, so anything beyond this bound
- * (far past any real money or FX value) is rejected as invalid input.
+ * Largest exponent accepted in a decimal string, and the lowest decimal position
+ * a digit may sit at (`1e-1000`). Expanding `1e-100000000` to plain notation
+ * would allocate a 100M-character string, so anything beyond this bound (far
+ * past any real money or FX value) is rejected as invalid input.
  */
 export const MAX_DECIMAL_EXPONENT = 1000
 
+/**
+ * Most significant digits a decimal input may carry. Arithmetic cost grows with
+ * the digit count, so longer inputs are rejected as invalid.
+ */
+export const MAX_DECIMAL_SIGNIFICANT_DIGITS = 1000
+
+/**
+ * Most integer digits a decimal input may carry (`|value| < 1e300`), so the
+ * legacy float copy of an accepted value is always finite.
+ */
+export const MAX_DECIMAL_INTEGER_DIGITS = 300
+
 const DECIMAL_STRING_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)(?:e([+-]?\d+))?$/i
+const NON_ZERO_DIGIT_PATTERN = /[1-9]/
 
 function isDecimalString(value: string): boolean {
   const match = DECIMAL_STRING_PATTERN.exec(value)
   if (!match) return false
-  return match[3] === undefined || Math.abs(Number(match[3])) <= MAX_DECIMAL_EXPONENT
+  const exponent = match[3] === undefined ? 0 : Number(match[3])
+  if (Math.abs(exponent) > MAX_DECIMAL_EXPONENT) return false
+  const [integerPart, fractionPart = ''] = match[1].split('.')
+  const digits = `${integerPart}${fractionPart}`
+  const firstSignificant = digits.search(NON_ZERO_DIGIT_PATTERN)
+  if (firstSignificant === -1) return true
+  let lastSignificant = digits.length - 1
+  while (digits[lastSignificant] === '0') lastSignificant -= 1
+  const unitsIndex = integerPart.length - 1 + exponent
+  return (
+    lastSignificant - firstSignificant < MAX_DECIMAL_SIGNIFICANT_DIGITS &&
+    unitsIndex - firstSignificant < MAX_DECIMAL_INTEGER_DIGITS &&
+    unitsIndex - lastSignificant >= -MAX_DECIMAL_EXPONENT
+  )
+}
+
+function isDecimalNumber(value: number): boolean {
+  return Number.isFinite(value) && isDecimalString(String(value))
 }
 
 export function isDecimalInput(value: unknown): value is DecimalInput {
-  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'number') return isDecimalNumber(value)
   if (typeof value === 'string') return isDecimalString(value.trim())
   return value instanceof BigConstructor
 }
 
 export function toDecimal(value: DecimalInput): DecimalValue {
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error(`[internal] Invalid decimal value: ${value}`)
+    if (!isDecimalNumber(value)) throw new Error(`[internal] Invalid decimal value: ${value}`)
     return new Decimal(value)
   }
   if (typeof value === 'string') {
@@ -176,11 +207,19 @@ export function resolveExactDecimal(exact: unknown, legacy: unknown): string | n
 
 export type WithExactAmounts<T, K extends string> = T & { [P in K as `${P}Exact`]?: string | null }
 
+function exactCandidate(source: Record<string, unknown>, field: string, value: unknown): unknown {
+  if (typeof value !== 'number') return value
+  const rawValue = source[field]
+  return typeof rawValue === 'number' ? source[`${field}Exact`] ?? rawValue : rawValue
+}
+
 /**
  * Adds `<field>Exact` strings next to number fields a zod schema coerced, taken
  * from the raw input so digits beyond float precision survive the parse. When the
  * raw field is already a number (an API route parsed the body before the command),
- * the `<field>Exact` string that route attached is used instead.
+ * the `<field>Exact` string that route attached is used instead, and only while it
+ * matches that number. A parsed `null` (or a parsed non-number) is never paired
+ * with a raw value, so it cannot smuggle unvalidated input past the schema.
  */
 export function withExactAmounts<T extends object, K extends string>(
   parsed: T,
@@ -191,10 +230,9 @@ export function withExactAmounts<T extends object, K extends string>(
   const values = parsed as Record<string, unknown>
   const exact: Record<string, string | null> = {}
   for (const field of fields) {
-    if (values[field] === undefined) continue
-    const rawValue = source[field]
-    const candidate = typeof rawValue === 'string' ? rawValue : source[`${field}Exact`] ?? rawValue
-    exact[`${field}Exact`] = resolveExactDecimal(candidate, values[field])
+    const value = values[field]
+    if (value === undefined) continue
+    exact[`${field}Exact`] = resolveExactDecimal(exactCandidate(source, field, value), value)
   }
   return { ...parsed, ...exact } as WithExactAmounts<T, K>
 }
@@ -218,10 +256,10 @@ export function withExactListAmounts<T extends object, K extends string>(
 /**
  * Tolerance for comparing money amounts rounded to `decimalPlaces`: half a
  * minor unit of a 2-decimal currency at the default 4 places (0.005), scaled
- * down with higher precision.
+ * down with higher precision and never wider than that default.
  */
 export function amountComparisonTolerance(decimalPlaces: number = DEFAULT_AMOUNT_DECIMAL_PLACES): DecimalValue {
-  return toDecimal(`5e-${Math.max(decimalPlaces - 1, 0)}`)
+  return toDecimal(`5e-${Math.max(decimalPlaces, DEFAULT_AMOUNT_DECIMAL_PLACES) - 1}`)
 }
 
 export function resolveAmountDecimalPlaces(currencyDecimalPlaces?: number | null): number {
@@ -231,10 +269,30 @@ export function resolveAmountDecimalPlaces(currencyDecimalPlaces?: number | null
   return Math.max(DEFAULT_AMOUNT_DECIMAL_PLACES, currencyDecimalPlaces)
 }
 
+let isoCurrencyCodes: Set<string> | null | undefined
+
+function resolveIsoCurrencyCodes(): Set<string> | null {
+  if (isoCurrencyCodes !== undefined) return isoCurrencyCodes
+  try {
+    isoCurrencyCodes = typeof Intl.supportedValuesOf === 'function' ? new Set(Intl.supportedValuesOf('currency')) : null
+  } catch {
+    isoCurrencyCodes = null
+  }
+  return isoCurrencyCodes
+}
+
+/**
+ * ISO 4217 decimal places of `currencyCode`, or `null` when the runtime does not
+ * know the code. `Intl.NumberFormat` accepts any well-formed code (ETH, XYZ) and
+ * reports 2 digits for it, so only codes listed by `Intl.supportedValuesOf` count.
+ */
 export function resolveIsoCurrencyDecimalPlaces(currencyCode?: string | null): number | null {
   if (!currencyCode) return null
+  const code = currencyCode.toUpperCase()
+  const knownCodes = resolveIsoCurrencyCodes()
+  if (knownCodes && !knownCodes.has(code)) return null
   try {
-    return new Intl.NumberFormat('en', { style: 'currency', currency: currencyCode }).resolvedOptions()
+    return new Intl.NumberFormat('en', { style: 'currency', currency: code }).resolvedOptions()
       .maximumFractionDigits ?? null
   } catch {
     return null

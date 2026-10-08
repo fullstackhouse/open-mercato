@@ -1,4 +1,4 @@
-import { resolveCurrencyAmountDecimalPlaces } from '../currencyPrecision'
+import { resolveCurrencyAmountDecimalPlaces, resolveCurrencyDecimalPlaces } from '../currencyPrecision'
 
 function containerWith(service: unknown) {
   return {
@@ -32,5 +32,12 @@ describe('resolveCurrencyAmountDecimalPlaces', () => {
   it('falls back to the floor for unknown currency codes', async () => {
     const service = { getDecimalPlaces: async () => null }
     await expect(resolveCurrencyAmountDecimalPlaces(containerWith(service), { ...lookup, code: 'XYZW' })).resolves.toBe(4)
+  })
+
+  it('returns null for well-formed codes the runtime does not know', async () => {
+    const service = { getDecimalPlaces: async () => null }
+    await expect(resolveCurrencyDecimalPlaces(containerWith(service), { ...lookup, code: 'ETH' })).resolves.toBeNull()
+    await expect(resolveCurrencyDecimalPlaces(containerWith(null), { ...lookup, code: 'XYZ' })).resolves.toBeNull()
+    await expect(resolveCurrencyDecimalPlaces(containerWith(null), { ...lookup, code: 'KWD' })).resolves.toBe(3)
   })
 })

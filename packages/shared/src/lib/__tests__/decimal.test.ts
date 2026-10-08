@@ -1,9 +1,13 @@
 import {
   addDecimals,
+  amountComparisonTolerance,
   compareDecimals,
   decimalStringSchema,
   decimalToString,
   divideDecimals,
+  isDecimalInput,
+  MAX_DECIMAL_INTEGER_DIGITS,
+  MAX_DECIMAL_SIGNIFICANT_DIGITS,
   maxDecimal,
   minDecimal,
   multiplyDecimals,
@@ -86,6 +90,37 @@ describe('decimal', () => {
     expect(decimalToString('1e-20')).toBe('0.00000000000000000001')
   })
 
+  it('caps the significant digits of an input', () => {
+    const longest = '1'.repeat(MAX_DECIMAL_SIGNIFICANT_DIGITS)
+    expect(isDecimalInput(`0.${longest}`)).toBe(true)
+    expect(isDecimalInput(`0.${longest}1`)).toBe(false)
+    expect(isDecimalInput(`0.${longest}000`)).toBe(true)
+    expect(decimalStringSchema.safeParse(`0.${'9'.repeat(MAX_DECIMAL_SIGNIFICANT_DIGITS + 1)}`).success).toBe(false)
+  })
+
+  it('caps the magnitude so the float copy stays finite', () => {
+    const largest = '9'.repeat(MAX_DECIMAL_INTEGER_DIGITS)
+    expect(isDecimalInput(largest)).toBe(true)
+    expect(Number.isFinite(Number(largest))).toBe(true)
+    expect(isDecimalInput(`1${'0'.repeat(MAX_DECIMAL_INTEGER_DIGITS)}`)).toBe(false)
+    expect(isDecimalInput('9.99e299')).toBe(true)
+    expect(isDecimalInput('1e300')).toBe(false)
+    expect(isDecimalInput('0.01e301')).toBe(true)
+    expect(isDecimalInput('0.01e302')).toBe(false)
+    expect(isDecimalInput(1e300)).toBe(false)
+    expect(parseDecimal(Number.MAX_VALUE)).toBeNull()
+    expect(() => toDecimal(1e300)).toThrow()
+    expect(decimalStringSchema.safeParse('1e300').success).toBe(false)
+  })
+
+  it('caps how far below the decimal point a digit may sit', () => {
+    expect(isDecimalInput('1e-1000')).toBe(true)
+    expect(isDecimalInput('1.5e-1000')).toBe(false)
+    expect(isDecimalInput(`0.${'0'.repeat(999)}1`)).toBe(true)
+    expect(isDecimalInput(`0.${'0'.repeat(20000)}1`)).toBe(false)
+    expect(isDecimalInput(`0.${'0'.repeat(20000)}`)).toBe(true)
+  })
+
   it('parses loosely and validates strictly', () => {
     expect(parseDecimal(null)).toBeNull()
     expect(parseDecimal('')).toBeNull()
@@ -113,7 +148,23 @@ describe('decimal', () => {
   it('resolves ISO currency digits', () => {
     expect(resolveIsoCurrencyDecimalPlaces('USD')).toBe(2)
     expect(resolveIsoCurrencyDecimalPlaces('JPY')).toBe(0)
+    expect(resolveIsoCurrencyDecimalPlaces('kwd')).toBe(3)
     expect(resolveIsoCurrencyDecimalPlaces(null)).toBeNull()
+  })
+
+  it('returns null for codes Intl formats but does not know', () => {
+    expect(resolveIsoCurrencyDecimalPlaces('ETH')).toBeNull()
+    expect(resolveIsoCurrencyDecimalPlaces('BTC')).toBeNull()
+    expect(resolveIsoCurrencyDecimalPlaces('XYZ')).toBeNull()
+    expect(resolveIsoCurrencyDecimalPlaces('XYZW')).toBeNull()
+  })
+
+  it('never widens the amount tolerance past the default precision', () => {
+    expect(decimalToString(amountComparisonTolerance())).toBe('0.005')
+    expect(decimalToString(amountComparisonTolerance(8))).toBe('0.0000005')
+    expect(decimalToString(amountComparisonTolerance(2))).toBe('0.005')
+    expect(decimalToString(amountComparisonTolerance(1))).toBe('0.005')
+    expect(decimalToString(amountComparisonTolerance(0))).toBe('0.005')
   })
 
   it('validates decimal strings with zod', () => {
@@ -174,6 +225,21 @@ describe('withExactAmounts', () => {
     const result = withExactAmounts({ amount: 12 }, { amount: 12, amountExact: '99.5' }, ['amount'] as const)
     expect(result.amountExact).toBe('12')
   })
+
+  it('never pairs a parsed null with a raw exact string', () => {
+    const raw = { defaultCreditLimit: null, defaultCreditLimitExact: '-1000' }
+    const result = withExactAmounts({ defaultCreditLimit: null }, raw, ['defaultCreditLimit'] as const)
+    expect(result.defaultCreditLimitExact).toBeNull()
+    const coerced = withExactAmounts({ amount: null }, { amount: '', amountExact: '-1000' }, ['amount'] as const)
+    expect(coerced.amountExact).toBeNull()
+  })
+
+  it('reads a raw exact string only when the raw field is a number', () => {
+    const missingRaw = withExactAmounts({ amount: 0 }, { amountExact: '-1000' }, ['amount'] as const)
+    expect(missingRaw.amountExact).toBe('0')
+    const parsedString = withExactAmounts({ amount: '5' }, { amount: 5, amountExact: '-1000' }, ['amount'] as const)
+    expect(parsedString.amountExact).toBe('5')
+  })
 })
 
 describe('withExactListAmounts', () => {
@@ -183,5 +249,11 @@ describe('withExactListAmounts', () => {
     const result = withExactListAmounts(parsed, raw, 'lines', ['price'] as const)
     expect(result?.map((line) => line.priceExact)).toEqual(['1.000000000000000001', '2'])
     expect(withExactListAmounts(undefined, raw, 'lines', ['price'] as const)).toBeUndefined()
+  })
+
+  it('never pairs a parsed null item with a raw exact string', () => {
+    const raw = { lines: [{ price: null, priceExact: '-1000' }] }
+    const result = withExactListAmounts([{ price: null }], raw, 'lines', ['price'] as const)
+    expect(result?.[0].priceExact).toBeNull()
   })
 })
