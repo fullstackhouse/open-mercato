@@ -9,21 +9,25 @@ function createService(record: { decimalPlaces: number } | null) {
 }
 
 describe('CurrencyPrecisionService', () => {
-  it('returns the scoped currency decimal places', async () => {
+  it('returns the currency decimal places scoped to the organization', async () => {
     const { service, findOne } = createService({ decimalPlaces: 18 })
     await expect(service.getDecimalPlaces({ code: ' eth ', tenantId: 't1', organizationId: 'o1' })).resolves.toBe(18)
-    expect(findOne).toHaveBeenCalledWith(expect.anything(), {
-      code: 'ETH',
-      tenantId: 't1',
-      organizationId: 'o1',
-      deletedAt: null,
-    })
+    expect(findOne).toHaveBeenCalledWith(
+      expect.anything(),
+      { code: 'ETH', tenantId: 't1', organizationId: 'o1', deletedAt: null },
+      expect.anything(),
+    )
   })
 
-  it('returns null when the currency is unknown or the lookup is incomplete', async () => {
-    const { service, findOne } = createService(null)
+  it('never looks a currency up without an organization', async () => {
+    const { service, findOne } = createService({ decimalPlaces: 18 })
     await expect(service.getDecimalPlaces({ code: 'ETH', tenantId: 't1' })).resolves.toBeNull()
-    await expect(service.getDecimalPlaces({ code: '', tenantId: 't1' })).resolves.toBeNull()
-    expect(findOne).toHaveBeenCalledTimes(1)
+    await expect(service.getDecimalPlaces({ code: '', tenantId: 't1', organizationId: 'o1' })).resolves.toBeNull()
+    expect(findOne).not.toHaveBeenCalled()
+  })
+
+  it('returns null for an unknown currency', async () => {
+    const { service } = createService(null)
+    await expect(service.getDecimalPlaces({ code: 'ETH', tenantId: 't1', organizationId: 'o1' })).resolves.toBeNull()
   })
 })
