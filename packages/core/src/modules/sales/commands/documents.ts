@@ -132,7 +132,6 @@ import {
   decimalToNumber,
   decimalToString,
   divideDecimals,
-  nonNegativeDecimalStringSchema,
   parseDecimal,
   roundDecimal,
   withExactAmounts,
@@ -7844,7 +7843,7 @@ const orderLineUpsertCommand: CommandHandler<
     };
     Object.assign(
       updatedSnapshot,
-      resolveUpsertCalculatedAmounts(parsed, updatedSnapshot, existingSnapshot),
+      resolveUpsertCalculatedAmounts(parsed, updatedSnapshot, existingSnapshot, lineAmountDecimalPlaces),
     );
     (updatedSnapshot as any).statusEntryId = statusEntryId;
     (updatedSnapshot as any).catalogSnapshot =
@@ -8393,7 +8392,7 @@ const quoteLineUpsertCommand: CommandHandler<
     };
     Object.assign(
       updatedSnapshot,
-      resolveUpsertCalculatedAmounts(parsed, updatedSnapshot, existingSnapshot),
+      resolveUpsertCalculatedAmounts(parsed, updatedSnapshot, existingSnapshot, lineAmountDecimalPlaces),
     );
     (updatedSnapshot as any).statusEntryId = statusEntryId;
     (updatedSnapshot as any).catalogSnapshot =

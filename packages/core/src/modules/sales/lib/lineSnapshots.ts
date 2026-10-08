@@ -5,6 +5,7 @@ import {
   parseDecimal,
   resolveExactDecimal,
   roundDecimal,
+  toDecimal,
 } from '@open-mercato/shared/lib/decimal'
 import type { SalesOrderLine, SalesQuoteLine } from '../data/entities'
 import { cloneJson } from './json'
@@ -17,6 +18,14 @@ function toNumeric(value: unknown): number {
     if (Number.isFinite(parsed)) return parsed
   }
   return 0
+}
+
+function sameAmount(leftExact: unknown, left: unknown, rightExact: unknown, right: unknown): boolean {
+  return toDecimalOrZero(resolveExactDecimal(leftExact, left)).eq(toDecimalOrZero(resolveExactDecimal(rightExact, right)))
+}
+
+function toDecimalOrZero(value: string | null) {
+  return toDecimal(value ?? '0')
 }
 
 function toExactColumn(value: unknown): string {
@@ -169,13 +178,10 @@ export function resolveUpsertCalculatedAmounts(
   caller: Pick<SalesLineSnapshot, 'taxAmount' | 'taxAmountExact' | 'totalGrossAmount' | 'totalGrossAmountExact'>,
   nextSnapshot: SalesLineSnapshot,
   existingSnapshot: SalesLineSnapshot | null,
+  amountDecimalPlaces: number = DEFAULT_AMOUNT_DECIMAL_PLACES,
 ): Pick<SalesLineSnapshot, 'taxAmount' | 'taxAmountExact' | 'totalGrossAmount' | 'totalGrossAmountExact'> {
-  const pricingFields = [
-    'quantity',
-    'unitPriceNet',
-    'unitPriceGross',
-    'taxRate',
-  ] as const
+  const numberPricingFields = ['quantity', 'taxRate'] as const
+  const amountPricingFields = ['unitPriceNet', 'unitPriceGross'] as const
   const nextDiscountAmount =
     resolveExactDecimal(nextSnapshot.discountAmountExact, nextSnapshot.discountAmount) ?? '0'
   const nextDiscountLineAmount = nextSnapshot.discountAmountFromStoredRow === true ||
@@ -184,16 +190,26 @@ export function resolveUpsertCalculatedAmounts(
     : multiplyDecimals(nextDiscountAmount, nextSnapshot.quantity)
   const existingDiscountAmount =
     resolveExactDecimal(existingSnapshot?.discountAmountExact, existingSnapshot?.discountAmount) ?? '0'
+  // The stored discount is the engine's output rounded to the line's amount
+  // precision, so the recomputed one is compared at that same precision.
+  const discountScale = Math.max(DEFAULT_AMOUNT_DECIMAL_PLACES, amountDecimalPlaces)
   const discountChanged =
     (nextSnapshot.discountPercent ?? 0) !== (existingSnapshot?.discountPercent ?? 0) ||
     ((nextSnapshot.discountPercent ?? 0) === 0 &&
-      !roundDecimal(nextDiscountLineAmount, DEFAULT_AMOUNT_DECIMAL_PLACES).eq(existingDiscountAmount))
+      !roundDecimal(nextDiscountLineAmount, discountScale).eq(existingDiscountAmount))
   const pricingChanged = existingSnapshot === null || discountChanged ||
-    pricingFields.some((field) => (nextSnapshot[field] ?? 0) !== (existingSnapshot[field] ?? 0))
+    numberPricingFields.some((field) => (nextSnapshot[field] ?? 0) !== (existingSnapshot[field] ?? 0)) ||
+    amountPricingFields.some((field) => !sameAmount(
+      nextSnapshot[`${field}Exact`], nextSnapshot[field],
+      existingSnapshot[`${field}Exact`], existingSnapshot[field],
+    ))
   const grossChanged = caller.totalGrossAmount !== undefined && caller.totalGrossAmount !== null &&
-    caller.totalGrossAmount !== existingSnapshot?.totalGrossAmount
+    !sameAmount(
+      caller.totalGrossAmountExact, caller.totalGrossAmount,
+      existingSnapshot?.totalGrossAmountExact, existingSnapshot?.totalGrossAmount,
+    )
   const taxChanged = caller.taxAmount !== undefined && caller.taxAmount !== null &&
-    caller.taxAmount !== existingSnapshot?.taxAmount
+    !sameAmount(caller.taxAmountExact, caller.taxAmount, existingSnapshot?.taxAmountExact, existingSnapshot?.taxAmount)
   const keepTax = caller.taxAmount === undefined || caller.taxAmount === null
   const keepGross = caller.totalGrossAmount === undefined || caller.totalGrossAmount === null
   const reuseTax = keepTax && !(pricingChanged || grossChanged)
