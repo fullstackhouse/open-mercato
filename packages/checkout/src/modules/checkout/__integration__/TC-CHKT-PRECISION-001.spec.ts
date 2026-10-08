@@ -11,6 +11,7 @@ import {
   createFixedTemplateInput,
   deleteCheckoutEntityIfExists,
   readPublicPayLink,
+  updateTemplate,
 } from './helpers/fixtures'
 
 /**
@@ -23,6 +24,8 @@ type JsonRecord = Record<string, unknown>
 const FIXED_PRICE = '1.123456789012345678'
 const FIXED_ORIGINAL_PRICE = '2.987654321098765432'
 const OVERRIDDEN_FIXED_PRICE = '3.000000000000000007'
+const UPDATED_FIXED_PRICE = '1.123456789012345679'
+const UPDATED_FIXED_ORIGINAL_PRICE = '2.987654321098765433'
 const CUSTOM_MIN = '0.000000000000000001'
 const CUSTOM_MAX = '9.999999999999999999'
 const SUBMITTED_AMOUNT = '1.1234567890123456785'
@@ -79,7 +82,7 @@ async function submitExactAmount(
 }
 
 test.describe('TC-CHKT-PRECISION-001: 18-decimal currency checkout amounts', () => {
-  test('template, link and transaction amounts stay exact beyond float precision', async ({ request }) => {
+  test('template, link and transaction amounts stay exact beyond float precision, including template-to-link sync', async ({ request }) => {
     test.slow()
     const token = await getAuthToken(request, 'admin')
     let currencyId: string | null = null
@@ -148,6 +151,36 @@ test.describe('TC-CHKT-PRECISION-001: 18-decimal currency checkout amounts', () 
       expect(storedTemplateLink.templateId).toBe(templateId)
       expect(storedTemplateLink.fixedPriceAmountExact).toBe(OVERRIDDEN_FIXED_PRICE)
       expect(storedTemplateLink.fixedPriceOriginalAmountExact).toBe(FIXED_ORIGINAL_PRICE)
+
+      const inheritingLink = await createCheckoutEntity(request, token, 'links', {
+        templateId,
+        name: `QA precision inheriting link ${Date.now()}`,
+        pricingMode: 'fixed',
+        fixedPriceAmount: FIXED_PRICE,
+        fixedPriceCurrencyCode: currency.code,
+        gatewayProviderKey: 'mock',
+      })
+      const inheritingLinkId = inheritingLink.id as string
+      linkIds.push(inheritingLinkId)
+
+      const templateUpdateResponse = await updateTemplate(request, token, templateId, {
+        fixedPriceAmount: UPDATED_FIXED_PRICE,
+        fixedPriceOriginalAmount: UPDATED_FIXED_ORIGINAL_PRICE,
+      })
+      expect(
+        templateUpdateResponse.ok(),
+        `PUT /api/checkout/templates/${templateId} failed: ${JSON.stringify(await readJson(templateUpdateResponse))}`,
+      ).toBeTruthy()
+      const updatedTemplate = await readCheckoutEntity(request, token, 'templates', templateId)
+      expect(updatedTemplate.fixedPriceAmountExact).toBe(UPDATED_FIXED_PRICE)
+
+      const syncedInheritingLink = await readCheckoutEntity(request, token, 'links', inheritingLinkId)
+      expect(syncedInheritingLink.fixedPriceAmountExact).toBe(UPDATED_FIXED_PRICE)
+      expect(syncedInheritingLink.fixedPriceOriginalAmountExact).toBe(UPDATED_FIXED_ORIGINAL_PRICE)
+
+      const syncedOverrideLink = await readCheckoutEntity(request, token, 'links', templateLink.id as string)
+      expect(syncedOverrideLink.fixedPriceAmountExact).toBe(OVERRIDDEN_FIXED_PRICE)
+      expect(syncedOverrideLink.fixedPriceOriginalAmountExact).toBe(UPDATED_FIXED_ORIGINAL_PRICE)
     } finally {
       for (const linkId of linkIds) {
         await deleteCheckoutEntityIfExists(request, token, 'links', linkId)

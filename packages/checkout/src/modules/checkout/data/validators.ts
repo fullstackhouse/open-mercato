@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { fieldsetCodeRegex } from '@open-mercato/shared/modules/entities/validators'
+import { compareDecimals, parseDecimal } from '@open-mercato/shared/lib/decimal'
 import { DEFAULT_CHECKOUT_CUSTOMER_FIELDS } from '../lib/defaults'
 import { CHECKOUT_LINK_STATUSES } from '../lib/constants'
 
@@ -172,6 +173,25 @@ function validatePricingConsistency<T extends z.infer<typeof checkoutContentSche
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'checkout.validation.priceListItems.singleCurrency', path: ['priceListItems'] })
     }
   }
+}
+
+export type ExactCustomAmountRangeInput = {
+  pricingMode?: unknown
+  customAmountMinExact?: string | null
+  customAmountMaxExact?: string | null
+}
+
+export function assertExactCustomAmountRange(value: ExactCustomAmountRangeInput): void {
+  if (value.pricingMode !== 'custom_amount') return
+  const minimum = parseDecimal(value.customAmountMinExact)
+  const maximum = parseDecimal(value.customAmountMaxExact)
+  if (!minimum || !maximum || compareDecimals(minimum, maximum) <= 0) return
+  throw new z.ZodError([{
+    code: 'custom',
+    message: 'checkout.validation.customAmount.range',
+    path: ['customAmountMax'],
+    input: value.customAmountMaxExact,
+  }])
 }
 
 export const createTemplateSchema = checkoutContentSchema.superRefine((value, ctx) => {

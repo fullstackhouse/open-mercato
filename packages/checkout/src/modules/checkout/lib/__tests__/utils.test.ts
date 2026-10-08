@@ -456,6 +456,23 @@ describe('checkout utils', () => {
     expect(merged.fixedPriceOriginalAmountExact).toBe('2.987654321098765432')
   })
 
+  it('rejects custom amount bounds whose exact min exceeds max beyond float precision', () => {
+    const rawInput = {
+      name: 'Precision range',
+      pricingMode: 'custom_amount',
+      customAmountMin: '1.000000000000000002',
+      customAmountMax: '1.000000000000000001',
+      customAmountCurrencyCode: 'USD',
+      gatewayProviderKey: 'mock',
+    }
+
+    expect(() => parseCheckoutInput(rawInput, createLinkSchema.parse)).toThrow('checkout.validation.customAmount.range')
+    expect(() => parseCheckoutInput(
+      { ...rawInput, customAmountMin: '1.000000000000000001', customAmountMax: '1.000000000000000002' },
+      createLinkSchema.parse,
+    )).not.toThrow()
+  })
+
   it('normalizes loaded checkout custom fields back to bare keys', () => {
     expect(resolveLoadedCheckoutCustomFields({
       cf_support_contact: 'team@example.com',

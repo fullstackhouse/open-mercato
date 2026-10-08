@@ -1,4 +1,6 @@
+import { z } from 'zod'
 import {
+  assertExactCustomAmountRange,
   createLinkSchema,
   createTemplateSchema,
   updateLinkSchema,
@@ -108,5 +110,49 @@ describe('checkout validators', () => {
         gatewayProviderKey: null,
       }),
     ).toThrow()
+  })
+
+  test('assertExactCustomAmountRange rejects a min above max that differs only beyond float precision', () => {
+    let caught: unknown = null
+    try {
+      assertExactCustomAmountRange({
+        pricingMode: 'custom_amount',
+        customAmountMinExact: '1.000000000000000002',
+        customAmountMaxExact: '1.000000000000000001',
+      })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(z.ZodError)
+    expect((caught as z.ZodError).issues).toEqual([
+      expect.objectContaining({
+        code: 'custom',
+        message: 'checkout.validation.customAmount.range',
+        path: ['customAmountMax'],
+      }),
+    ])
+  })
+
+  test('assertExactCustomAmountRange accepts ordered, equal, partial or non custom amount ranges', () => {
+    expect(() => assertExactCustomAmountRange({
+      pricingMode: 'custom_amount',
+      customAmountMinExact: '1.000000000000000001',
+      customAmountMaxExact: '1.000000000000000002',
+    })).not.toThrow()
+    expect(() => assertExactCustomAmountRange({
+      pricingMode: 'custom_amount',
+      customAmountMinExact: '1.000000000000000001',
+      customAmountMaxExact: '1.0000000000000000010',
+    })).not.toThrow()
+    expect(() => assertExactCustomAmountRange({
+      pricingMode: 'custom_amount',
+      customAmountMinExact: '1.000000000000000002',
+    })).not.toThrow()
+    expect(() => assertExactCustomAmountRange({
+      pricingMode: 'fixed',
+      customAmountMinExact: '1.000000000000000002',
+      customAmountMaxExact: '1.000000000000000001',
+    })).not.toThrow()
   })
 })

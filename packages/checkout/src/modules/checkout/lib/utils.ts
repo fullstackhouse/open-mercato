@@ -16,12 +16,13 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { getPaymentGatewayDescriptor } from '@open-mercato/shared/modules/payment_gateways/types'
 import { CheckoutLink, CheckoutLinkTemplate, CheckoutTransaction } from '../data/entities'
 import { buildCheckoutAttachmentPreviewUrl, normalizeOptionalString } from './client-utils'
-import type {
-  CreateLinkInput,
-  CreateTemplateInput,
-  PublicSubmitInput,
-  UpdateLinkInput,
-  UpdateTemplateInput,
+import {
+  assertExactCustomAmountRange,
+  type CreateLinkInput,
+  type CreateTemplateInput,
+  type PublicSubmitInput,
+  type UpdateLinkInput,
+  type UpdateTemplateInput,
 } from '../data/validators'
 import { CHECKOUT_TERMINAL_STATUSES } from './constants'
 export {
@@ -120,6 +121,7 @@ export function parseCheckoutInput<TInput>(raw: unknown, parser: (value: unknown
       isRecord(item) ? withExactAmounts(item, rawItems[index], ['amount'] as const) : item,
     )
   }
+  assertExactCustomAmountRange(parsed)
   return { parsed, customFields }
 }
 
