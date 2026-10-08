@@ -76,7 +76,6 @@ function resolveDecimalPlaces(decimalPlaces?: number | null): number {
 // work in money at 2, so an exact comparison would report half a cent of
 // honest rounding as a mismatch. Half a minor unit is the widest divergence
 // that cannot be a real discrepancy and the narrowest that silences that noise.
-// It scales with the amount precision: 0.005 at the default 4 decimals.
 const netReconciliationTolerance = amountComparisonTolerance
 
 function extractAdjustmentTaxRate(adjustment: SalesAdjustmentDraft): number | null {

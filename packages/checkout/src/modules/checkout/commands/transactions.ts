@@ -51,8 +51,6 @@ const createTransactionCommand: CommandHandler<Record<string, unknown>, { id: st
     const { parsed } = parseCheckoutInput(rawInput, transactionCreateSchema.parse)
     const scope = resolveTransactionScope(parsed)
     const em = ctx.container.resolve('em') as EntityManager
-    // The gateway charges in the currency's own minor units, so the stored amount is
-    // rounded the same way and always equals what is charged.
     const currencyDecimalPlaces =
       (await resolveCurrencyDecimalPlaces(ctx.container, {
         code: parsed.currencyCode,

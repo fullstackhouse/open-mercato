@@ -4254,7 +4254,6 @@ function NumberInput({
   const isFocusedRef = React.useRef(false)
   // Users type the separator the surrounding UI displays, which follows the application
   // locale — `110,70` under Polish. `Number()` only ever accepted `.` (issue #5552).
-  // `exact` keeps the typed digits as a decimal string so money/FX values never pass through a float.
   const parse = React.useCallback(
     (raw: string): number | string | undefined => {
       if (raw === '') return undefined

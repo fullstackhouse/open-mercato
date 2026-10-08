@@ -190,8 +190,6 @@ export function resolveUpsertCalculatedAmounts(
     : multiplyDecimals(nextDiscountAmount, nextSnapshot.quantity)
   const existingDiscountAmount =
     resolveExactDecimal(existingSnapshot?.discountAmountExact, existingSnapshot?.discountAmount) ?? '0'
-  // The stored discount is the engine's output rounded to the line's amount
-  // precision, so the recomputed one is compared at that same precision.
   const discountScale = Math.max(DEFAULT_AMOUNT_DECIMAL_PLACES, amountDecimalPlaces)
   const discountChanged =
     (nextSnapshot.discountPercent ?? 0) !== (existingSnapshot?.discountPercent ?? 0) ||

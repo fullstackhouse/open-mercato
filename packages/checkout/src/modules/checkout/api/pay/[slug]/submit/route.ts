@@ -26,6 +26,7 @@ import { rateLimitErrorSchema } from '@open-mercato/shared/lib/ratelimit/helpers
 import { checkoutTag } from '../../../openapi'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { withExactAmounts } from '@open-mercato/shared/lib/decimal'
+import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 
 const logger = createLogger('checkout')
 
@@ -320,7 +321,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
       return NextResponse.json({ error: 'Idempotency-Key must be between 16 and 128 characters' }, { status: 400 })
     }
 
-    const rawBody: unknown = await req.json().catch(() => ({}))
+    const rawBody = await readJsonSafe<unknown>(req, {})
     const body = withExactAmounts(publicSubmitSchema.parse(rawBody), rawBody, ['amount'] as const)
     const em = container.resolve('em')
     const commandBus = container.resolve('commandBus') as CommandBus
