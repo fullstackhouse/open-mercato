@@ -26,8 +26,8 @@ import type { SalesAdjustmentKind } from '../../data/entities'
 import { E } from '#generated/entities.ids.generated'
 import { Settings } from 'lucide-react'
 import { extractCustomFieldValues, normalizeCustomFieldSubmitValue } from './customFieldHelpers'
-import { grossFromNet, netFromGross, resolveMoneyDecimalPlaces, toExactAmount } from './lineItemUtils'
-import { compareDecimals, countDecimalPlaces, roundDecimal, type DecimalInput } from '@open-mercato/shared/lib/decimal'
+import { autoFillOppositeAmount, toExactAmount } from './lineItemUtils'
+import { compareDecimals } from '@open-mercato/shared/lib/decimal'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 
 const logger = createLogger('sales')
@@ -150,11 +150,6 @@ const mergeTaxRateOptions = (
   if (!selected) return options
   if (options.some((option) => option.id === selected.id)) return options
   return [selected, ...options]
-}
-
-const formatAutoFilledAmount = (value: DecimalInput, source: DecimalInput): string => {
-  const rounded = roundDecimal(value, resolveMoneyDecimalPlaces(source))
-  return rounded.toFixed(Math.max(2, countDecimalPlaces(rounded)))
 }
 
 const resolveModeFromAdjustment = (adjustment?: AdjustmentRowData | null): 'rate' | 'amount' => {
@@ -311,12 +306,12 @@ export function AdjustmentDialog({
       if (exact === null) return
       if (!setFormValue) return
       if (source === 'net') {
-        setFormValue('amountGross', formatAutoFilledAmount(grossFromNet(exact, rateValue), exact))
+        setFormValue('amountGross', autoFillOppositeAmount('net', exact, rateValue, currencyCode))
       } else {
-        setFormValue('amountNet', formatAutoFilledAmount(netFromGross(exact, rateValue), exact))
+        setFormValue('amountNet', autoFillOppositeAmount('gross', exact, rateValue, currencyCode))
       }
     },
-    [mode, resolveTaxRateValue]
+    [currencyCode, mode, resolveTaxRateValue]
   )
 
   React.useEffect(() => {
@@ -566,13 +561,13 @@ export function AdjustmentDialog({
             if (lastChanged === 'gross') {
               const gross = toExactAmount((values as any)?.amountGross)
               if (gross !== null) {
-                setFormValue?.('amountNet', formatAutoFilledAmount(netFromGross(gross, rateNumeric), gross))
+                setFormValue?.('amountNet', autoFillOppositeAmount('gross', gross, rateNumeric, currencyCode))
               }
               return
             }
             const net = toExactAmount((values as any)?.amountNet)
             if (net !== null) {
-              setFormValue?.('amountGross', formatAutoFilledAmount(grossFromNet(net, rateNumeric), net))
+              setFormValue?.('amountGross', autoFillOppositeAmount('net', net, rateNumeric, currencyCode))
             }
           }
           return (

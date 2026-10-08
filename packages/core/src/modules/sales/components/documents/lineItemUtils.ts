@@ -9,7 +9,9 @@ import {
   divideDecimals,
   multiplyDecimals,
   parseDecimal,
+  resolveIsoCurrencyDecimalPlaces,
   roundDecimal,
+  toDecimal,
   type DecimalInput,
   type DecimalValue,
 } from '@open-mercato/shared/lib/decimal'
@@ -77,6 +79,46 @@ export function netFromGross(gross: DecimalInput, taxRate: DecimalInput | null |
   return multiplier
     ? roundMoney(divideDecimals(gross, multiplier, FX_DECIMAL_PLACES), resolveMoneyDecimalPlaces(gross))
     : decimalToString(gross)
+}
+
+/**
+ * Decimal places an amount a dialog fills in for the user is rounded to: the
+ * currency's ISO 4217 digits (2 for a code without them), or more when a typed
+ * source amount carries more.
+ */
+export function resolveAutoFillDecimalPlaces(
+  currencyCode: string | null | undefined,
+  ...sources: Array<DecimalInput | null | undefined>
+): number {
+  return sources.reduce<number>((places, source) => {
+    if (source === null || source === undefined) return places
+    return Math.max(places, countDecimalPlaces(source))
+  }, resolveIsoCurrencyDecimalPlaces(currencyCode) ?? 2)
+}
+
+export function roundAutoFilledAmount(
+  value: DecimalInput,
+  currencyCode: string | null | undefined,
+  ...sources: Array<DecimalInput | null | undefined>
+): string {
+  const decimalPlaces = resolveAutoFillDecimalPlaces(currencyCode, ...sources)
+  return roundDecimal(value, decimalPlaces).toFixed(decimalPlaces)
+}
+
+/** The other side of a typed net or gross amount, rounded like `roundAutoFilledAmount`. */
+export function autoFillOppositeAmount(
+  source: 'net' | 'gross',
+  amount: DecimalInput,
+  taxRate: DecimalInput | null | undefined,
+  currencyCode: string | null | undefined,
+): string {
+  const multiplier = resolveTaxMultiplier(taxRate)
+  const opposite = !multiplier
+    ? toDecimal(amount)
+    : source === 'net'
+      ? multiplyDecimals(amount, multiplier)
+      : divideDecimals(amount, multiplier, FX_DECIMAL_PLACES)
+  return roundAutoFilledAmount(opposite, currencyCode, amount)
 }
 
 export type LineDiscountDisplay = {

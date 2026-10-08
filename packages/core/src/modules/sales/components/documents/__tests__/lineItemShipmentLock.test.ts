@@ -52,8 +52,38 @@ describe("prepareShippedLineUpdatePayload", () => {
 
     expect(payload).toEqual({
       quantity: 6,
-      totalNetAmount: 540,
-      totalGrossAmount: 664.2,
+      totalNetAmount: "540",
+      totalGrossAmount: "664.2",
+    });
+  });
+
+  it("rescales exact totals without float drift and rounds to the money precision", () => {
+    const payload = prepareShippedLineUpdatePayload(
+      { quantity: 1 },
+      {
+        quantity: 3,
+        totalNetAmount: "100.000000000000000001",
+        totalGrossAmount: "0.3",
+      },
+    );
+
+    expect(payload).toEqual({
+      quantity: 1,
+      totalNetAmount: "33.333333333333333334",
+      totalGrossAmount: "0.1",
+    });
+  });
+
+  it("rounds a rescaled fiat total to 4 decimals", () => {
+    const payload = prepareShippedLineUpdatePayload(
+      { quantity: 2 },
+      { quantity: 3, totalNetAmount: "10", totalGrossAmount: "12.3" },
+    );
+
+    expect(payload).toEqual({
+      quantity: 2,
+      totalNetAmount: "6.6667",
+      totalGrossAmount: "8.2",
     });
   });
 

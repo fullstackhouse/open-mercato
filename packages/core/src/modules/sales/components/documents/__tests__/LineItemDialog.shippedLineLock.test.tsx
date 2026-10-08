@@ -562,8 +562,8 @@ describe('LineItemDialog shipped-line lock (issue #5248)', () => {
       quantity: 6,
       currencyCode: 'USD',
       name: 'Renamed line',
-      totalNetAmount: 540,
-      totalGrossAmount: 664.2,
+      totalNetAmount: '540',
+      totalGrossAmount: '664.2',
     })
   })
 

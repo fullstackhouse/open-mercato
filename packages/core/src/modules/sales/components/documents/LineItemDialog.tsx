@@ -1593,8 +1593,8 @@ export function LineItemDialog({
         isShippedOrderLine && initialLine
           ? {
               quantity: initialLine.quantity,
-              totalNetAmount: initialLine.totalNet,
-              totalGrossAmount: initialLine.totalGross,
+              totalNetAmount: initialLine.totalNetExact ?? initialLine.totalNet,
+              totalGrossAmount: initialLine.totalGrossExact ?? initialLine.totalGross,
             }
           : null,
       );

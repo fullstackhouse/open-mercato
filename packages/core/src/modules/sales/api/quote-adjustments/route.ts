@@ -170,7 +170,7 @@ const adjustmentSchema = z.object({
   label: z.string().nullable().optional(),
   calculator_key: z.string().nullable().optional(),
   promotion_id: z.string().uuid().nullable().optional(),
-  rate: z.number(),
+  rate: z.string(),
   amount_net: z.string(),
   amount_gross: z.string(),
   currency_code: z.string().nullable().optional(),

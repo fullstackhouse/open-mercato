@@ -132,7 +132,9 @@ import {
   decimalToNumber,
   decimalToString,
   divideDecimals,
+  multiplyDecimals,
   parseDecimal,
+  resolveExactDecimal,
   roundDecimal,
   withExactAmounts,
 } from "@open-mercato/shared/lib/decimal";
@@ -2355,13 +2357,16 @@ type NormalizeLineUomInput = {
   resolver: UomResolver;
   organizationId: string;
   tenantId: string;
+  amountDecimalPlaces?: number;
   line: {
     productId?: string | null;
     productVariantId?: string | null;
     quantity?: number | string | null;
     quantityUnit?: string | null;
     unitPriceNet?: number | null;
+    unitPriceNetExact?: string | null;
     unitPriceGross?: number | null;
+    unitPriceGrossExact?: string | null;
     normalizedQuantity?: number | string | null;
     normalizedUnit?: string | null;
     uomSnapshot?: Record<string, unknown> | null;
@@ -2658,14 +2663,15 @@ async function resolveProductUomState(
   return state;
 }
 
-function buildUnitPriceReferenceSnapshot(params: {
+export function buildUnitPriceReferenceSnapshot(params: {
   product: ProductUomState;
   toBaseFactor: number;
-  unitPriceNet: number | null;
-  unitPriceGross: number | null;
+  unitPriceNet: string | null;
+  unitPriceGross: string | null;
+  amountDecimalPlaces?: number;
 }) {
   if (!params.product.unitPriceEnabled) return undefined;
-  const baseQuantityNumber = toNumeric(params.product.unitPriceBaseQuantity);
+  const baseQuantity = parseDecimal(params.product.unitPriceBaseQuantity);
   const output: NonNullable<SalesLineUomSnapshot["unitPriceReference"]> = {
     enabled: true,
     referenceUnitCode: params.product.unitPriceReferenceUnit ?? null,
@@ -2674,29 +2680,24 @@ function buildUnitPriceReferenceSnapshot(params: {
   if (
     !params.product.unitPriceReferenceUnit ||
     params.toBaseFactor <= 0 ||
-    baseQuantityNumber <= 0
+    baseQuantity === null ||
+    baseQuantity.lte(0)
   ) {
     return output;
   }
-  if (
-    typeof params.unitPriceGross === "number" &&
-    Number.isFinite(params.unitPriceGross)
-  ) {
-    output.grossPerReference = decimalToString(
-      divideDecimals(params.unitPriceGross, params.toBaseFactor, DEFAULT_AMOUNT_DECIMAL_PLACES).times(
-        baseQuantityNumber,
+  const decimalPlaces = params.amountDecimalPlaces ?? DEFAULT_AMOUNT_DECIMAL_PLACES;
+  const perReference = (unitPrice: string) =>
+    decimalToString(
+      roundDecimal(
+        divideDecimals(multiplyDecimals(unitPrice, baseQuantity), params.toBaseFactor, FX_DECIMAL_PLACES),
+        decimalPlaces,
       ),
     );
+  if (params.unitPriceGross !== null) {
+    output.grossPerReference = perReference(params.unitPriceGross);
   }
-  if (
-    typeof params.unitPriceNet === "number" &&
-    Number.isFinite(params.unitPriceNet)
-  ) {
-    output.netPerReference = decimalToString(
-      divideDecimals(params.unitPriceNet, params.toBaseFactor, DEFAULT_AMOUNT_DECIMAL_PLACES).times(
-        baseQuantityNumber,
-      ),
-    );
+  if (params.unitPriceNet !== null) {
+    output.netPerReference = perReference(params.unitPriceNet);
   }
   return output;
 }
@@ -2861,8 +2862,9 @@ async function normalizeLineUom(input: NormalizeLineUomInput): Promise<{
   const unitPriceReference = buildUnitPriceReferenceSnapshot({
     product: productState,
     toBaseFactor,
-    unitPriceNet: toOptionalNumber(input.line.unitPriceNet),
-    unitPriceGross: toOptionalNumber(input.line.unitPriceGross),
+    unitPriceNet: resolveExactDecimal(input.line.unitPriceNetExact, toOptionalNumber(input.line.unitPriceNet)),
+    unitPriceGross: resolveExactDecimal(input.line.unitPriceGrossExact, toOptionalNumber(input.line.unitPriceGross)),
+    amountDecimalPlaces: input.amountDecimalPlaces,
   });
   const snapshot: SalesLineUomSnapshot = {
     version: 1,
@@ -5269,6 +5271,11 @@ const createQuoteCommand: CommandHandler<
       ),
     );
     const uomResolver = createUomResolver();
+    const lineAmountDecimalPlaces = await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+      code: quote.currencyCode,
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+    });
     const normalizedLineInputs = await Promise.all(
       lineInputs.map(async (line) => {
         const normalized = await normalizeLineUom({
@@ -5276,6 +5283,7 @@ const createQuoteCommand: CommandHandler<
           resolver: uomResolver,
           organizationId: parsed.organizationId,
           tenantId: parsed.tenantId,
+          amountDecimalPlaces: lineAmountDecimalPlaces,
           line,
         });
         return {
@@ -6392,6 +6400,11 @@ const createOrderCommand: CommandHandler<
       ),
     );
     const uomResolver = createUomResolver();
+    const lineAmountDecimalPlaces = await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+      code: order.currencyCode,
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+    });
     const normalizedLineInputs = await Promise.all(
       lineInputs.map(async (line) => {
         const normalized = await normalizeLineUom({
@@ -6399,6 +6412,7 @@ const createOrderCommand: CommandHandler<
           resolver: uomResolver,
           organizationId: parsed.organizationId,
           tenantId: parsed.tenantId,
+          amountDecimalPlaces: lineAmountDecimalPlaces,
           line,
         });
         return {
@@ -7709,17 +7723,33 @@ const orderLineUpsertCommand: CommandHandler<
       normalizedUnit: existingSnapshot?.normalizedUnit ?? null,
       uomSnapshot: existingSnapshot?.uomSnapshot ?? null,
     };
+    const lineUomPrices = () => {
+      const netExactCandidates = [
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+        unitPriceExactFromTax?.net,
+      ];
+      return {
+        unitPriceNet: unitPriceNet ?? 0,
+        unitPriceNetExact: exactFor(unitPriceNet ?? 0, ...netExactCandidates),
+        unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
+        unitPriceGrossExact: exactFor(
+          unitPriceGross ?? unitPriceNet ?? 0,
+          parsed.unitPriceGrossExact,
+          existingSnapshot?.unitPriceGrossExact,
+          unitPriceExactFromTax?.gross,
+          ...netExactCandidates,
+        ),
+      };
+    };
     const uomResolver = createUomResolver();
     let normalizedUom = await normalizeLineUom({
       em,
       resolver: uomResolver,
       organizationId: order.organizationId,
       tenantId: order.tenantId,
-      line: {
-        ...lineUomInput,
-        unitPriceNet: unitPriceNet ?? 0,
-        unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
-      },
+      amountDecimalPlaces: lineAmountDecimalPlaces,
+      line: { ...lineUomInput, ...lineUomPrices() },
     });
     const convertedPrices = convertLineUnitPricesOnUnitChange({
       existingSnapshot,
@@ -7753,11 +7783,8 @@ const orderLineUpsertCommand: CommandHandler<
         resolver: uomResolver,
         organizationId: order.organizationId,
         tenantId: order.tenantId,
-        line: {
-          ...lineUomInput,
-          unitPriceNet: unitPriceNet ?? 0,
-          unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
-        },
+        amountDecimalPlaces: lineAmountDecimalPlaces,
+        line: { ...lineUomInput, ...lineUomPrices() },
       });
     }
     const updatedSnapshot: SalesLineSnapshot & {
@@ -8258,17 +8285,33 @@ const quoteLineUpsertCommand: CommandHandler<
       normalizedUnit: existingSnapshot?.normalizedUnit ?? null,
       uomSnapshot: existingSnapshot?.uomSnapshot ?? null,
     };
+    const lineUomPrices = () => {
+      const netExactCandidates = [
+        parsed.unitPriceNetExact,
+        existingSnapshot?.unitPriceNetExact,
+        unitPriceExactFromTax?.net,
+      ];
+      return {
+        unitPriceNet: unitPriceNet ?? 0,
+        unitPriceNetExact: exactFor(unitPriceNet ?? 0, ...netExactCandidates),
+        unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
+        unitPriceGrossExact: exactFor(
+          unitPriceGross ?? unitPriceNet ?? 0,
+          parsed.unitPriceGrossExact,
+          existingSnapshot?.unitPriceGrossExact,
+          unitPriceExactFromTax?.gross,
+          ...netExactCandidates,
+        ),
+      };
+    };
     const uomResolver = createUomResolver();
     let normalizedUom = await normalizeLineUom({
       em,
       resolver: uomResolver,
       organizationId: quote.organizationId,
       tenantId: quote.tenantId,
-      line: {
-        ...lineUomInput,
-        unitPriceNet: unitPriceNet ?? 0,
-        unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
-      },
+      amountDecimalPlaces: lineAmountDecimalPlaces,
+      line: { ...lineUomInput, ...lineUomPrices() },
     });
     const convertedPrices = convertLineUnitPricesOnUnitChange({
       existingSnapshot,
@@ -8302,11 +8345,8 @@ const quoteLineUpsertCommand: CommandHandler<
         resolver: uomResolver,
         organizationId: quote.organizationId,
         tenantId: quote.tenantId,
-        line: {
-          ...lineUomInput,
-          unitPriceNet: unitPriceNet ?? 0,
-          unitPriceGross: unitPriceGross ?? unitPriceNet ?? 0,
-        },
+        amountDecimalPlaces: lineAmountDecimalPlaces,
+        line: { ...lineUomInput, ...lineUomPrices() },
       });
     }
     const updatedSnapshot: SalesLineSnapshot & {

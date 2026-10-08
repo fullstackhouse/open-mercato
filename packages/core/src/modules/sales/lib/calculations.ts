@@ -428,11 +428,12 @@ function buildDocumentAmounts(
 
 type AmountPair = { exact: unknown; value: unknown }
 type AmountPairs = Record<string, AmountPair>
+type AmountPairsById = Record<string, AmountPairs>
 
 type DocumentAmountPairs = {
   totals: AmountPairs
-  lines: AmountPairs[]
-  adjustments: AmountPairs[]
+  lines: AmountPairsById
+  adjustments: AmountPairsById
 }
 
 const ADJUSTMENT_AMOUNT_FIELDS = ['amountNet', 'amountGross'] as const
@@ -444,33 +445,78 @@ function captureAmountPairs(record: object, fields: readonly string[]): AmountPa
   return pairs
 }
 
+function itemId(id: unknown): string | null {
+  return typeof id === 'string' && id.length > 0 ? id : null
+}
+
+function captureAmountPairsById<T extends object>(
+  items: readonly T[],
+  resolveId: (item: T) => unknown,
+  fields: readonly string[],
+): AmountPairsById {
+  const pairs: AmountPairsById = {}
+  for (const item of items) {
+    const id = itemId(resolveId(item))
+    if (id !== null && !Object.prototype.hasOwnProperty.call(pairs, id)) pairs[id] = captureAmountPairs(item, fields)
+  }
+  return pairs
+}
+
+function pairedAmounts(pairs: AmountPairsById | undefined, id: unknown): AmountPairs | undefined {
+  const key = itemId(id)
+  if (!pairs || key === null || !Object.prototype.hasOwnProperty.call(pairs, key)) return undefined
+  return pairs[key]
+}
+
+function lineResultId(line: SalesLineCalculationResult): unknown {
+  return line.line?.id
+}
+
+function adjustmentId(adjustment: SalesAdjustmentDraft): unknown {
+  return adjustment.id
+}
+
 function captureDocumentAmounts(result: SalesDocumentCalculationResult): DocumentAmountPairs {
   return {
     totals: captureAmountPairs(result.totals, SALES_DOCUMENT_AMOUNT_FIELDS),
-    lines: result.lines.map((line) => captureAmountPairs(line, SALES_LINE_RESULT_AMOUNT_FIELDS)),
-    adjustments: result.adjustments.map((adjustment) => captureAmountPairs(adjustment, ADJUSTMENT_AMOUNT_FIELDS)),
+    lines: captureAmountPairsById(result.lines, lineResultId, SALES_LINE_RESULT_AMOUNT_FIELDS),
+    adjustments: captureAmountPairsById(result.adjustments, adjustmentId, ADJUSTMENT_AMOUNT_FIELDS),
   }
 }
 
 /**
  * Picks the value a hook meant: when it changed the `<field>Exact` string, that
  * string wins; otherwise the float decides as in `resolveExactDecimal` (a hook
- * that only changed the float overrides a stale exact value).
+ * that only changed the float overrides a stale exact value). A value taken from
+ * the float is rounded to `decimalPlaces`, as the fixed-scale columns did on write.
  */
-function reconcileAmount(before: AmountPair | undefined, exact: unknown, value: unknown): DecimalValue | null {
+function reconcileAmount(
+  before: AmountPair | undefined,
+  exact: unknown,
+  value: unknown,
+  decimalPlaces: number,
+): DecimalValue | null {
   const nextExact = typeof exact === 'string' ? exactAmount(exact, undefined) : null
   if (nextExact !== null && before !== undefined) {
     const previousExact = typeof before.exact === 'string' ? exactAmount(before.exact, undefined) : null
     if (previousExact === null || !previousExact.eq(nextExact)) return nextExact
   }
-  return exactAmount(exact, value)
+  const resolved = exactAmount(exact, value)
+  if (resolved === null) return null
+  if (nextExact !== null && nextExact.eq(resolved)) return nextExact
+  return roundDecimal(resolved, decimalPlaces)
 }
 
-function reconcileAmounts<T extends object>(record: T, fields: readonly string[], before?: AmountPairs): T {
+function reconcileAmounts<T extends object>(
+  record: T,
+  fields: readonly string[],
+  decimalPlaces: number,
+  before?: AmountPairs,
+): T {
   const values = record as Record<string, unknown>
   let synced = record
   for (const field of fields) {
-    const value = reconcileAmount(before?.[field], values[`${field}Exact`], values[field])
+    const value = reconcileAmount(before?.[field], values[`${field}Exact`], values[field], decimalPlaces)
     if (value !== null) synced = withExactAmount(synced, field, value)
   }
   return synced
@@ -479,22 +525,36 @@ function reconcileAmounts<T extends object>(record: T, fields: readonly string[]
 /** Keeps every `<field>Exact` consistent with its float after a hook ran. */
 function syncLineResultExactAmounts(
   result: SalesLineCalculationResult,
+  decimalPlaces: number,
   before?: AmountPairs,
 ): SalesLineCalculationResult {
-  return reconcileAmounts(result, SALES_LINE_RESULT_AMOUNT_FIELDS, before)
+  return reconcileAmounts(result, SALES_LINE_RESULT_AMOUNT_FIELDS, decimalPlaces, before)
 }
 
+/**
+ * Lines and adjustments are matched to their pre-hook amounts by `id`, so a hook
+ * that reorders, filters or prepends items cannot pair one item with another's
+ * stale exact value. Items without a match fall back to the float/exact consistency rule.
+ */
 function syncDocumentResultExactAmounts(
   result: SalesDocumentCalculationResult,
+  decimalPlaces: number,
   before?: DocumentAmountPairs,
 ): SalesDocumentCalculationResult {
   return {
     ...result,
-    lines: result.lines.map((line, index) => syncLineResultExactAmounts(line, before?.lines[index])),
-    adjustments: result.adjustments.map((adjustment, index) =>
-      reconcileAmounts(adjustment, ADJUSTMENT_AMOUNT_FIELDS, before?.adjustments[index]),
+    lines: result.lines.map((line) =>
+      syncLineResultExactAmounts(line, decimalPlaces, pairedAmounts(before?.lines, lineResultId(line))),
     ),
-    totals: reconcileAmounts(result.totals, SALES_DOCUMENT_AMOUNT_FIELDS, before?.totals),
+    adjustments: result.adjustments.map((adjustment) =>
+      reconcileAmounts(
+        adjustment,
+        ADJUSTMENT_AMOUNT_FIELDS,
+        decimalPlaces,
+        pairedAmounts(before?.adjustments, adjustmentId(adjustment)),
+      ),
+    ),
+    totals: reconcileAmounts(result.totals, SALES_DOCUMENT_AMOUNT_FIELDS, decimalPlaces, before?.totals),
   }
 }
 
@@ -520,11 +580,12 @@ class SalesCalculationRegistry {
 
   async calculateLine(opts: CalculateLineOptions): Promise<SalesLineCalculationResult> {
     const { documentKind, line, context, eventBus } = opts
-    let current = buildBaseLineResult(line, resolveDecimalPlaces(context.amountDecimalPlaces))
+    const decimalPlaces = resolveDecimalPlaces(context.amountDecimalPlaces)
+    let current = buildBaseLineResult(line, decimalPlaces)
     const applyHook = async (run: () => Promise<void>) => {
       const before = captureAmountPairs(current, SALES_LINE_RESULT_AMOUNT_FIELDS)
       await run()
-      current = syncLineResultExactAmounts(current, before)
+      current = syncLineResultExactAmounts(current, decimalPlaces, before)
     }
 
     if (eventBus) {
@@ -583,10 +644,11 @@ class SalesCalculationRegistry {
       amountDecimalPlaces: context.amountDecimalPlaces,
     })
 
+    const decimalPlaces = resolveDecimalPlaces(context.amountDecimalPlaces)
     const applyHook = async (run: () => Promise<void>) => {
       const before = captureDocumentAmounts(current)
       await run()
-      current = syncDocumentResultExactAmounts(current, before)
+      current = syncDocumentResultExactAmounts(current, decimalPlaces, before)
     }
 
     if (eventBus) {
@@ -640,7 +702,7 @@ class SalesCalculationRegistry {
     // outstanding display after a payment. Re-apply the input totals last and
     // recompute outstanding against the post-calculation grand total.
     if (existingTotals) {
-      const round = createRounder(resolveDecimalPlaces(context.amountDecimalPlaces))
+      const round = createRounder(decimalPlaces)
       const paidTotalAmount = maxOf(
         exactAmount(existingTotals.paidTotalAmountExact, existingTotals.paidTotalAmount) ?? ZERO,
         ZERO,

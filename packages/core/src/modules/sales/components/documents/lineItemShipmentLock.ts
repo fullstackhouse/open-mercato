@@ -1,7 +1,17 @@
+import {
+  divideDecimals,
+  multiplyDecimals,
+  parseDecimal,
+  type DecimalInput,
+} from "@open-mercato/shared/lib/decimal";
+import { resolveMoneyDecimalPlaces, roundMoney } from "./lineItemUtils";
+
 type ShippedLineSnapshot = {
   quantity: number;
-  totalNetAmount?: number | null;
-  totalGrossAmount?: number | null;
+  /** Prefer the exact decimal string of the stored total. */
+  totalNetAmount?: DecimalInput | null;
+  /** Prefer the exact decimal string of the stored total. */
+  totalGrossAmount?: DecimalInput | null;
 };
 
 const SHIPPED_LINE_IMMUTABLE_PAYLOAD_FIELDS = [
@@ -23,18 +33,22 @@ const SHIPPED_LINE_IMMUTABLE_PAYLOAD_FIELDS = [
 ] as const;
 
 function scaleTotal(
-  total: number | null | undefined,
+  total: DecimalInput | null | undefined,
   previousQuantity: number,
   nextQuantity: number,
-): number | undefined {
+): string | undefined {
+  const exactTotal = parseDecimal(total);
   if (
-    !Number.isFinite(total) ||
+    exactTotal === null ||
     !Number.isFinite(previousQuantity) ||
     previousQuantity <= 0
   ) {
     return undefined;
   }
-  return (total as number) * (nextQuantity / previousQuantity);
+  return roundMoney(
+    divideDecimals(multiplyDecimals(exactTotal, nextQuantity), previousQuantity),
+    resolveMoneyDecimalPlaces(exactTotal),
+  );
 }
 
 export function prepareShippedLineUpdatePayload(

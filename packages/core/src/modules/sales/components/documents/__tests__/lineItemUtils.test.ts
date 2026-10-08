@@ -1,9 +1,12 @@
 import {
+  autoFillOppositeAmount,
   formatMoney,
   grossFromNet,
   netFromGross,
   resolveLineDiscountDisplay,
+  resolveAutoFillDecimalPlaces,
   resolveMoneyDecimalPlaces,
+  roundAutoFilledAmount,
   roundMoney,
   toExactAmount,
 } from '../lineItemUtils'
@@ -113,5 +116,36 @@ describe('exact money helpers', () => {
     expect(grossFromNet('10.1234', 23)).toBe('12.4518')
     expect(netFromGross('1.230000000000000001', 23)).toBe('1.000000000000000001')
     expect(netFromGross('100', null)).toBe('100')
+  })
+})
+
+describe('auto-filled dialog amounts', () => {
+  it('rounds to the currency digits unless the typed source carries more', () => {
+    expect(resolveAutoFillDecimalPlaces('USD', '10.01')).toBe(2)
+    expect(resolveAutoFillDecimalPlaces('USD', '10.0001')).toBe(4)
+    expect(resolveAutoFillDecimalPlaces('JPY', '100')).toBe(0)
+    expect(resolveAutoFillDecimalPlaces('ETH', '1.5')).toBe(2)
+    expect(resolveAutoFillDecimalPlaces('ETH', '0.000000000000000001')).toBe(18)
+    expect(resolveAutoFillDecimalPlaces(null, '7')).toBe(2)
+  })
+
+  it('fills the opposite of a typed net or gross amount at the currency precision', () => {
+    expect(autoFillOppositeAmount('net', '10.01', 23, 'USD')).toBe('12.31')
+    expect(autoFillOppositeAmount('gross', '12.31', 23, 'USD')).toBe('10.01')
+    expect(autoFillOppositeAmount('net', '10', 23, 'USD')).toBe('12.30')
+    expect(autoFillOppositeAmount('net', '1000', 23, 'JPY')).toBe('1230')
+    expect(autoFillOppositeAmount('net', '10.0001', 23, 'USD')).toBe('12.3001')
+    expect(autoFillOppositeAmount('net', '0.000000000000000001', 23, 'ETH')).toBe('0.000000000000000001')
+    expect(autoFillOppositeAmount('net', '10.01', null, 'USD')).toBe('10.01')
+  })
+
+  it('rounds the exact value once instead of rounding a 4 decimal intermediate', () => {
+    expect(grossFromNet('0.09', 5.5)).toBe('0.095')
+    expect(autoFillOppositeAmount('net', '0.09', 5.5, 'USD')).toBe('0.09')
+  })
+
+  it('rounds a shipping amount from a fractional quantity to cents', () => {
+    expect(roundAutoFilledAmount('15.015', 'USD', '10.01')).toBe('15.02')
+    expect(roundAutoFilledAmount('20.02', 'USD', '10.01')).toBe('20.02')
   })
 })

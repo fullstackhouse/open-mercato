@@ -63,6 +63,56 @@ describe('DefaultTaxCalculationService', () => {
     expect(result.grossAmountExact).toBe('0.000000000000000151')
   })
 
+  it('keeps the entered net exact and rounds only the derived gross', async () => {
+    const em = { findOne: jest.fn() }
+    const service = new DefaultTaxCalculationService(em as never)
+    const result = await service.calculateUnitAmounts({
+      ...baseInput,
+      amount: 12.34567,
+      amountExact: '12.34567',
+      taxRate: 23,
+    })
+
+    expect(result.netAmountExact).toBe('12.34567')
+    expect(result.grossAmountExact).toBe('15.18517')
+    expect(result.taxAmountExact).toBe('2.8395')
+  })
+
+  it('keeps the entered gross exact and rounds only the derived net', async () => {
+    const em = { findOne: jest.fn() }
+    const service = new DefaultTaxCalculationService(em as never)
+    const result = await service.calculateUnitAmounts({
+      ...baseInput,
+      amount: 12.34567,
+      amountExact: '12.34567',
+      mode: 'gross',
+      taxRate: 23,
+    })
+
+    expect(result.grossAmountExact).toBe('12.34567')
+    expect(result.netAmountExact).toBe('10.03713')
+    expect(result.taxAmountExact).toBe('2.30854')
+  })
+
+  it('does not round a tiny entered amount to zero', async () => {
+    const em = { findOne: jest.fn() }
+    const service = new DefaultTaxCalculationService(em as never)
+    const untaxed = await service.calculateUnitAmounts({
+      ...baseInput,
+      amount: 0.00001,
+      amountExact: '0.00001',
+    })
+    const taxed = await service.calculateUnitAmounts({
+      ...baseInput,
+      amount: 0.00001,
+      amountExact: '0.00001',
+      taxRate: 23,
+    })
+
+    expect(untaxed).toMatchObject({ netAmountExact: '0.00001', grossAmountExact: '0.00001', taxAmountExact: '0' })
+    expect(taxed).toMatchObject({ netAmountExact: '0.00001', grossAmountExact: '0.00001', taxAmountExact: '0' })
+  })
+
   it('throws for invalid amount or mode', async () => {
     const em = { findOne: jest.fn() }
     const service = new DefaultTaxCalculationService(em as any)

@@ -4,6 +4,7 @@ import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import {
   DEFAULT_AMOUNT_DECIMAL_PLACES,
   FX_DECIMAL_PLACES,
+  countDecimalPlaces,
   decimalToNumber,
   decimalToString,
   divideDecimals,
@@ -20,7 +21,7 @@ export type CalculateTaxInput = {
   /** Float copy of `amountExact`; prefer the exact field. */
   amount: number
   amountExact?: string | null
-  /** Decimal places results are rounded to; defaults to 4. */
+  /** Decimal places the derived side is rounded to (never fewer than the entered amount carries); defaults to 4. */
   amountDecimalPlaces?: number
   mode: TaxCalculationMode
   organizationId: string
@@ -90,25 +91,29 @@ export class DefaultTaxCalculationService implements TaxCalculationService {
     const fraction = hasValue ? divideDecimals(rate, 100, FX_DECIMAL_PLACES) : toDecimal(0)
     const multiplier = fraction.plus(1)
 
+    const decimalPlaces = Math.max(
+      input.amountDecimalPlaces ?? DEFAULT_AMOUNT_DECIMAL_PLACES,
+      countDecimalPlaces(amount),
+    )
     let netAmount: DecimalValue
     let grossAmount: DecimalValue
     if (mode === 'net') {
       netAmount = amount
-      grossAmount = amount.times(multiplier)
+      grossAmount = roundDecimal(amount.times(multiplier), decimalPlaces)
     } else {
       grossAmount = amount
-      netAmount = fraction.gt(0) ? divideDecimals(amount, multiplier, FX_DECIMAL_PLACES) : amount
+      netAmount = fraction.gt(0)
+        ? roundDecimal(divideDecimals(amount, multiplier, FX_DECIMAL_PLACES), decimalPlaces)
+        : amount
     }
-    const taxAmount = grossAmount.minus(netAmount)
-    const decimalPlaces = input.amountDecimalPlaces ?? DEFAULT_AMOUNT_DECIMAL_PLACES
 
     return withExactResult({
       netAmount: 0,
-      netAmountExact: decimalToString(roundDecimal(netAmount, decimalPlaces)),
+      netAmountExact: decimalToString(netAmount),
       grossAmount: 0,
-      grossAmountExact: decimalToString(roundDecimal(grossAmount, decimalPlaces)),
+      grossAmountExact: decimalToString(grossAmount),
       taxAmount: 0,
-      taxAmountExact: decimalToString(roundDecimal(taxAmount, decimalPlaces)),
+      taxAmountExact: decimalToString(grossAmount.minus(netAmount)),
       taxRate: hasValue ? roundRate(rate) : null,
     }, true)
   }

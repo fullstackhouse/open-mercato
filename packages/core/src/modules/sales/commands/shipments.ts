@@ -36,12 +36,14 @@ import {
   SALES_RESOURCE_KIND_ORDER,
 } from './shared'
 import {
+  DEFAULT_AMOUNT_DECIMAL_PLACES,
   countDecimalPlaces,
   parseDecimal,
   toDecimal,
   withExactAmounts,
   type DecimalInput,
 } from '@open-mercato/shared/lib/decimal'
+import { resolveCurrencyAmountDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
 import { resolveDictionaryEntryValue } from '../lib/dictionaries'
 import { SHIPMENT_EXACT_AMOUNT_FIELDS } from '../lib/exactAmountFields'
 import { resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
@@ -68,13 +70,18 @@ const ADDRESS_SNAPSHOT_KEY = 'shipmentAddressSnapshot'
 
 /**
  * Whether `amount` settles `grandTotal`. Rows written by the old float math can be
- * one unit of the 4th decimal short, so a total that close still counts as settled;
- * the tolerance shrinks when either amount carries more decimals.
+ * one unit of the last amount decimal short, so a total that close still counts as
+ * settled. `amountDecimalPlaces` is the order currency's amount precision (4 for
+ * fiat); the tolerance shrinks further when either amount carries more decimals.
  */
-export function coversGrandTotal(amount: DecimalInput, grandTotal: DecimalInput): boolean {
+export function coversGrandTotal(
+  amount: DecimalInput,
+  grandTotal: DecimalInput,
+  amountDecimalPlaces: number = DEFAULT_AMOUNT_DECIMAL_PLACES,
+): boolean {
   const total = toDecimal(grandTotal)
   const covered = toDecimal(amount)
-  const scale = Math.max(4, countDecimalPlaces(total), countDecimalPlaces(covered))
+  const scale = Math.max(amountDecimalPlaces, countDecimalPlaces(total), countDecimalPlaces(covered))
   return covered.gte(total.minus(toDecimal(`1e-${scale}`)))
 }
 
@@ -720,15 +727,20 @@ const updateShipmentCommand: CommandHandler<ShipmentUpdateInput, { shipmentId: s
       const paidAmount = parseDecimal(order.paidTotalAmount) ?? toDecimal(0)
       const refundedAmount = parseDecimal(order.refundedTotalAmount) ?? toDecimal(0)
       const grandTotal = parseDecimal(order.grandTotalGrossAmount) ?? toDecimal(0)
+      const amountDecimalPlaces = await resolveCurrencyAmountDecimalPlaces(ctx.container, {
+        code: order.currencyCode,
+        tenantId: order.tenantId,
+        organizationId: order.organizationId,
+      })
 
       // Check for full refund first (higher priority than payment)
-      const isFullyRefunded = coversGrandTotal(refundedAmount, grandTotal)
+      const isFullyRefunded = coversGrandTotal(refundedAmount, grandTotal, amountDecimalPlaces)
       if (isFullyRefunded) {
         throw new CrudHttpError(422, { error: translate('sales.shipments.fully_returned', 'Cannot modify shipment: order is fully returned') })
       }
 
       // Check for completed payment
-      const isFullyPaid = coversGrandTotal(paidAmount, grandTotal)
+      const isFullyPaid = coversGrandTotal(paidAmount, grandTotal, amountDecimalPlaces)
       if (isFullyPaid) {
         throw new CrudHttpError(422, { error: translate('sales.shipments.payment_completed', 'Cannot modify shipment: order payment is completed') })
       }
