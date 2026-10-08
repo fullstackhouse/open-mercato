@@ -260,10 +260,10 @@ test.describe("TC-CAT-015: Catalog price update error handling", () => {
           expectedStoredGross: "123456789012345678901",
         },
         {
-          label: "value with more than four decimal places is rounded to the fiat amount precision",
+          label: "value with more than four decimal places is stored exactly as entered",
           updateValue: "12.34567",
           expectedStatus: 200,
-          expectedStoredGross: "12.3457",
+          expectedStoredGross: "12.34567",
         },
       ] as const;
 

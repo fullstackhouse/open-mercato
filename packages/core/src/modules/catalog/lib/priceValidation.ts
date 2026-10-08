@@ -44,6 +44,9 @@ export function isCatalogPriceAmountInputValid(value: unknown): boolean {
   return validateCatalogPriceAmountInput(value).ok
 }
 
+export const CATALOG_PRICE_AMOUNT_VALIDATION_MESSAGE_KEY = 'catalog.prices.validation.amountInvalid'
+
+/** i18n key of the price amount validation message; translate it with `t()` before display. */
 export function getCatalogPriceAmountValidationMessage(): string {
-  return 'Price must be a valid non-negative amount.'
+  return CATALOG_PRICE_AMOUNT_VALIDATION_MESSAGE_KEY
 }
