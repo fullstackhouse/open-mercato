@@ -4,7 +4,7 @@ Use the currencies module for multi-currency support, exchange rates, and curren
 
 ## Always
 
-1. **MUST keep currency amounts exact** — money and FX columns are unconstrained `numeric`; do money math with `@open-mercato/shared/lib/decimal` (never JS `number`), round only division results: amounts to `max(4, currency.decimalPlaces)` (`resolveCurrencyAmountDecimalPlaces`), FX math to `FX_DECIMAL_PLACES` (50). Never truncate internally to 2 decimals
+1. **MUST keep currency amounts exact** - money and FX columns are unconstrained `numeric`; do money math with `@open-mercato/shared/lib/decimal` (never JS `number`), round only division results: amounts to `max(4, currency.decimalPlaces)` (`resolveCurrencyAmountDecimalPlaces`), FX math to `FX_DECIMAL_PLACES` (50). Never truncate internally to 2 decimals
 2. **MUST use date-based exchange rates** — always resolve rates for the transaction date, not "current" rate
 3. **MUST record both transaction currency and base currency amounts** — dual recording is mandatory for reporting
 4. **MUST calculate realized gains/losses** on payment: `(payment rate - invoice rate) × foreign amount`
@@ -42,8 +42,8 @@ yarn workspace @open-mercato/core build
 
 ## DB Tables
 
-- `currencies` — currency master data (`decimal_places` up to 50 drives amount rounding)
-- `exchange_rates` — exchange rates per currency pair, date and source; `rate` is unconstrained `numeric`, `metadata` is free-form `jsonb` (providers store context such as the NBP table number)
+- `currencies` - currency master data (`decimal_places` up to 50 drives amount rounding)
+- `exchange_rates` - exchange rates per currency pair, date and source; `rate` is unconstrained `numeric`, `metadata` is free-form `jsonb` (providers store context such as the NBP table number)
 
 ## When Adding a New Currency
 
