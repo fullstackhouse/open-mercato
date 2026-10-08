@@ -180,6 +180,7 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 ## Implementation Notes
 
 - MikroORM maps a bare `type: 'numeric'` to `numeric(10,0)`; entities declare `columnType: 'numeric'` to get an unconstrained column.
+- MikroORM's `DecimalType` detects changes by comparing `+value`, so an edit beyond float precision was never flushed. Money and FX columns use `ExactDecimalType` (`@open-mercato/shared/lib/db/exactDecimalType`), which compares exact decimal values. The schema is unchanged.
 - Hook bridge lives in `calculations.ts` (`syncLineResultExactAmounts`, `syncDocumentResultExactAmounts`) and runs after every calculator and event hook.
 - Payment capture ledger works on exact decimal strings; `parseAmountUnits`/`formatAmountUnits` are deprecated.
 - CrudForm builtin field type `'decimal'` keeps exact decimal strings (used by the exchange rate form).
@@ -191,3 +192,4 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 - 2026-10-08: Implementation in progress on `pb/exchange-rate-metadata`. D7/D8 refined (float copies instead of `@deprecated`, validators keep `number` output); added D10 (staff rounding) and D11 (central precision resolution).
 - 2026-10-08: Review fixes. D3/D4 state that stored amounts are rounded after division; TLDR and BC table match D7/D8; integration coverage lists every module that gains exact fields; exponent cap and hook bridge rules documented.
 - 2026-10-08: API routes attach `<field>Exact` strings before the command parses the body (`withExactListAmounts` added). Coverage table lists the shipped tests; D4 notes that catalog prices and client-supplied line amounts round to the amount precision.
+- 2026-10-08: Money and FX columns use `ExactDecimalType`, so updates beyond float precision are flushed.
