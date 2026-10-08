@@ -157,7 +157,7 @@ function extractRate(result: RateResult | undefined): DecimalValue | null {
 export function convertSumsToBase(
   perCurrency: CurrencySum[],
   baseCode: string | null,
-  rates: Map<string, RateResult>,
+  rates: ReadonlyMap<string, RateResult> | null,
 ): ConvertedSums {
   if (!baseCode) {
     const missing = Array.from(
@@ -176,7 +176,7 @@ export function convertSumsToBase(
       total = total.plus(amount)
       continue
     }
-    const rate = extractRate(rates.get(`${entry.currency}/${baseCode}`))
+    const rate = extractRate(rates?.get(`${entry.currency}/${baseCode}`))
     if (rate !== null) {
       total = total.plus(amount.times(rate))
     } else {
