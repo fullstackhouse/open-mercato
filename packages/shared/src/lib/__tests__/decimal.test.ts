@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import {
   addDecimals,
   amountComparisonTolerance,
@@ -23,6 +24,7 @@ import {
   sumDecimals,
   toDecimal,
   withExactAmounts,
+  withDecimalCaps,
   withExactListAmounts,
 } from '../decimal'
 
@@ -255,5 +257,21 @@ describe('withExactListAmounts', () => {
     const raw = { lines: [{ price: null, priceExact: '-1000' }] }
     const result = withExactListAmounts([{ price: null }], raw, 'lines', ['price'] as const)
     expect(result?.[0].priceExact).toBeNull()
+  })
+})
+
+describe('withDecimalCaps', () => {
+  const schema = withDecimalCaps(z.coerce.number().min(0), 'amount_invalid')
+
+  it('rejects oversized decimals before coercion', () => {
+    expect(schema.safeParse(1e305).success).toBe(false)
+    expect(schema.safeParse('1e305').success).toBe(false)
+    expect(schema.safeParse(`0.${'1'.repeat(1001)}`).success).toBe(false)
+  })
+
+  it('leaves valid, blank and non-numeric input to the wrapped schema', () => {
+    expect(schema.parse('12.5')).toBe(12.5)
+    expect(schema.parse('')).toBe(0)
+    expect(schema.safeParse(-1).success).toBe(false)
   })
 })

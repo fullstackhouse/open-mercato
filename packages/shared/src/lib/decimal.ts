@@ -299,6 +299,21 @@ export function resolveIsoCurrencyDecimalPlaces(currencyCode?: string | null): n
   }
 }
 
+/**
+ * Whether a raw money input may reach a number-coercing schema: blank strings and
+ * non-numeric values are left to that schema, numbers and strings must be decimals
+ * within the size caps, so an oversized value is rejected instead of turning into 0.
+ */
+export function isWithinDecimalCaps(value: unknown): boolean {
+  if (typeof value === 'string' && value.trim().length === 0) return true
+  if (typeof value !== 'string' && typeof value !== 'number') return true
+  return isDecimalInput(value)
+}
+
+export function withDecimalCaps<T extends z.ZodType>(schema: T, message?: string) {
+  return z.unknown().refine(isWithinDecimalCaps, message === undefined ? undefined : { message }).pipe(schema)
+}
+
 const decimalInputSchema = z.union([z.string(), z.number()]).refine(isDecimalInput, {
   message: 'invalidDecimal',
 })
