@@ -689,7 +689,7 @@ const fields: CrudField[] = [
 ### MUST rules
 
 - Use `type: 'decimal'` for every money or FX field; keep `type: 'number'` for counts, percentages and other values where a float is fine.
-- Validate the submitted string server-side with `decimalStringSchema` (or its `nonNegative`/`positive` variants) from `@open-mercato/shared/lib/decimal`; never `Number(...)` it before doing money math.
+- Keep the submitted string exact server-side with one of two patterns from `@open-mercato/shared/lib/decimal`: a string-output schema (`decimalStringSchema` or its `nonNegative`/`positive` variants), or a number schema (`z.coerce.number()`) plus `withExactAmounts(parsed, raw, fields)` in the command, which adds `<field>Exact` strings taken from the raw input. Never do money math on the float.
 
 ---
 
