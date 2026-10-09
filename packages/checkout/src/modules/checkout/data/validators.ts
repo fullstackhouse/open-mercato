@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { fieldsetCodeRegex } from '@open-mercato/shared/modules/entities/validators'
-import { compareDecimals, parseDecimal } from '@open-mercato/shared/lib/decimal'
+import { compareDecimals, withDecimalCaps, parseDecimal } from '@open-mercato/shared/lib/decimal'
 import { DEFAULT_CHECKOUT_CUSTOMER_FIELDS } from '../lib/defaults'
 import { CHECKOUT_LINK_STATUSES } from '../lib/constants'
 
@@ -44,7 +44,11 @@ const optionalFieldsetCodeSchema = z.preprocess(
     message: 'checkout.validation.common.invalidFieldsetCode',
   }).optional().nullable(),
 )
-const positiveMoneySchema = z.coerce.number().finite('checkout.validation.common.invalidNumber').nonnegative('checkout.validation.common.nonNegativeNumber')
+const moneyInputSchema = <T extends z.ZodType>(schema: T) => withDecimalCaps(schema, 'checkout.validation.common.invalidNumber')
+
+const positiveMoneySchema = moneyInputSchema(
+  z.coerce.number().finite('checkout.validation.common.invalidNumber').nonnegative('checkout.validation.common.nonNegativeNumber'),
+)
 const linkStatusSchema = z.enum(CHECKOUT_LINK_STATUSES)
 
 export const customerFieldOptionSchema = z.object({
@@ -289,7 +293,7 @@ export const publicSubmitSchema = z.object({
     terms: z.boolean().optional(),
     privacyPolicy: z.boolean().optional(),
   }).default({}),
-  amount: z.coerce.number().finite().nonnegative().optional(),
+  amount: moneyInputSchema(z.coerce.number().finite().nonnegative()).optional(),
   selectedPriceItemId: optionalTrimmedString,
 })
 
