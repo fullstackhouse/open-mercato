@@ -285,7 +285,10 @@ function distinctRate(values: readonly ResolvedEntryValues[]): string | null {
  * Live amounts round to the currency's decimals (D10); a frozen amount is summed
  * exactly as it was billed, so a closed report keeps totalling to what it froze.
  */
-export function sumResolvedAmounts(values: readonly ResolvedEntryValues[], amountDecimalPlaces: number): string {
+export function sumResolvedAmounts(
+  values: readonly Pick<ResolvedEntryValues, 'isFrozen' | 'amountExact'>[],
+  amountDecimalPlaces: number,
+): string {
   const live = values.filter((value) => !value.isFrozen).map((value) => value.amountExact)
   const frozen = values.flatMap((value) => {
     const parsed = value.isFrozen ? parseDecimal(value.amountExact) : null

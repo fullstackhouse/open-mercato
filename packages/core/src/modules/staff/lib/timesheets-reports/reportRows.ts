@@ -11,7 +11,9 @@
  * PDF total never finds a discrepancy.
  */
 
-import { formatReportMinutes, resolveEntryValues, sumAmounts } from './reportTotals'
+import { decimalToNumber } from '@open-mercato/shared/lib/decimal'
+import { DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES } from '../time-tracking/cost'
+import { formatReportMinutes, resolveEntryValues, sumResolvedAmounts } from './reportTotals'
 import type { ReportDirectory, ReportInputEntry, ReportInputProject } from './reportTotals'
 
 export type ReportRow = {
@@ -82,12 +84,27 @@ export function buildReportRows(input: BuildReportRowsInput): ReportRow[] {
 }
 
 /**
- * The rows' amounts add up to the report's grand total by construction — same
- * per-entry values, summed in integer cents. Exposed so the export and the
- * screen can assert it rather than assume it.
+ * The rows' amounts summed the way the grand total is (`sumResolvedAmounts`):
+ * live amounts at the currency decimals, frozen amounts exactly as billed. Built
+ * from the same rows and decimals, it equals `totalAmountExact`, so the export
+ * and the screen can assert that rather than assume it.
  */
-export function sumReportRowAmounts(rows: readonly ReportRow[]): number {
-  return sumAmounts(rows.map((row) => row.amount))
+export function sumReportRowAmountsExact(
+  rows: readonly ReportRow[],
+  amountDecimalPlaces: number = DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES,
+): string {
+  const values = rows.map((row) => ({
+    isFrozen: row.isFrozen,
+    amountExact: row.amountExact ?? (row.amount === null ? null : String(row.amount)),
+  }))
+  return sumResolvedAmounts(values, amountDecimalPlaces)
+}
+
+export function sumReportRowAmounts(
+  rows: readonly ReportRow[],
+  amountDecimalPlaces: number = DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES,
+): number {
+  return decimalToNumber(sumReportRowAmountsExact(rows, amountDecimalPlaces))
 }
 
 export function sumReportRowMinutes(rows: readonly ReportRow[], billable: boolean): number {

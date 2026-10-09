@@ -49,3 +49,49 @@ describe('decorateTimeEntryRows cost', () => {
     expect(decorated[1]).toMatchObject({ cost: 14.4 })
   })
 })
+
+describe('decorateTimeEntryRows costExact', () => {
+  it('publishes the exact cost string beside the float cost', async () => {
+    const decorated: Record<string, unknown>[] = rows()
+    await decorateTimeEntryRows(decorated, { em: createEm(), tenantId, organizationId, canSeeRates: true, container })
+    expect(decorated[0]).toMatchObject({ cost: 1440329205144, costExact: '1440329205144' })
+    expect(decorated[1]).toMatchObject({ cost: 14.403, costExact: '14.403' })
+  })
+
+  it('keeps digits beyond float precision in costExact', async () => {
+    const em = {
+      fork: () => ({
+        find: async (entity: unknown) => {
+          if (entity === StaffTimeEntry) {
+            return [{ id: 'e-big', rateOverrideAmount: '1234567890123456789.12', rateCurrencyCode: 'KWD' }]
+          }
+          if (entity === StaffTimeProject) return [{ id: 'p-jpy', hourlyRate: null, currencyCode: 'JPY' }]
+          return []
+        },
+      }),
+    } as unknown as EntityManager
+    const decorated: Record<string, unknown>[] = [
+      { id: 'e-big', time_project_id: 'p-jpy', rounded_minutes: 60, is_billable: true },
+    ]
+    await decorateTimeEntryRows(decorated, { em, tenantId, organizationId, canSeeRates: true, container })
+    expect(decorated[0].costExact).toBe('1234567890123456789.12')
+    expect(decorated[0].cost).toBe(1234567890123456789.12)
+  })
+
+  it('gives a non-billable entry a null costExact, like its cost', async () => {
+    const decorated: Record<string, unknown>[] = [
+      { id: 'e-jpy', time_project_id: 'p-jpy', rounded_minutes: 7, is_billable: false },
+    ]
+    await decorateTimeEntryRows(decorated, { em: createEm(), tenantId, organizationId, canSeeRates: true, container })
+    expect(decorated[0]).toMatchObject({ cost: null, costExact: null })
+  })
+
+  it('adds neither cost nor costExact for a caller without the rates feature', async () => {
+    const decorated: Record<string, unknown>[] = rows()
+    await decorateTimeEntryRows(decorated, { em: createEm(), tenantId, organizationId, canSeeRates: false, container })
+    for (const row of decorated) {
+      expect(row).not.toHaveProperty('cost')
+      expect(row).not.toHaveProperty('costExact')
+    }
+  })
+})

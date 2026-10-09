@@ -322,7 +322,7 @@ const numericAmountSchema = z
   .transform((value, ctx) => {
     const raw = typeof value === 'number' ? String(value) : value.trim().replace(',', '.')
     if (raw.length === 0) return null
-    if (!numericAmountPattern.test(raw)) {
+    if (!numericAmountPattern.test(raw) || !isDecimalInput(raw)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Expected a non-negative amount.',

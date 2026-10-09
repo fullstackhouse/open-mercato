@@ -507,6 +507,8 @@ const timeEntryListItemSchema = z.object({
   tags: z.array(timeEntryTagSchema).optional(),
   /** Present only for a caller holding `staff.timesheets.rates.view`; `null` when non-billable. */
   cost: z.number().nullable().optional(),
+  /** Exact decimal string of `cost` (no float rounding); same presence rule as `cost`. */
+  costExact: z.string().nullable().optional(),
   /** Present only for a caller holding `staff.timesheets.rates.view`. */
   currencyCode: z.string().nullable().optional(),
 })

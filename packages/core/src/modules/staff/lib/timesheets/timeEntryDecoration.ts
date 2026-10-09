@@ -287,5 +287,6 @@ export async function decorateTimeEntryRows(
       (currencyCode ? decimalPlacesByCurrency[currencyCode] : undefined) ?? DEFAULT_STAFF_AMOUNT_DECIMAL_PLACES,
     )
     row.cost = cost === null ? null : decimalToNumber(cost)
+    row.costExact = cost
   }
 }
