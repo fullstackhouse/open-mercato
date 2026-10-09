@@ -248,14 +248,22 @@ describe('LineItemDialog locale decimal separator (issue #5552)', () => {
     renderDialog()
     const payload = await submit('2,5', '110,70')
     expect(payload.quantity).toBe(2.5)
-    expect(payload.unitPriceGross).toBe(110.7)
+    expect(payload.unitPriceGross).toBe('110.7')
   })
 
   it('still accepts a dot, so the workaround users learned keeps working', async () => {
     renderDialog()
     const payload = await submit('2.5', '110.70')
     expect(payload.quantity).toBe(2.5)
-    expect(payload.unitPriceGross).toBe(110.7)
+    expect(payload.unitPriceGross).toBe('110.7')
+  })
+
+  it('submits every digit of a price beyond float precision', async () => {
+    renderDialog()
+    const payload = await submit('2', '0,123456789012345678')
+    expect(payload.unitPriceGross).toBe('0.123456789012345678')
+    expect(payload.unitPriceNet).toBe('0.123456789012345678')
+    expect(payload.totalGrossAmount).toBe('0.246913578024691356')
   })
 
   it('reports an unparseable price as unparseable rather than as "greater than 0"', async () => {

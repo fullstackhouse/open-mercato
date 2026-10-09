@@ -17,6 +17,7 @@ import {
   isCheckoutLinkPublic,
   mapGatewayStatusToCheckoutStatus,
   resolveSubmittedAmount,
+  toMoneyString,
   validateDescriptorCurrencies,
 } from '../../../../lib/utils'
 import { validateCheckoutCustomerData } from '../../../../lib/customerDataValidation'
@@ -24,6 +25,8 @@ import { checkoutSubmitRateLimitConfig, enforceCheckoutRateLimit } from '../../.
 import { rateLimitErrorSchema } from '@open-mercato/shared/lib/ratelimit/helpers'
 import { checkoutTag } from '../../../openapi'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import { withExactAmounts } from '@open-mercato/shared/lib/decimal'
+import { readJsonSafe } from '@open-mercato/shared/lib/http/readJsonSafe'
 
 const logger = createLogger('checkout')
 
@@ -318,7 +321,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
       return NextResponse.json({ error: 'Idempotency-Key must be between 16 and 128 characters' }, { status: 400 })
     }
 
-    const body = publicSubmitSchema.parse(await req.json().catch(() => ({})))
+    const rawBody = await readJsonSafe<unknown>(req, {})
+    const body = withExactAmounts(publicSubmitSchema.parse(rawBody), rawBody, ['amount'] as const)
     const em = container.resolve('em')
     const commandBus = container.resolve('commandBus') as CommandBus
     const paymentGatewayService = container.resolve('paymentGatewayService') as PaymentGatewayService
@@ -388,7 +392,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
 
     const transactionInput = {
       linkId: link.id,
-      amount: resolvedAmount.amount,
+      amount: resolvedAmount.amountExact,
       currencyCode: resolvedAmount.currencyCode,
       idempotencyKey,
       customerData: collectedCustomerData,
@@ -481,6 +485,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
           paymentId: transactionId,
           idempotencyKey,
           amount: sessionAmount,
+          amountExact: toMoneyString(transaction.amount) ?? undefined,
           currencyCode: sessionCurrencyCode,
           paymentTypes: configuredPaymentTypes.length > 0 ? configuredPaymentTypes : undefined,
           description: link.title ?? link.name,
@@ -572,6 +577,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
           status: refreshedTransaction.status,
           paymentStatus: refreshedTransaction.paymentStatus ?? null,
           amount: Number(refreshedTransaction.amount),
+          amountExact: toMoneyString(refreshedTransaction.amount),
           currency: refreshedTransaction.currencyCode,
           gatewayProvider: link.gatewayProviderKey,
           gatewayTransactionId: refreshedTransaction.gatewayTransactionId ?? null,

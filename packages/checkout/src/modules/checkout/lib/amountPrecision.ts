@@ -1,0 +1,109 @@
+import {
+  decimalToNumber,
+  decimalToString,
+  resolveExactDecimal,
+  roundDecimal,
+} from '@open-mercato/shared/lib/decimal'
+import { resolveCurrencyDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
+
+export const DEFAULT_CHECKOUT_DECIMAL_PLACES = 2
+
+type CurrencyContainer = Parameters<typeof resolveCurrencyDecimalPlaces>[0]
+
+type CheckoutAmountScope = {
+  tenantId: string
+  organizationId: string
+}
+
+type ConfiguredPriceListItem = {
+  amount: number
+  amountExact?: string | null
+  currencyCode: string
+}
+
+export type CheckoutConfiguredAmounts = {
+  fixedPriceAmount?: number | null
+  fixedPriceAmountExact?: string | null
+  fixedPriceOriginalAmount?: number | null
+  fixedPriceOriginalAmountExact?: string | null
+  fixedPriceCurrencyCode?: string | null
+  customAmountMin?: number | null
+  customAmountMinExact?: string | null
+  customAmountMax?: number | null
+  customAmountMaxExact?: string | null
+  customAmountCurrencyCode?: string | null
+  priceListItems?: ReadonlyArray<ConfiguredPriceListItem> | null
+}
+
+const CONFIGURED_MONEY_FIELDS = [
+  { field: 'fixedPriceAmount', exactField: 'fixedPriceAmountExact', currencyField: 'fixedPriceCurrencyCode' },
+  { field: 'fixedPriceOriginalAmount', exactField: 'fixedPriceOriginalAmountExact', currencyField: 'fixedPriceCurrencyCode' },
+  { field: 'customAmountMin', exactField: 'customAmountMinExact', currencyField: 'customAmountCurrencyCode' },
+  { field: 'customAmountMax', exactField: 'customAmountMaxExact', currencyField: 'customAmountCurrencyCode' },
+] as const
+
+function roundMoneyPair(
+  legacy: unknown,
+  exact: unknown,
+  decimalPlaces: number,
+): { amount: number; amountExact: string } | null {
+  const resolved = resolveExactDecimal(exact, legacy)
+  if (resolved == null) return null
+  const rounded = roundDecimal(resolved, decimalPlaces)
+  return { amount: decimalToNumber(rounded), amountExact: decimalToString(rounded) }
+}
+
+/**
+ * Rounds configured checkout amounts (fixed price, original price, custom amount
+ * bounds and price-list items) half-up to the currency's own decimals, keeping
+ * each `<field>` number and `<field>Exact` string in sync. Fields absent from
+ * `values` are left untouched.
+ */
+export async function roundCheckoutConfiguredAmounts<T extends CheckoutConfiguredAmounts>(
+  container: CurrencyContainer,
+  scope: CheckoutAmountScope,
+  values: T,
+): Promise<T> {
+  const decimalPlacesByCurrency: Record<string, number> = {}
+  const resolveDecimalPlaces = async (code: string | null | undefined): Promise<number> => {
+    const normalizedCode = code ?? ''
+    if (!(normalizedCode in decimalPlacesByCurrency)) {
+      const resolved = await resolveCurrencyDecimalPlaces(container, {
+        code: normalizedCode,
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+      })
+      decimalPlacesByCurrency[normalizedCode] = resolved ?? DEFAULT_CHECKOUT_DECIMAL_PLACES
+    }
+    return decimalPlacesByCurrency[normalizedCode]
+  }
+
+  const next: CheckoutConfiguredAmounts = { ...values }
+  for (const { field, exactField, currencyField } of CONFIGURED_MONEY_FIELDS) {
+    if (values[field] === undefined && values[exactField] === undefined) continue
+    const rounded = roundMoneyPair(values[field], values[exactField], await resolveDecimalPlaces(values[currencyField]))
+    next[field] = rounded?.amount ?? null
+    next[exactField] = rounded?.amountExact ?? null
+  }
+
+  if (Array.isArray(values.priceListItems)) {
+    const items: ConfiguredPriceListItem[] = []
+    for (const item of values.priceListItems) {
+      const rounded = roundMoneyPair(item.amount, item.amountExact, await resolveDecimalPlaces(item.currencyCode))
+      items.push(rounded ? { ...item, amount: rounded.amount, amountExact: rounded.amountExact } : item)
+    }
+    next.priceListItems = items
+  }
+
+  return next as T
+}
+
+/** Exact decimal strings for the configured money columns of a template or link. */
+export function toStoredCheckoutAmounts(values: CheckoutConfiguredAmounts) {
+  return {
+    fixedPriceAmount: resolveExactDecimal(values.fixedPriceAmountExact, values.fixedPriceAmount),
+    fixedPriceOriginalAmount: resolveExactDecimal(values.fixedPriceOriginalAmountExact, values.fixedPriceOriginalAmount),
+    customAmountMin: resolveExactDecimal(values.customAmountMinExact, values.customAmountMin),
+    customAmountMax: resolveExactDecimal(values.customAmountMaxExact, values.customAmountMax),
+  }
+}
