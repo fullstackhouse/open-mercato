@@ -44,8 +44,8 @@ uses exact decimals. Public contracts keep their `number` fields (a float copy) 
 - Staff `TimeRateResolver.resolve` may return a decimal string, and `CostEntry.rateOverrideAmount` /
   `CostProject.hourlyRate` may be strings: accept `number | string` when reading them.
 - Payment gateway session, capture and refund requests with more decimals than the currency allows
-  (e.g. `10.005` USD) now get a 400. Decimals with more than 1000 significant digits or 300 integer
-  digits are rejected everywhere.
+  (e.g. `10.005` USD) now get a 400. Money inputs with more than 1000 significant digits or 300
+  integer digits get a 400 (`withDecimalCaps` guards the number-coercing money schemas).
 - The money migrations' `down()` narrows the columns back to their old precision: extra decimals are
   rounded away, and values beyond the old integer digits make the rollback fail with
   "numeric field overflow". Back up before rolling back.
