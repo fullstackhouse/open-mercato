@@ -87,6 +87,34 @@ describe("prepareShippedLineUpdatePayload", () => {
     });
   });
 
+  it("rescales to the configured currency precision", () => {
+    const payload = prepareShippedLineUpdatePayload(
+      { quantity: 1 },
+      { quantity: 3, totalNetAmount: "1", totalGrossAmount: "1.23" },
+      { code: "ETH", decimalPlaces: 18 },
+    );
+
+    expect(payload).toEqual({
+      quantity: 1,
+      totalNetAmount: "0.333333333333333333",
+      totalGrossAmount: "0.41",
+    });
+  });
+
+  it("keeps 4 decimals for a fiat currency with fewer digits", () => {
+    const payload = prepareShippedLineUpdatePayload(
+      { quantity: 2 },
+      { quantity: 3, totalNetAmount: "10", totalGrossAmount: "12.3" },
+      { code: "USD", decimalPlaces: 2 },
+    );
+
+    expect(payload).toEqual({
+      quantity: 2,
+      totalNetAmount: "6.6667",
+      totalGrossAmount: "8.2",
+    });
+  });
+
   it("returns an unshipped-line payload unchanged", () => {
     const payload = { quantity: 4, unitPriceGross: 123 };
 

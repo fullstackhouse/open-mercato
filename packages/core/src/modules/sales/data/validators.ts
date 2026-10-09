@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { amountComparisonTolerance, resolveExactDecimal, toDecimal } from '@open-mercato/shared/lib/decimal'
+import { amountComparisonTolerance, withDecimalCaps, resolveExactDecimal, toDecimal } from '@open-mercato/shared/lib/decimal'
 import {
   createDictionaryEntrySchema,
   updateDictionaryEntrySchema,
@@ -9,6 +9,8 @@ import { REFERENCE_UNIT_CODES } from '@open-mercato/shared/lib/units/unitCodes'
 import { isValidPhoneNumber } from '@open-mercato/shared/lib/phone'
 
 export const SALES_PHONE_INVALID_MESSAGE_KEY = 'customers.people.form.primaryPhone.invalid'
+
+export const SALES_AMOUNT_INVALID_MESSAGE_KEY = 'sales.errors.amount_invalid'
 
 const optionalPhoneField = (max = 50) =>
   z
@@ -56,11 +58,12 @@ const currencyCode = z
   .trim()
   .regex(/^[A-Z]{3}$/, 'currency code must be a three-letter ISO code')
 
-const decimal = (opts?: { min?: number; max?: number; message?: string }) => {
+const decimal = (opts?: { min?: number; max?: number; message?: string; intMessage?: string }) => {
   let schema = z.coerce.number()
   if (typeof opts?.min === 'number') schema = schema.min(opts.min)
   if (typeof opts?.max === 'number') schema = schema.max(opts.max, opts.message)
-  return schema
+  if (opts?.intMessage) schema = schema.int(opts.intMessage)
+  return withDecimalCaps(schema, SALES_AMOUNT_INVALID_MESSAGE_KEY)
 }
 
 const MAX_QUANTITY = 999_999_999
@@ -851,7 +854,12 @@ export const shipmentCreateSchema = scoped.extend({
     .array(
       z.object({
         orderLineId: uuid(),
-        quantity: decimal({ min: 0, max: MAX_QUANTITY, message: 'Quantity is too large.' }).int('Quantity must be a whole number.'),
+        quantity: decimal({
+          min: 0,
+          max: MAX_QUANTITY,
+          message: 'Quantity is too large.',
+          intMessage: 'Quantity must be a whole number.',
+        }),
         metadata,
       })
     )

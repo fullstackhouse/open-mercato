@@ -113,6 +113,21 @@ describe('DefaultTaxCalculationService', () => {
     expect(taxed).toMatchObject({ netAmountExact: '0.00001', grossAmountExact: '0.00001', taxAmountExact: '0' })
   })
 
+  it('does not widen the rounding to float noise when only a number was sent', async () => {
+    const em = { findOne: jest.fn() }
+    const service = new DefaultTaxCalculationService(em as never)
+    const numberOnly = await service.calculateUnitAmounts({ ...baseInput, amount: 0.1 + 0.2, taxRate: 23 })
+    const enteredString = await service.calculateUnitAmounts({
+      ...baseInput,
+      amount: 0.1 + 0.2,
+      amountExact: '0.30000000000000004',
+      taxRate: 23,
+    })
+
+    expect(numberOnly.grossAmountExact).toBe('0.369')
+    expect(enteredString.grossAmountExact).toBe('0.36900000000000005')
+  })
+
   it('throws for invalid amount or mode', async () => {
     const em = { findOne: jest.fn() }
     const service = new DefaultTaxCalculationService(em as any)

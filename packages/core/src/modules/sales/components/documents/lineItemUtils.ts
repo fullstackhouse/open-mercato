@@ -9,6 +9,7 @@ import {
   divideDecimals,
   multiplyDecimals,
   parseDecimal,
+  resolveAmountDecimalPlaces,
   resolveIsoCurrencyDecimalPlaces,
   roundDecimal,
   toDecimal,
@@ -81,27 +82,57 @@ export function netFromGross(gross: DecimalInput, taxRate: DecimalInput | null |
     : decimalToString(gross)
 }
 
-/**
- * Decimal places an amount a dialog fills in for the user is rounded to: the
- * currency's ISO 4217 digits (2 for a code without them), or more when a typed
- * source amount carries more.
- */
-export function resolveAutoFillDecimalPlaces(
-  currencyCode: string | null | undefined,
-  ...sources: Array<DecimalInput | null | undefined>
-): number {
+/** A currency code with the decimal places the tenant configured for it, when known. */
+export type CurrencyPrecision = {
+  code?: string | null
+  decimalPlaces?: number | null
+}
+
+/** The configured decimal places, else the ISO 4217 digits, else `null` for an unknown code. */
+export function resolveCurrencyDecimalPlaces(currency: CurrencyPrecision | null | undefined): number | null {
+  const configured = currency?.decimalPlaces
+  if (typeof configured === 'number' && Number.isInteger(configured) && configured >= 0) return configured
+  return resolveIsoCurrencyDecimalPlaces(currency?.code)
+}
+
+function maxSourceDecimalPlaces(base: number, sources: Array<DecimalInput | null | undefined>): number {
   return sources.reduce<number>((places, source) => {
     if (source === null || source === undefined) return places
     return Math.max(places, countDecimalPlaces(source))
-  }, resolveIsoCurrencyDecimalPlaces(currencyCode) ?? 2)
+  }, base)
+}
+
+/**
+ * Decimal places an amount a dialog fills in for the user is rounded to: the
+ * currency's configured decimals, else its ISO 4217 digits, else
+ * DEFAULT_AMOUNT_DECIMAL_PLACES for an unknown code, or more when a typed source
+ * amount carries more.
+ */
+export function resolveAutoFillDecimalPlaces(
+  currency: CurrencyPrecision | null | undefined,
+  ...sources: Array<DecimalInput | null | undefined>
+): number {
+  return maxSourceDecimalPlaces(resolveCurrencyDecimalPlaces(currency) ?? DEFAULT_AMOUNT_DECIMAL_PLACES, sources)
+}
+
+/**
+ * Decimal places a stored line total is rounded to: the currency's decimals but
+ * never fewer than DEFAULT_AMOUNT_DECIMAL_PLACES, as the server rounds them, or
+ * more when a source amount carries more.
+ */
+export function resolveStoredAmountDecimalPlaces(
+  currency: CurrencyPrecision | null | undefined,
+  ...sources: Array<DecimalInput | null | undefined>
+): number {
+  return maxSourceDecimalPlaces(resolveAmountDecimalPlaces(resolveCurrencyDecimalPlaces(currency)), sources)
 }
 
 export function roundAutoFilledAmount(
   value: DecimalInput,
-  currencyCode: string | null | undefined,
+  currency: CurrencyPrecision | null | undefined,
   ...sources: Array<DecimalInput | null | undefined>
 ): string {
-  const decimalPlaces = resolveAutoFillDecimalPlaces(currencyCode, ...sources)
+  const decimalPlaces = resolveAutoFillDecimalPlaces(currency, ...sources)
   return roundDecimal(value, decimalPlaces).toFixed(decimalPlaces)
 }
 
@@ -110,7 +141,7 @@ export function autoFillOppositeAmount(
   source: 'net' | 'gross',
   amount: DecimalInput,
   taxRate: DecimalInput | null | undefined,
-  currencyCode: string | null | undefined,
+  currency: CurrencyPrecision | null | undefined,
 ): string {
   const multiplier = resolveTaxMultiplier(taxRate)
   const opposite = !multiplier
@@ -118,7 +149,7 @@ export function autoFillOppositeAmount(
     : source === 'net'
       ? multiplyDecimals(amount, multiplier)
       : divideDecimals(amount, multiplier, FX_DECIMAL_PLACES)
-  return roundAutoFilledAmount(opposite, currencyCode, amount)
+  return roundAutoFilledAmount(opposite, currency, amount)
 }
 
 export type LineDiscountDisplay = {

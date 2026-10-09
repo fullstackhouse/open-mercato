@@ -6,7 +6,8 @@ import { deleteSalesEntityIfExists } from '@open-mercato/core/helpers/integratio
  * TC-SALES-PRECISION-002: shipping method base rates and invoice amounts sent as
  * 25-significant-digit decimal strings keep every digit through create, update and
  * read back. Invoice lines have no read API, so the line is read back from the
- * invoice create audit snapshot.
+ * invoice create audit snapshot. Amounts beyond the decimal size caps are rejected
+ * with a 400 instead of being stored as zero.
  * Source: .ai/specs/2026-10-08-arbitrary-precision-money-and-fx.md
  */
 
@@ -134,6 +135,40 @@ test.describe('TC-SALES-PRECISION-002: exact shipping method rates and invoice a
         .toBe(INVOICE_LINE_PRICE)
     } finally {
       await deleteSalesEntityIfExists(request, token, '/api/sales/invoices', invoiceId)
+    }
+  })
+
+  test('amounts beyond the decimal size caps are rejected instead of stored as zero', async ({ request }) => {
+    const token = await getAuthToken(request, 'admin')
+    let invoiceId: string | null = null
+    let shippingMethodId: string | null = null
+    const stamp = `${Date.now()}-${Math.round(Math.random() * 1_000_000)}`
+
+    try {
+      const invoiceResponse = await apiRequest(request, 'POST', '/api/sales/invoices', {
+        token,
+        data: {
+          currencyCode: 'USD',
+          lines: [{ currencyCode: 'USD', quantity: 1, name: 'QA oversized line', unitPriceNet: 1e305 }],
+        },
+      })
+      if (invoiceResponse.status() === 201) invoiceId = (await readJson(invoiceResponse)).invoiceId as string
+      expect(invoiceResponse.status(), 'an invoice line unit price of 1e305 should be rejected').toBe(400)
+
+      const shippingResponse = await apiRequest(request, 'POST', '/api/sales/shipping-methods', {
+        token,
+        data: {
+          name: `QA oversized ${stamp}`,
+          code: `qa-oversized-${stamp}`,
+          currencyCode: 'USD',
+          baseRateNet: `0.${'1'.repeat(1001)}`,
+        },
+      })
+      if (shippingResponse.status() === 201) shippingMethodId = (await readJson(shippingResponse)).id as string
+      expect(shippingResponse.status(), 'a 1001 significant digit base rate should be rejected').toBe(400)
+    } finally {
+      await deleteSalesEntityIfExists(request, token, '/api/sales/invoices', invoiceId)
+      await deleteSalesEntityIfExists(request, token, '/api/sales/shipping-methods', shippingMethodId)
     }
   })
 })

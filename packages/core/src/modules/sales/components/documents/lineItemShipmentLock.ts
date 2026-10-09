@@ -4,7 +4,11 @@ import {
   parseDecimal,
   type DecimalInput,
 } from "@open-mercato/shared/lib/decimal";
-import { resolveMoneyDecimalPlaces, roundMoney } from "./lineItemUtils";
+import {
+  resolveStoredAmountDecimalPlaces,
+  roundMoney,
+  type CurrencyPrecision,
+} from "./lineItemUtils";
 
 type ShippedLineSnapshot = {
   quantity: number;
@@ -36,6 +40,7 @@ function scaleTotal(
   total: DecimalInput | null | undefined,
   previousQuantity: number,
   nextQuantity: number,
+  currency: CurrencyPrecision | null | undefined,
 ): string | undefined {
   const exactTotal = parseDecimal(total);
   if (
@@ -47,13 +52,14 @@ function scaleTotal(
   }
   return roundMoney(
     divideDecimals(multiplyDecimals(exactTotal, nextQuantity), previousQuantity),
-    resolveMoneyDecimalPlaces(exactTotal),
+    resolveStoredAmountDecimalPlaces(currency, exactTotal),
   );
 }
 
 export function prepareShippedLineUpdatePayload(
   payload: Record<string, unknown>,
   currentLine: ShippedLineSnapshot | null,
+  currency?: CurrencyPrecision | null,
 ): Record<string, unknown> {
   if (!currentLine) return payload;
 
@@ -74,11 +80,13 @@ export function prepareShippedLineUpdatePayload(
     currentLine.totalNetAmount,
     currentLine.quantity,
     nextQuantity,
+    currency,
   );
   const scaledGrossTotal = scaleTotal(
     currentLine.totalGrossAmount,
     currentLine.quantity,
     nextQuantity,
+    currency,
   );
   if (scaledNetTotal !== undefined) nextPayload.totalNetAmount = scaledNetTotal;
   if (scaledGrossTotal !== undefined)

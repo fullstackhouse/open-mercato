@@ -8,6 +8,7 @@ import {
   decimalToNumber,
   decimalToString,
   divideDecimals,
+  isDecimalInput,
   resolveExactDecimal,
   roundDecimal,
   toDecimal,
@@ -93,7 +94,7 @@ export class DefaultTaxCalculationService implements TaxCalculationService {
 
     const decimalPlaces = Math.max(
       input.amountDecimalPlaces ?? DEFAULT_AMOUNT_DECIMAL_PLACES,
-      countDecimalPlaces(amount),
+      enteredDecimalPlaces(input, amount),
     )
     let netAmount: DecimalValue
     let grossAmount: DecimalValue
@@ -159,6 +160,12 @@ export class DefaultTaxCalculationService implements TaxCalculationService {
     if (!Number.isFinite(numeric) || numeric < 0) return 0
     return numeric
   }
+}
+
+function enteredDecimalPlaces(input: CalculateTaxInput, amount: DecimalValue): number {
+  const exact = input.amountExact
+  if (typeof exact !== 'string' || !isDecimalInput(exact) || !toDecimal(exact).eq(amount)) return 0
+  return countDecimalPlaces(amount)
 }
 
 function roundRate(value: number, precision = 4): number {

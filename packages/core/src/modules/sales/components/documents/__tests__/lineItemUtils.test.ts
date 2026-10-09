@@ -121,31 +121,44 @@ describe('exact money helpers', () => {
 
 describe('auto-filled dialog amounts', () => {
   it('rounds to the currency digits unless the typed source carries more', () => {
-    expect(resolveAutoFillDecimalPlaces('USD', '10.01')).toBe(2)
-    expect(resolveAutoFillDecimalPlaces('USD', '10.0001')).toBe(4)
-    expect(resolveAutoFillDecimalPlaces('JPY', '100')).toBe(0)
-    expect(resolveAutoFillDecimalPlaces('ETH', '1.5')).toBe(2)
-    expect(resolveAutoFillDecimalPlaces('ETH', '0.000000000000000001')).toBe(18)
-    expect(resolveAutoFillDecimalPlaces(null, '7')).toBe(2)
+    expect(resolveAutoFillDecimalPlaces({ code: 'USD' }, '10.01')).toBe(2)
+    expect(resolveAutoFillDecimalPlaces({ code: 'USD' }, '10.0001')).toBe(4)
+    expect(resolveAutoFillDecimalPlaces({ code: 'JPY' }, '100')).toBe(0)
+    expect(resolveAutoFillDecimalPlaces({ code: 'ETH' }, '0.000000000000000001')).toBe(18)
+  })
+
+  it('prefers the configured currency decimals over the ISO digits', () => {
+    expect(resolveAutoFillDecimalPlaces({ code: 'ETH', decimalPlaces: 18 }, '1.5')).toBe(18)
+    expect(resolveAutoFillDecimalPlaces({ code: 'USD', decimalPlaces: 3 }, '10.01')).toBe(3)
+    expect(resolveAutoFillDecimalPlaces({ code: 'JPY', decimalPlaces: null }, '100')).toBe(0)
+    expect(autoFillOppositeAmount('net', '1.5', 23, { code: 'ETH', decimalPlaces: 18 })).toBe('1.845000000000000000')
+    expect(autoFillOppositeAmount('net', '1.5', 23, { code: 'ETH', decimalPlaces: 3 })).toBe('1.845')
+  })
+
+  it('keeps 4 decimals, or more from the source, for a code without known digits', () => {
+    expect(resolveAutoFillDecimalPlaces({ code: 'ETH' }, '1.5')).toBe(4)
+    expect(resolveAutoFillDecimalPlaces(null, '7')).toBe(4)
+    expect(resolveAutoFillDecimalPlaces({ code: 'ETH' }, '1.123456')).toBe(6)
+    expect(autoFillOppositeAmount('net', '1.5', 23, { code: 'ETH' })).toBe('1.8450')
   })
 
   it('fills the opposite of a typed net or gross amount at the currency precision', () => {
-    expect(autoFillOppositeAmount('net', '10.01', 23, 'USD')).toBe('12.31')
-    expect(autoFillOppositeAmount('gross', '12.31', 23, 'USD')).toBe('10.01')
-    expect(autoFillOppositeAmount('net', '10', 23, 'USD')).toBe('12.30')
-    expect(autoFillOppositeAmount('net', '1000', 23, 'JPY')).toBe('1230')
-    expect(autoFillOppositeAmount('net', '10.0001', 23, 'USD')).toBe('12.3001')
-    expect(autoFillOppositeAmount('net', '0.000000000000000001', 23, 'ETH')).toBe('0.000000000000000001')
-    expect(autoFillOppositeAmount('net', '10.01', null, 'USD')).toBe('10.01')
+    expect(autoFillOppositeAmount('net', '10.01', 23, { code: 'USD' })).toBe('12.31')
+    expect(autoFillOppositeAmount('gross', '12.31', 23, { code: 'USD' })).toBe('10.01')
+    expect(autoFillOppositeAmount('net', '10', 23, { code: 'USD' })).toBe('12.30')
+    expect(autoFillOppositeAmount('net', '1000', 23, { code: 'JPY' })).toBe('1230')
+    expect(autoFillOppositeAmount('net', '10.0001', 23, { code: 'USD' })).toBe('12.3001')
+    expect(autoFillOppositeAmount('net', '0.000000000000000001', 23, { code: 'ETH' })).toBe('0.000000000000000001')
+    expect(autoFillOppositeAmount('net', '10.01', null, { code: 'USD' })).toBe('10.01')
   })
 
   it('rounds the exact value once instead of rounding a 4 decimal intermediate', () => {
     expect(grossFromNet('0.09', 5.5)).toBe('0.095')
-    expect(autoFillOppositeAmount('net', '0.09', 5.5, 'USD')).toBe('0.09')
+    expect(autoFillOppositeAmount('net', '0.09', 5.5, { code: 'USD' })).toBe('0.09')
   })
 
   it('rounds a shipping amount from a fractional quantity to cents', () => {
-    expect(roundAutoFilledAmount('15.015', 'USD', '10.01')).toBe('15.02')
-    expect(roundAutoFilledAmount('20.02', 'USD', '10.01')).toBe('20.02')
+    expect(roundAutoFilledAmount('15.015', { code: 'USD' }, '10.01')).toBe('15.02')
+    expect(roundAutoFilledAmount('20.02', { code: 'USD' }, '10.01')).toBe('20.02')
   })
 })

@@ -233,7 +233,10 @@ describe('sales calculations with arbitrary precision', () => {
       const registry = createSalesCalculationRegistry()
       registry.registerTotalsCalculator(({ current }) => ({
         ...current,
-        adjustments: [{ scope: 'order', kind: 'discount', amountNet: 4, amountNetExact: '9.99' }],
+        adjustments: [
+          { scope: 'order', kind: 'discount', amountNet: 4, amountNetExact: '9.99' },
+          { scope: 'order', kind: 'surcharge', amountNet: 2, amountNetExact: '2' },
+        ],
       }))
 
       const result = await registry.calculateDocument({
@@ -243,7 +246,85 @@ describe('sales calculations with arbitrary precision', () => {
         context: usdContext,
       })
 
+      expect(result.adjustments.map((adjustment) => adjustment.amountNetExact)).toEqual(['4', '2'])
+    })
+  })
+
+  describe('pairs hook amounts by position when no item has an id', () => {
+    const usdContext = { tenantId: 'tenant-1', organizationId: 'org-1', currencyCode: 'USD' }
+    const newLine = (unitPriceNet: number): SalesLineSnapshot => ({
+      kind: 'product',
+      quantity: 1,
+      currencyCode: 'USD',
+      unitPriceNet,
+      taxRate: 0,
+    })
+
+    it('keeps an exact-only line edit on a document being created', async () => {
+      const registry = createSalesCalculationRegistry()
+      registry.registerTotalsCalculator(({ current }) => ({
+        ...current,
+        lines: current.lines.map((line, index) => (index === 0 ? { ...line, netAmountExact: '1.005' } : line)),
+      }))
+
+      const result = await registry.calculateDocument({
+        documentKind: 'quote',
+        lines: [newLine(1), newLine(2)],
+        context: usdContext,
+      })
+
+      expect(result.lines.map((line) => line.netAmountExact)).toEqual(['1.005', '2'])
+      expect(result.lines[0].netAmount).toBe(1.005)
+    })
+
+    it('keeps an exact-only adjustment edit on a document being created', async () => {
+      const registry = createSalesCalculationRegistry()
+      registry.registerTotalsCalculator(({ current }) => ({
+        ...current,
+        adjustments: current.adjustments.map((adjustment) => ({ ...adjustment, amountNetExact: '5.0001' })),
+      }))
+
+      const result = await registry.calculateDocument({
+        documentKind: 'order',
+        lines: [newLine(20)],
+        adjustments: [{ scope: 'order', kind: 'discount', amountNet: 5, amountGross: 5 }],
+        context: usdContext,
+      })
+
+      expect(result.adjustments[0].amountNetExact).toBe('5.0001')
+    })
+
+    it('keeps a float-only edit over a stale exact value on a document being created', async () => {
+      const registry = createSalesCalculationRegistry()
+      registry.registerTotalsCalculator(({ current }) => ({
+        ...current,
+        adjustments: [{ scope: 'order', kind: 'discount', amountNet: 4, amountNetExact: '9.99' }],
+      }))
+
+      const result = await registry.calculateDocument({
+        documentKind: 'order',
+        lines: [newLine(20)],
+        adjustments: [{ scope: 'order', kind: 'discount', amountNet: 9.99, amountGross: 9.99 }],
+        context: usdContext,
+      })
+
       expect(result.adjustments[0].amountNetExact).toBe('4')
+    })
+
+    it('does not pair by position once the hook changes the item count', async () => {
+      const registry = createSalesCalculationRegistry()
+      registry.registerTotalsCalculator(({ current }) => ({
+        ...current,
+        lines: current.lines.slice(1).map((line) => ({ ...line, netAmountExact: '2.005' })),
+      }))
+
+      const result = await registry.calculateDocument({
+        documentKind: 'quote',
+        lines: [newLine(1), newLine(2)],
+        context: usdContext,
+      })
+
+      expect(result.lines.map((line) => line.netAmountExact)).toEqual(['2'])
     })
   })
 })

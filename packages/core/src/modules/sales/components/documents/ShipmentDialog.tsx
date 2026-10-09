@@ -21,7 +21,8 @@ import { cn } from '@open-mercato/shared/lib/utils'
 import { E } from '#generated/entities.ids.generated'
 import { emitSalesDocumentTotalsRefresh } from '@open-mercato/core/modules/sales/lib/frontend/documentTotalsEvents'
 import { useT, useLocale } from '@open-mercato/shared/lib/i18n/context'
-import { formatMoney, roundAutoFilledAmount, toExactAmount } from './lineItemUtils'
+import { formatMoney, roundAutoFilledAmount, toExactAmount, type CurrencyPrecision } from './lineItemUtils'
+import { loadCurrencyDecimalPlaces } from './currencyDecimalPlaces'
 import {
   compareDecimals,
   decimalToString,
@@ -151,11 +152,11 @@ const normalizePrice = (value: unknown): string | null => {
 const resolveShippingAmount = (
   unitAmount: string | null,
   quantity: number,
-  currencyCode: string | null,
+  currency: CurrencyPrecision,
 ): string | null => {
   if (unitAmount === null || !(quantity > 0)) return null
   const amount = maxDecimal(multiplyDecimals(unitAmount, quantity), 0)
-  return roundAutoFilledAmount(amount, currencyCode, unitAmount)
+  return roundAutoFilledAmount(amount, currency, unitAmount)
 }
 
 const readStringField = (input: Record<string, unknown>, keys: string[]): string | null => {
@@ -1179,8 +1180,12 @@ export function ShipmentDialog({
             : typeof currencyCode === 'string' && currencyCode.trim().length
                 ? currencyCode.trim().toUpperCase()
                 : null
-          const amountGross = resolveShippingAmount(unitGross, totalQuantity, currency)
-          const amountNet = resolveShippingAmount(unitNet, totalQuantity, currency)
+          const currencyPrecision: CurrencyPrecision = {
+            code: currency,
+            decimalPlaces: await loadCurrencyDecimalPlaces(currency),
+          }
+          const amountGross = resolveShippingAmount(unitGross, totalQuantity, currencyPrecision)
+          const amountNet = resolveShippingAmount(unitNet, totalQuantity, currencyPrecision)
 
           if (amountGross !== null || amountNet !== null) {
             try {

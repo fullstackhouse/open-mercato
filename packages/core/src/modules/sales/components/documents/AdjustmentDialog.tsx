@@ -26,7 +26,8 @@ import type { SalesAdjustmentKind } from '../../data/entities'
 import { E } from '#generated/entities.ids.generated'
 import { Settings } from 'lucide-react'
 import { extractCustomFieldValues, normalizeCustomFieldSubmitValue } from './customFieldHelpers'
-import { autoFillOppositeAmount, toExactAmount } from './lineItemUtils'
+import { autoFillOppositeAmount, toExactAmount, type CurrencyPrecision } from './lineItemUtils'
+import { useCurrencyDecimalPlaces } from './currencyDecimalPlaces'
 import { compareDecimals } from '@open-mercato/shared/lib/decimal'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 
@@ -182,6 +183,11 @@ export function AdjustmentDialog({
   onSubmit,
 }: AdjustmentDialogProps) {
   const t = useT()
+  const currencyDecimalPlaces = useCurrencyDecimalPlaces(currencyCode)
+  const currencyPrecision = React.useMemo<CurrencyPrecision>(
+    () => ({ code: currencyCode, decimalPlaces: currencyDecimalPlaces }),
+    [currencyCode, currencyDecimalPlaces],
+  )
   const dialogContentRef = React.useRef<HTMLDivElement | null>(null)
   const entityId = kind === 'order' ? E.sales.sales_order_adjustment : E.sales.sales_quote_adjustment
   const initialMode: 'rate' | 'amount' = resolveModeFromAdjustment(initialAdjustment)
@@ -306,12 +312,12 @@ export function AdjustmentDialog({
       if (exact === null) return
       if (!setFormValue) return
       if (source === 'net') {
-        setFormValue('amountGross', autoFillOppositeAmount('net', exact, rateValue, currencyCode))
+        setFormValue('amountGross', autoFillOppositeAmount('net', exact, rateValue, currencyPrecision))
       } else {
-        setFormValue('amountNet', autoFillOppositeAmount('gross', exact, rateValue, currencyCode))
+        setFormValue('amountNet', autoFillOppositeAmount('gross', exact, rateValue, currencyPrecision))
       }
     },
-    [currencyCode, mode, resolveTaxRateValue]
+    [currencyPrecision, mode, resolveTaxRateValue]
   )
 
   React.useEffect(() => {
@@ -561,13 +567,13 @@ export function AdjustmentDialog({
             if (lastChanged === 'gross') {
               const gross = toExactAmount((values as any)?.amountGross)
               if (gross !== null) {
-                setFormValue?.('amountNet', autoFillOppositeAmount('gross', gross, rateNumeric, currencyCode))
+                setFormValue?.('amountNet', autoFillOppositeAmount('gross', gross, rateNumeric, currencyPrecision))
               }
               return
             }
             const net = toExactAmount((values as any)?.amountNet)
             if (net !== null) {
-              setFormValue?.('amountGross', autoFillOppositeAmount('net', net, rateNumeric, currencyCode))
+              setFormValue?.('amountGross', autoFillOppositeAmount('net', net, rateNumeric, currencyPrecision))
             }
           }
           return (
@@ -639,7 +645,7 @@ export function AdjustmentDialog({
         ),
       },
     ]
-  }, [applyOppositeAmount, currencyCode, loadKindOptions, mode, t, taxRates.length, taxRateMap])
+  }, [applyOppositeAmount, currencyCode, currencyPrecision, loadKindOptions, mode, t, taxRates.length, taxRateMap])
 
   const groups = React.useMemo<CrudFormGroup[]>(() => {
     return [

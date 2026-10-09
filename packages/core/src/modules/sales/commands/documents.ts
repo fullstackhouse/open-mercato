@@ -618,10 +618,10 @@ const addressSnapshotSchema = z
   .nullable()
   .optional();
 
-// Mirrors the create schema's `decimal({ min: 0 })` (data/validators.ts). `null`
+// Reuses the create schema's `decimal({ min: 0 })` (data/validators.ts). `null`
 // comes first in the union below because the coercion accepts it — `Number(null)`
 // is 0 — and would turn a clear into a written zero.
-const exchangeRateSchema = z.coerce.number().min(0);
+const exchangeRateSchema = orderCreateSchema.shape.exchangeRate.unwrap();
 
 export const documentUpdateSchema = z
   .object({

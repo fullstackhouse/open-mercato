@@ -59,6 +59,7 @@ import {
 } from "./lineItemUtils";
 import type { SalesLineRecord } from "./lineItemTypes";
 import { prepareShippedLineUpdatePayload } from "./lineItemShipmentLock";
+import { loadCurrencyDecimalPlaces } from "./currencyDecimalPlaces";
 import {
   normalizeCustomFieldSubmitValue,
   extractCustomFieldValues,
@@ -1588,13 +1589,21 @@ export function LineItemDialog({
       }
       if (resolvedName) payload.name = resolvedName;
 
-      const submittedPayload = prepareShippedLineUpdatePayload(
-        payload,
+      const shippedLine =
         isShippedOrderLine && initialLine
           ? {
               quantity: initialLine.quantity,
               totalNetAmount: initialLine.totalNetExact ?? initialLine.totalNet,
               totalGrossAmount: initialLine.totalGrossExact ?? initialLine.totalGross,
+            }
+          : null;
+      const submittedPayload = prepareShippedLineUpdatePayload(
+        payload,
+        shippedLine,
+        shippedLine && shippedLine.quantity !== qtyNumber
+          ? {
+              code: String(resolvedCurrency),
+              decimalPlaces: await loadCurrencyDecimalPlaces(String(resolvedCurrency)),
             }
           : null,
       );
