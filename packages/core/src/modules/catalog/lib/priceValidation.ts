@@ -18,7 +18,7 @@ export type CatalogPriceAmountValidationResult =
 
 function normalizeCatalogPriceRawValue(value: unknown): string | null {
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) return null
+    if (!isDecimalInput(value)) return null
     return decimalToString(value)
   }
   if (typeof value !== 'string') return null

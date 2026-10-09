@@ -37,5 +37,8 @@ describe('catalog price amount validation message', () => {
   it('rejects amounts beyond the decimal size caps instead of throwing', () => {
     expect(validateCatalogPriceAmountInput('1'.repeat(301))).toEqual({ ok: false, reason: 'invalid_format' })
     expect(validateCatalogPriceAmountInput(`0.${'1'.repeat(1001)}`)).toEqual({ ok: false, reason: 'invalid_format' })
+    expect(validateCatalogPriceAmountInput(1e301)).toEqual({ ok: false, reason: 'invalid_format' })
+    expect(validateCatalogPriceAmountInput(Number.MAX_VALUE)).toEqual({ ok: false, reason: 'invalid_format' })
+    expect(validateCatalogPriceAmountInput(Number.POSITIVE_INFINITY)).toEqual({ ok: false, reason: 'invalid_format' })
   })
 })
