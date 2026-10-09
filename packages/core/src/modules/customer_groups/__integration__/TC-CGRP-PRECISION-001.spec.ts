@@ -128,6 +128,16 @@ test.describe('TC-CGRP-PRECISION-001: customer group terms beyond 2 decimals', (
       const afterUpdate = await readTerms(request, token, groupId);
       expectExactTerms(afterUpdate, updated, 'read after update');
       expect(afterUpdate.terms?.creditCurrencyCode).toBe('USD');
+
+      const oversizedResponse = await apiRequest(request, 'PUT', termsPath(groupId), {
+        token,
+        data: { defaultCreditLimit: 1e305 },
+        headers: { [OPTIMISTIC_LOCK_HEADER_NAME]: afterUpdate.terms?.updatedAt ?? '' },
+      });
+      expect(oversizedResponse.status(), 'an oversized credit limit should be rejected, not cleared').toBe(400);
+
+      const afterOversized = await readTerms(request, token, groupId);
+      expectExactTerms(afterOversized, updated, 'read after rejected oversized update');
     } finally {
       await deleteCustomerGroupIfExists(request, token, groupId);
     }

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { withDecimalCaps } from '@open-mercato/shared/lib/decimal'
 
 const uuid = () => z.string().uuid()
 
@@ -190,9 +191,11 @@ const clearableNonNegativeIntSchema = z.preprocess(
   z.coerce.number().int().min(0).max(INT4_MAX).nullable().optional(),
 )
 
+const moneyInputSchema = <T extends z.ZodType>(schema: T) => withDecimalCaps(schema)
+
 const clearableNonNegativeNumberSchema = z.preprocess(
   emptyStringToNull,
-  z.coerce.number().min(0).nullable().optional(),
+  moneyInputSchema(z.coerce.number().min(0)).nullable().optional(),
 )
 
 const currencyCodeSchema = clearableStringSchema(4)

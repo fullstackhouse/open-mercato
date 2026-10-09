@@ -89,6 +89,25 @@ describe('customer group column bounds', () => {
     },
   )
 
+  it.each(['approvalRequiredAbove', 'minOrderValue', 'defaultCreditLimit'])(
+    'rejects %s beyond the decimal size caps instead of clearing it',
+    (field) => {
+      expect(customerGroupTermsUpdateSchema.safeParse({ id: GROUP_ID, [field]: 1e305 }).success).toBe(false)
+      expect(customerGroupTermsUpdateSchema.safeParse({ id: GROUP_ID, [field]: '1e305' }).success).toBe(false)
+      expect(customerGroupTermsUpdateSchema.safeParse({ id: GROUP_ID, [field]: `0.${'1'.repeat(1001)}` }).success).toBe(false)
+      expect(
+        customerGroupTermsCreateSchema.safeParse({ tenantId: TENANT_ID, groupId: GROUP_ID, [field]: 1e305 }).success,
+      ).toBe(false)
+    },
+  )
+
+  it('keeps blank and null terms amounts clearing the value', () => {
+    const parsed = customerGroupTermsUpdateSchema.parse({ id: GROUP_ID, defaultCreditLimit: '', minOrderValue: null })
+
+    expect(parsed.defaultCreditLimit).toBeNull()
+    expect(parsed.minOrderValue).toBeNull()
+  })
+
   it('still rejects negative terms values', () => {
     expect(customerGroupTermsUpdateSchema.safeParse({ id: GROUP_ID, minOrderValue: -1 }).success).toBe(false)
     expect(customerGroupTermsUpdateSchema.safeParse({ id: GROUP_ID, paymentTermsDays: -1 }).success).toBe(false)
