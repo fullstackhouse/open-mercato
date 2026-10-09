@@ -73,6 +73,8 @@ Plain functions over `big.js`:
 - `resolveExactDecimal(exact, legacy)` - the bridge rule: the exact string wins unless the float was changed on its own.
 - `withExactAmounts(parsed, raw, fields)` - adds `<field>Exact` strings from the raw request next to coerced numbers. When the raw field is already a number, it reads the `<field>Exact` string attached to the raw input instead. A parsed `null` (or a schema that outputs strings) is used as-is, so a raw `<field>Exact` can never bypass validation.
 - `withExactListAmounts(items, raw, key, fields)` - the same for each item of a nested list (document lines, payment allocations).
+- `withDecimalCaps(schema, message?)` - wraps a number-coercing money schema so oversized input is rejected before coercion instead of being stored as `0` or `null`.
+- `padDecimalPlaces(value, min)` - plain decimal string with at least `min` decimals, never cut (emails, exports of frozen amounts).
 - `amountComparisonTolerance(dp)` - half a minor unit at the given precision (0.005 at 4).
 - `@open-mercato/shared/lib/currencyPrecision`: `resolveCurrencyDecimalPlaces` (raw currency digits) and `resolveCurrencyAmountDecimalPlaces` (`max(4, dp)`).
 - `resolveIsoCurrencyDecimalPlaces(code)` only trusts `Intl` for codes in `Intl.supportedValuesOf('currency')`, so unknown codes such as ETH return `null` instead of 2.
@@ -98,7 +100,8 @@ The currencies module registers a `currencyPrecisionService` DI service with `ge
 - Catalog prices keep the entered side exact; only the derived side (gross in net mode, net in gross mode) is rounded, and tax is the exact difference.
 - Payment gateway session, capture and refund routes reject amounts with more decimals than the currency allows (400).
 - Settlement checks (fully paid, refunded or shipped) use a tolerance of one unit at the currency's amount precision. Float-only resolvers keep the old `1e-4`.
-- Closed staff reports sum frozen amounts as stored; live amounts round per D10.
+- Closed staff reports sum and export frozen amounts as stored; live amounts round per D10.
+- The sales dialogs read the configured currency decimals (`/api/currencies/currencies`) for auto-fill and shipped-line rescaling; `formatCurrency` rounds display to the currency precision when it is known.
 
 ## Data Models
 
@@ -130,7 +133,7 @@ Existing rows keep their stored scale (`40.0000`). New rows store the value as w
 ## API Contracts
 
 - `GET /api/currencies/exchange-rates` items gain `metadata: Record<string, unknown> | null`. `POST` and `PUT` accept `metadata` up to 16 KB of JSON. `rate` accepts any number of decimals.
-- **Endpoints that return amounts as JSON numbers** keep them and add a `<field>Exact` string sibling: sales document list/detail totals, checkout templates/links/transactions, payment gateway status (`amountExact`, `amountReceivedExact`), capture (`capturedAmountExact`) and refund (`refundedAmountExact`), customer deal stats (`dealValueExact`), summary (`valueExact`, `avgDealExact`) and aggregate (`totalInBaseCurrencyExact`, `byCurrency[].totalExact`; the number fields stay rounded to whole units), customer group terms, warranty claim settings (`autoApproveMaxAmountExact`), staff report totals.
+- **Endpoints that return amounts as JSON numbers** keep them and add a `<field>Exact` string sibling: sales document list/detail totals, checkout templates/links/transactions, payment gateway status (`amountExact`, `amountReceivedExact`), capture (`capturedAmountExact`) and refund (`refundedAmountExact`), customer deal stats (`dealValueExact`), summary (`valueExact`, `avgDealExact`) and aggregate (`totalInBaseCurrencyExact`, `byCurrency[].totalExact`; the number fields stay rounded to whole units), customer group terms, warranty claim settings (`autoApproveMaxAmountExact`), staff report totals, staff project list and time entries (`costExact`, `hourlyRateExact`).
 - **Endpoints that return amounts as strings** keep strings. Their OpenAPI schemas are corrected from `number` to `string`: sales lines, adjustments, payments, shipments, catalog prices, warranty claim totals.
 - **Write endpoints** accept amounts as `number` or decimal `string`. Strings are recommended for exactness.
 
@@ -201,3 +204,4 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 - 2026-10-08: API routes attach `<field>Exact` strings before the command parses the body (`withExactListAmounts` added). Coverage table lists the shipped tests; D4 notes that catalog prices and client-supplied line amounts round to the amount precision.
 - 2026-10-08: Money and FX columns use `ExactDecimalType`, so updates beyond float precision are flushed.
 - 2026-10-08: PR review fixes. Exact values cannot bypass validation on `null`; oversized decimals rejected; unknown currency codes no longer default to 2 decimals; hook bridge pairs by id and rounds legacy floats; catalog prices keep the entered side exact; checkout configured amounts round to the currency decimals and the pay page submits exact strings; gateway routes reject sub-minor amounts; frozen staff totals sum as stored; BC table corrected.
+- 2026-10-09: Second re-review fixes. Oversized money input is a 400 on every number-coercing schema (`withDecimalCaps`); `formatCurrency` rounds to known currency precision; frozen staff exports keep stored values; hook bridge pairs id-less items by position; Stripe sub-minor check uses the ISO minor unit; staff cost gains exact siblings.
