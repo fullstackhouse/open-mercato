@@ -127,6 +127,32 @@ describe('payment gateway service — session amount reconciliation (#4488)', ()
     expect(createSession).not.toHaveBeenCalled()
   })
 
+  it('rejects an exact amount one minor unit off for a high-precision currency', async () => {
+    const resolver = makeResolver({ orderId: ORDER_ID, currencyCode: 'BTC', amountDue: 1.5, amountDueExact: '1.5' })
+    const { service, createSession } = buildService(resolver, 8)
+
+    await expect(service.createPaymentSession(sessionInput({ currencyCode: 'BTC', amount: 1.49999999, amountExact: '1.49999999' })))
+      .rejects.toMatchObject({ status: 409 })
+    await expect(service.createPaymentSession(sessionInput({ currencyCode: 'BTC', amount: 1.50000001, amountExact: '1.50000001' })))
+      .rejects.toMatchObject({ status: 409 })
+    expect(createSession).not.toHaveBeenCalled()
+
+    await service.createPaymentSession(sessionInput({ currencyCode: 'BTC', amount: 1.5, amountExact: '1.500000000' }))
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects an exact amount one unit off at the default four-decimal precision', async () => {
+    const resolver = makeResolver({ ...matchingTotal, amountDue: 100, amountDueExact: '100' })
+    const { service, createSession } = buildService(resolver, 2)
+
+    await expect(service.createPaymentSession(sessionInput({ amount: 100.0001, amountExact: '100.0001' })))
+      .rejects.toMatchObject({ status: 409 })
+    expect(createSession).not.toHaveBeenCalled()
+
+    await service.createPaymentSession(sessionInput({ amount: 100.00004, amountExact: '100.00004' }))
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects an amount lower than the amount due before calling the provider', async () => {
     const resolver = makeResolver(matchingTotal)
     const { service, createSession } = buildService(resolver)

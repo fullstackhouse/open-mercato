@@ -17,13 +17,14 @@ import type {
 const FLOAT_AMOUNT_DUE_TOLERANCE = '0.0001'
 
 /**
- * Below the currency's amount precision (at least the 4th decimal) is rounding noise,
- * not a mismatch. A resolver that only reports a float `amountDue` keeps the historical
- * 0.0001 tolerance, so binary float noise (`0.30000000000000004`) is never a mismatch.
+ * Below half a unit of the currency's amount precision (at least the 4th decimal) is
+ * rounding noise, not a mismatch, so an amount a whole unit off is always rejected.
+ * A resolver that only reports a float `amountDue` keeps the historical 0.0001
+ * tolerance, so binary float noise (`0.30000000000000004`) is never a mismatch.
  */
 function amountTolerance(orderTotal: PaymentOrderTotal, currencyDecimalPlaces?: number | null): DecimalValue {
   if (parseDecimal(orderTotal.amountDueExact) === null) return toDecimal(FLOAT_AMOUNT_DUE_TOLERANCE)
-  return toDecimal(`1e-${resolveAmountDecimalPlaces(currencyDecimalPlaces)}`)
+  return toDecimal(`5e-${resolveAmountDecimalPlaces(currencyDecimalPlaces) + 1}`)
 }
 
 function normalizeCurrencyCode(currencyCode: string): string {

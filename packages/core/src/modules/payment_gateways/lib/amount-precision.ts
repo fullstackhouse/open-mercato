@@ -1,7 +1,12 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { z } from 'zod'
 import { resolveCurrencyDecimalPlaces } from '@open-mercato/shared/lib/currencyPrecision'
-import { countDecimalPlaces, decimalToString, parseDecimal } from '@open-mercato/shared/lib/decimal'
+import {
+  countDecimalPlaces,
+  decimalToString,
+  parseDecimal,
+  resolveIsoCurrencyDecimalPlaces,
+} from '@open-mercato/shared/lib/decimal'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { PaymentGatewayScope } from '@open-mercato/shared/modules/payment_gateways/types'
 import { GatewayTransaction } from '../data/entities'
@@ -18,8 +23,9 @@ export type AmountPrecisionErrorBody = {
 /**
  * Rejects a payment amount carrying more decimals than the currency itself has
  * (`10.005` USD): a provider charging in minor units would round it, so the
- * captured amount could differ from the stored one. Skipped when the currency
- * precision is unknown.
+ * captured amount could differ from the stored one. A tenant precision above the
+ * ISO 4217 minor unit (USD at 4 decimals) is capped at the ISO digits, since that
+ * is what providers charge in. Skipped when the currency precision is unknown.
  */
 export async function findAmountPrecisionError(
   container: ServiceContainer,
@@ -32,11 +38,15 @@ export async function findAmountPrecisionError(
   const amount = parseDecimal(input.amount)
   const currencyCode = input.currencyCode?.trim().toUpperCase()
   if (amount === null || !currencyCode) return null
-  const decimalPlaces = await resolveCurrencyDecimalPlaces(container, {
+  const currencyDecimalPlaces = await resolveCurrencyDecimalPlaces(container, {
     code: currencyCode,
     tenantId: input.scope.tenantId,
     organizationId: input.scope.organizationId,
   })
+  const isoDecimalPlaces = resolveIsoCurrencyDecimalPlaces(currencyCode)
+  const decimalPlaces = currencyDecimalPlaces !== null && isoDecimalPlaces !== null
+    ? Math.min(currencyDecimalPlaces, isoDecimalPlaces)
+    : currencyDecimalPlaces
   if (decimalPlaces === null || countDecimalPlaces(amount) <= decimalPlaces) return null
   const translate = await resolvePaymentGatewayTranslator()
   return {

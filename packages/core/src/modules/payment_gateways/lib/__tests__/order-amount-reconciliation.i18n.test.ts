@@ -122,13 +122,15 @@ describe('session amount reconciliation tolerance', () => {
 
   it('narrows the tolerance for a higher-precision currency', async () => {
     const total = { orderId: ORDER_ID, currencyCode: 'BTC', amountDue: 1.5, amountDueExact: '1.5' }
-    await expect(reconcileExact({ amountExact: '1.50000001', total, currencyDecimalPlaces: 8 })).resolves.toBeUndefined()
-    await expect(reconcileExact({ amountExact: '1.50000002', total, currencyDecimalPlaces: 8 })).rejects.toMatchObject({ status: 409 })
+    await expect(reconcileExact({ amountExact: '1.500000005', total, currencyDecimalPlaces: 8 })).resolves.toBeUndefined()
+    await expect(reconcileExact({ amountExact: '1.49999999', total, currencyDecimalPlaces: 8 })).rejects.toMatchObject({ status: 409 })
+    await expect(reconcileExact({ amountExact: '1.50000001', total, currencyDecimalPlaces: 8 })).rejects.toMatchObject({ status: 409 })
   })
 
   it('falls back to 4 decimals when the currency precision is unknown', async () => {
     const total = { orderId: ORDER_ID, currencyCode: 'USD', amountDue: 1.5, amountDueExact: '1.5' }
-    await expect(reconcileExact({ amountExact: '1.50009', total, currencyDecimalPlaces: null })).resolves.toBeUndefined()
+    await expect(reconcileExact({ amountExact: '1.50005', total, currencyDecimalPlaces: null })).resolves.toBeUndefined()
+    await expect(reconcileExact({ amountExact: '1.5001', total, currencyDecimalPlaces: null })).rejects.toMatchObject({ status: 409 })
     await expect(reconcileExact({ amountExact: '1.5002', total })).rejects.toMatchObject({ status: 409 })
   })
 })
