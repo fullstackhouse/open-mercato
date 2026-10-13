@@ -104,6 +104,8 @@ export class ExchangeRate {
   @Property({ type: ExactDecimalType, columnType: 'numeric' })
   rate: string // Unconstrained decimal string, never rounded to a fixed scale; ExactDecimalType from @open-mercato/shared/lib/db/exactDecimalType
 
+  get rateDecimal(): Opt<DecimalValue> // The rate as a DecimalValue for exact math; not persisted
+
   @Property()
   date: Date
 
@@ -222,7 +224,7 @@ interface RateResult {
 
 if (result.rates.length > 0) {
   // Keep rates exact: never parse them into a JS number for money math
-  const convertedAmount = multiplyDecimals('100', result.rates[0].rate) // from '@open-mercato/shared/lib/decimal'
+  const converted = MoneyValue.of('100', 'USD').convert(result.rates[0].rateDecimal, 'EUR').round() // from '@open-mercato/shared/lib/money'
 }
 ```
 
@@ -623,7 +625,7 @@ const rateData = exchangeRateCreateSchema.parse({
 
 Key validation rules:
 - **Currency codes**: 3 uppercase letters (ISO 4217)
-- **Rate values**: Positive decimals, up to 8 decimal places
+- **Rate values**: Positive decimals with any number of decimal places
 - **Source**: 2-50 alphanumeric characters, hyphens, underscores
 - **Dates**: Truncated to minute precision
 
@@ -631,10 +633,10 @@ Key validation rules:
 
 ```typescript
 import type { ExchangeRateService } from '@open-mercato/modules/currencies/services/exchangeRateService'
+import { MoneyValue } from '@open-mercato/shared/lib/money'
 
 export async function convertCurrency(
-  amount: number,
-  fromCode: string,
+  amount: MoneyValue,
   toCode: string,
   date: Date,
   scope: { tenantId: string; organizationId: string },
@@ -642,11 +644,11 @@ export async function convertCurrency(
     preferredProvider?: string
     rateType?: 'buy' | 'sell'
   }
-): Promise<number | null> {
+): Promise<MoneyValue | null> {
   const exchangeRateService = container.resolve<ExchangeRateService>('exchangeRateService')
 
   const result = await exchangeRateService.getRate({
-    fromCurrencyCode: fromCode,
+    fromCurrencyCode: amount.currencyCode,
     toCurrencyCode: toCode,
     date,
     scope,
@@ -669,13 +671,12 @@ export async function convertCurrency(
     if (typeRate) selectedRate = typeRate
   }
 
-  return amount * parseFloat(selectedRate.rate)
+  return amount.convert(selectedRate.rateDecimal, toCode).round()
 }
 
 // Usage
 const eurAmount = await convertCurrency(
-  100,
-  'USD',
+  MoneyValue.of('100', 'USD'),
   'EUR',
   new Date(),
   { tenantId: 'tenant-123', organizationId: 'org-456' },

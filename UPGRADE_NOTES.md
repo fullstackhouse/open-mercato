@@ -32,6 +32,11 @@ uses exact decimals. Public contracts keep their `number` fields (a float copy) 
 `SalesLineCalculationResult.netAmountExact`, `CaptureResult.capturedAmountExact`.
 
 **Action for module authors:**
+- Do exact math with `DecimalValue` (`@open-mercato/shared/lib/decimal`) and, where an amount has a
+  currency, `MoneyValue` (`@open-mercato/shared/lib/money`; arithmetic across currencies throws).
+  Every `numeric` entity property has a `<property>Decimal` accessor returning a `DecimalValue`
+  (e.g. `order.grandTotalGrossAmountDecimal`); the stored property stays a string. Never import
+  `big.js` directly.
 - Calculation hooks / shipping or payment providers that only change `number` fields keep working; to
   keep full precision set the matching `<field>Exact` string too and do the math with
   `@open-mercato/shared/lib/decimal` instead of JS numbers.
