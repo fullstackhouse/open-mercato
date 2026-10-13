@@ -101,8 +101,8 @@ export class ExchangeRate {
   @Property()
   toCurrencyCode: string
 
-  @Property({ type: 'numeric', columnType: 'numeric' })
-  rate: string // Unconstrained decimal string, never rounded to a fixed scale
+  @Property({ type: ExactDecimalType, columnType: 'numeric' })
+  rate: string // Unconstrained decimal string, never rounded to a fixed scale; ExactDecimalType from @open-mercato/shared/lib/db/exactDecimalType
 
   @Property()
   date: Date

@@ -2,7 +2,11 @@
 
 ## TLDR
 
-Make every money and FX column an unconstrained Postgres `numeric`. Move all money math from JS floats to exact decimal arithmetic (`big.js` through `@open-mercato/shared/lib/decimal`), and add free-form `metadata` to exchange rates.
+Make every money and FX column an unconstrained Postgres `numeric`. Move all money math from JS floats to exact decimal arithmetic, and add free-form `metadata` to exchange rates.
+
+- Exact values are `DecimalValue` objects from `@open-mercato/shared/lib/decimal`. The underlying library (`big.js`) is hidden behind that class, so swapping it means rewriting one adapter file.
+- `MoneyValue` pairs a `DecimalValue` amount with its currency for calculation code.
+- Every `numeric` entity property keeps its `string` type and gains a computed `<property>Decimal` accessor that reads and writes it as a `DecimalValue`. Nothing existing changes type.
 
 - Add, subtract and multiply are exact.
 - Division is the only operation that is cut. It keeps at least the requested decimals (50 for FX math) and never fewer than 17 significant digits, so it is never less precise than a JS `number`.
@@ -14,7 +18,7 @@ Public TypeScript contracts and API payloads that expose amounts as `number` kee
 - **Columns:** exchange rates (`exchange_rates.rate`, `sales_orders.exchange_rate`) and about 100 money columns in sales, catalog, checkout, customers, customer_groups, payment_gateways, staff and warranty_claims.
 - **Math:** the sales calculation engine, tax service, shipping/payment providers, payment gateways, Stripe minor-unit conversion, and the sales UI dialogs.
 
-**Out of scope:** quantities, tax-rate percentages (`numeric(7,4)`), weights, dimensions, unit conversion factors, coordinates and scores.
+**Out of scope:** widening non-money columns (quantities, tax-rate percentages `numeric(7,4)`, weights, dimensions, unit conversion factors, coordinates and scores). They keep their precision and scale, but get a `<property>Decimal` accessor like every other `numeric` column.
 
 ## Overview
 
@@ -45,23 +49,59 @@ Open Mercato stores money in fixed-scale columns: `(18,4)` in sales, `(16,4)` fo
 | D9 | Exchange rate `metadata` is free-form `jsonb`, editable as JSON in the backend form | Providers and operators can attach arbitrary context |
 | D10 | Staff amounts round to the currency's own decimals (2 when unknown), not `max(4, dp)` | Staff always billed in minor units (2 for fiat); keeps fiat behaviour unchanged |
 | D11 | Precision for amounts is resolved centrally in `salesCalculationService` when the context lacks `amountDecimalPlaces` | Every caller gets currency precision without touching each context builder |
+| D12 | Exact values are instances of our own `DecimalValue` class. Only `lib/decimalEngine.ts` imports `big.js`; its value never leaves `DecimalValue` (`#private` field), and an ESLint rule bans the import anywhere else | Swapping the library (e.g. to `decimal.js`) means rewriting one adapter that has explicit semantics (division to N decimal places, half-up rounding) and passing the toolkit tests. Callers never depend on library methods or configuration |
+| D13 | `MoneyValue` = `DecimalValue` amount + currency code + rounding precision. Arithmetic across currencies throws; division rounds to the money's precision; `convert(rate, currency)` does FX. It is a calculation type, not a persisted one | An amount passed around keeps its meaning (review feedback on #7324). Entities keep flat amount columns that share one currency column, so the ORM cannot hydrate `MoneyValue` |
+| D14 | Every `numeric` entity property (money, FX, quantities, rates, weights, coordinates, scores) gets a computed `<property>Decimal` accessor: the getter returns `DecimalValue` (`DecimalValue \| null` when nullable), the setter writes the canonical string to the stored property. It is not persisted or serialized and is typed `Opt<...>`, so `em.create` does not require it | Exact math on entity values without re-parsing at every call site, for every exact number, not just money. Purely additive: the stored `string` property, queries, API output and existing consumers are unchanged |
+| D15 | `DecimalValue.toString()`, `toJSON()` and `valueOf()` return the canonical decimal string | `String(x)`, `Number(x)`, template literals and `JSON.stringify` give the same string the stored property holds. TypeScript still rejects `value + 1` on the object |
+| D16 | Stored properties stay `string`; `ExactDecimalType` keeps hydrating strings | Changing the hydrated type would break every module that reads these properties at compile time, with no possible bridge (a property cannot carry two types) |
 
 ### Alternatives considered
 
 | Alternative | Why rejected |
 |-------------|--------------|
 | Widen columns to a bigger fixed scale (e.g. `(38,18)`) | Still a limit. Crypto tokens can exceed 18 dp |
-| `decimal.js` / `bignumber.js` | `decimal.js` applies significant-digit precision to every op. `bignumber.js` is equivalent to `big.js` but larger |
+| `decimal.js` / `bignumber.js` | `decimal.js` applies significant-digit precision to every op. `bignumber.js` is equivalent to `big.js` but larger. Either can replace `big.js` later by rewriting `decimalEngine.ts` (D12) |
+| Expose the library type (`type DecimalValue = Big`) | Callers chained library methods (`plus`, `eq`, `toFixed`), so a swap would touch every call site and silently change semantics (`decimal.js` precision counts significant digits) |
+| Hydrate entity columns as `DecimalValue` | Breaks every consumer of the entity properties at compile time without a bridge, so it would need a minor release; the `<property>Decimal` accessor gives the same ergonomics additively |
+| `MoneyValue` as a MikroORM embeddable | Documents have about 20 amount columns sharing one currency column; an embeddable would duplicate the currency per amount |
 | Rational numbers (numerator/denominator) | Not representable in SQL `numeric` columns. Heavy for every consumer |
 | Switch TS contract fields from `number` to `string` | Silently breaks third-party hooks (`a + b` concatenates) |
 
 ## Architecture
 
-### Shared decimal toolkit - `packages/shared/src/lib/decimal.ts`
+### Decimal engine - `packages/shared/src/lib/decimalEngine.ts`
 
-Plain functions over `big.js`:
+The only module that imports `big.js` (enforced by `no-restricted-imports`). It exposes an opaque `EngineDecimal` handle and the operations `DecimalValue` needs, with semantics defined by us rather than by the library:
 
-- `toDecimal(value)`: accepts `string | number | Big` and throws on NaN, Infinity or a malformed string. A value is malformed when its exponent exceeds `MAX_DECIMAL_EXPONENT = 1000`, it has more than `MAX_DECIMAL_SIGNIFICANT_DIGITS = 1000` significant digits, more than `MAX_DECIMAL_INTEGER_DIGITS = 300` integer digits (so the float copy stays finite), or a digit below `1e-1000`. Oversized input is a 400, never a slow request or a Postgres overflow.
+- `parseEngineDecimal(text)` (input already validated), `engineToString(value)` (plain notation, no exponent, no padding), `engineToFixed(value, dp)`.
+- `engineAdd`, `engineSubtract`, `engineMultiply`: exact.
+- `engineDivide(left, right, decimalPlaces)`: quotient cut to `decimalPlaces`, half-up.
+- `engineRound(value, decimalPlaces)`: half-up (D6).
+- `engineCompare`, `engineMagnitude(value)` (power of ten of the leading digit, used for the 17-significant-digit rule), `engineAbs`, `engineNegate`.
+
+### `DecimalValue` - `packages/shared/src/lib/decimal.ts`
+
+An immutable class; the engine handle lives in a `#private` field.
+
+- Creation: `DecimalValue.from(input)` (throws on invalid input, see the caps below), `DecimalValue.fromNullable(input)` (`null` for `null`/`undefined`, otherwise `from`), `DecimalValue.parse(unknown)` (`null` for blank or invalid), `DecimalValue.zero()`, `DecimalValue.isDecimalValue(value)`.
+- Arithmetic: `plus`, `minus`, `times` (exact), `dividedBy(divisor, decimalPlaces = FX_DECIMAL_PLACES)` (D3), `round(decimalPlaces)` (D6), `abs`, `negate`.
+- Comparison: `compare`, `equals`, `lt`, `lte`, `gt`, `gte`, `isZero`, `isNegative`, `isPositive`, `decimalPlaces()`.
+- Output: `toString()` / `toJSON()` / `valueOf()` return the canonical string (D15), `toFixed(decimalPlaces)` rounds half-up and pads, `toNumber()` is the float copy.
+- Every method accepts `DecimalInput = string | number | DecimalValue`.
+- `isDecimalValue` checks a `Symbol.for` brand, not `instanceof`, so a value from a duplicated copy of `@open-mercato/shared` (standalone apps) is still accepted; foreign instances are read through their string form.
+
+### `MoneyValue` - `packages/shared/src/lib/money.ts`
+
+- `MoneyValue.of(amount, currencyCode, decimalPlaces?)`: `decimalPlaces` defaults to `resolveAmountDecimalPlaces(resolveIsoCurrencyDecimalPlaces(code))`; callers with a configured currency pass `resolveAmountDecimalPlaces(currency.decimalPlaces)` (or the staff precision, D10).
+- `plus`, `minus`, `compare`, `equals`, `lt`, `gt` take another `MoneyValue` and throw `[internal] Currency mismatch` when the codes differ.
+- `times(factor)` is exact; `dividedBy(divisor)` and `round()` round to `decimalPlaces`; `convert(rate, currencyCode, decimalPlaces?)` multiplies by the rate and rounds to the target precision.
+- `isZero`, `isNegative`, `abs`, `negate`, `toJSON()` (`{ amount, currencyCode }`).
+
+### Toolkit functions - `packages/shared/src/lib/decimal.ts`
+
+Thin wrappers over `DecimalValue`, kept for call sites that work on mixed inputs:
+
+- `toDecimal(value)`: accepts `string | number | DecimalValue` and throws on NaN, Infinity or a malformed string. A value is malformed when its exponent exceeds `MAX_DECIMAL_EXPONENT = 1000`, it has more than `MAX_DECIMAL_SIGNIFICANT_DIGITS = 1000` significant digits, more than `MAX_DECIMAL_INTEGER_DIGITS = 300` integer digits (so the float copy stays finite), or a digit below `1e-1000`. Oversized input is a 400, never a slow request or a Postgres overflow.
 - `decimalToString(value)`: no exponent, no padding.
 - `addDecimals`, `subtractDecimals`, `multiplyDecimals`, `sumDecimals`.
 - `divideDecimals(a, b, decimalPlaces)`: applies D3.
@@ -94,6 +134,8 @@ The currencies module registers a `currencyPrecisionService` DI service with `ge
 
 ### Persistence
 
+- Money and FX properties use `ExactDecimalType` (`@open-mercato/shared/lib/db/exactDecimalType`): it hydrates the canonical string and compares exact decimals for change detection. Fixed-scale properties keep `type: 'numeric'` with their precision and scale.
+- Each `numeric` property has a `<property>Decimal` accessor (`DecimalValue.from(this.amount)`, or `DecimalValue.fromNullable(...)` for nullable columns; the setter stores `value.toString()`). Getters live on the prototype, so `wrap(entity).toObject()`, `serialize()` and API output do not include them.
 - API routes parse the body before the command runs, which turns amounts into floats. Each route attaches `<field>Exact` strings taken from the raw body (`withExactAmounts`, `withExactListAmounts`, the sales helpers in `sales/lib/exactAmountFields.ts`), and the command reads them. Routes use a passthrough action schema, because `makeCrudRoute` builds `raw` from that schema's output. Commands with strict schemas (warranty claims) strip the `<field>Exact` keys before parsing.
 - Commands write `Exact` strings to entities, never `number.toString()`. `toNumericString` accepts strings and never pads or emits exponent notation.
 - Checkout configured amounts (fixed price, original price, custom min/max, price-list items) and transactions are rounded to the currency's own decimals, so the shown, validated and charged amounts match. The pay page submits exact strings.
@@ -167,7 +209,9 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 | API responses | `<field>Exact` siblings added; string amounts no longer scale-padded for new rows | ✓ ADDITIVE; padding change is value-preserving |
 | Helpers | `toNumericString` accepts strings. Capture ledger `parseAmountUnits` / `formatAmountUnits` are `@deprecated`; `reserveCaptureAmount`, `settleCapturedAmount`, `releaseCaptureAmount` work on decimal strings | ⚠ Module-internal ledger signatures changed without a bridge (no known external consumers); rest ✓ ADDITIVE |
 | Migrations `down()` | Narrows the columns back to their old precision | ⚠ Lossy: extra decimals are rounded away, and values beyond the old integer digits fail with "numeric field overflow" |
-| Dependencies | `big.js` (and `@types/big.js`) become production dependencies of `@open-mercato/shared` | Approved by the maintainer during planning |
+| Entity classes | Every `numeric` property gains a `<property>Decimal` accessor; the stored property stays `string` | ✓ ADDITIVE. A downstream subclass that already declares a member with the same name would conflict (none known) |
+| `DecimalValue` / `DecimalInput` | Was `type DecimalValue = Big` (unreleased); now a class. `DecimalInput` no longer accepts `Big` | Unreleased surface, no bridge needed |
+| Dependencies | `big.js` (and `@types/big.js`) become production dependencies of `@open-mercato/shared`, imported only by `decimalEngine.ts` | Approved by the maintainer during planning |
 
 ## Risks & Impact Review
 
@@ -179,6 +223,8 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 | `big.js` adds bundle weight to the client | Low | UI | ~3 KB gzipped | - |
 | Oversized input (`1e-100000000`, 100k-digit strings, values past Postgres or float limits) costs CPU or fails in the database | Medium | write APIs | Exponent, significant-digit, integer-digit and smallest-digit caps reject it as invalid input (400) | A valid price just under 1e300 times a large quantity can still overflow the float copy |
 | Postgres `numeric` division in SQL aggregates | Low | analytics | SQL `SUM` is exact; only `AVG`/division uses PG's own scale rules | - |
+| An accessor reads an invalid stored value | Low | entities | Stored values come from `numeric` columns or validated input; the getter throws `[internal] Invalid decimal value` instead of returning a wrong number | - |
+| A swap of the decimal library changes results | Medium | shared | Engine semantics are explicit (decimal places, half-up) and covered by the toolkit tests | - |
 
 ## Final Compliance Report
 
@@ -191,6 +237,7 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 
 - MikroORM maps a bare `type: 'numeric'` to `numeric(10,0)`; entities declare `columnType: 'numeric'` to get an unconstrained column.
 - MikroORM's `DecimalType` detects changes by comparing `+value`, so an edit beyond float precision was never flushed. Money and FX columns use `ExactDecimalType` (`@open-mercato/shared/lib/db/exactDecimalType`), which compares exact decimal values. The schema is unchanged.
+- MikroORM's `RequiredEntityData` treats a plain getter as a required `em.create` key; typing the getter as `Opt<DecimalValue>` makes it optional.
 - Hook bridge lives in `calculations.ts` (`syncLineResultExactAmounts`, `syncDocumentResultExactAmounts`) and runs after every calculator and event hook.
 - Payment capture ledger works on exact decimal strings; `parseAmountUnits`/`formatAmountUnits` are deprecated.
 - CrudForm builtin field type `'decimal'` keeps exact decimal strings (used by the exchange rate form).
@@ -206,3 +253,4 @@ Every module whose API gains `<field>Exact` fields or wider money columns gets a
 - 2026-10-08: PR review fixes. Exact values cannot bypass validation on `null`; oversized decimals rejected; unknown currency codes no longer default to 2 decimals; hook bridge pairs by id and rounds legacy floats; catalog prices keep the entered side exact; checkout configured amounts round to the currency decimals and the pay page submits exact strings; gateway routes reject sub-minor amounts; frozen staff totals sum as stored; BC table corrected.
 - 2026-10-09: Second re-review fixes. Oversized money input is a 400 on every number-coercing schema (`withDecimalCaps`); `formatCurrency` rounds to known currency precision; frozen staff exports keep stored values; hook bridge pairs id-less items by position; Stripe sub-minor check uses the ISO minor unit; staff cost gains exact siblings.
 - 2026-10-12: Third re-review fixes. Exact siblings on the exported staff report types are optional again (D7), with `Exact*` result types for internal use; checkout submit enforces payment precision before reserving and the pay page displays exact amounts; staff project and time-entry editors preserve exact rates; the sales line dialog derives prices at the configured currency precision; command snapshots keep line ids, id-less hook results pair by identity, then by position; tax hooks keep exact-only edits.
+- 2026-10-13: Exact values become the `DecimalValue` class with `big.js` behind a single engine adapter (D12), `MoneyValue` added for calculation code (D13), and every `numeric` entity property gains a `<property>Decimal` accessor while the stored property stays `string` (D14-D16), so the change stays additive.
