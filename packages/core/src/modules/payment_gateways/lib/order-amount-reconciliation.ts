@@ -6,6 +6,7 @@ import {
   toDecimal,
   type DecimalValue,
 } from '@open-mercato/shared/lib/decimal'
+import { MoneyValue } from '@open-mercato/shared/lib/money'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { createFallbackTranslator, type TranslateWithFallbackFn } from '@open-mercato/shared/lib/i18n/translate'
 import type {
@@ -25,10 +26,6 @@ const FLOAT_AMOUNT_DUE_TOLERANCE = '0.0001'
 function amountTolerance(orderTotal: PaymentOrderTotal, currencyDecimalPlaces?: number | null): DecimalValue {
   if (parseDecimal(orderTotal.amountDueExact) === null) return toDecimal(FLOAT_AMOUNT_DUE_TOLERANCE)
   return toDecimal(`5e-${resolveAmountDecimalPlaces(currencyDecimalPlaces) + 1}`)
-}
-
-function normalizeCurrencyCode(currencyCode: string): string {
-  return currencyCode.trim().toUpperCase()
 }
 
 /**
@@ -58,16 +55,25 @@ export function assertSessionAmountMatchesOrderTotal(
   translate: TranslateWithFallbackFn,
   currencyDecimalPlaces?: number | null,
 ): void {
-  if (normalizeCurrencyCode(requested.currencyCode) !== normalizeCurrencyCode(orderTotal.currencyCode)) {
-    throw conflict(translate(
-      'payment_gateways.errors.sessionCurrencyMismatch',
-      'Payment session currency {currencyCode} does not match the currency of order {orderId}',
-      { currencyCode: normalizeCurrencyCode(requested.currencyCode), orderId: requested.orderId },
-    ))
-  }
-  const requestedAmount = toDecimal(resolveExactDecimal(requested.amountExact, requested.amount) ?? 0)
-  const amountDue = resolveExactDecimal(orderTotal.amountDueExact, orderTotal.amountDue) ?? '0'
-  if (requestedAmount.minus(amountDue).abs().gt(amountTolerance(orderTotal, currencyDecimalPlaces))) {
+  const currencyMismatch = () => conflict(translate(
+    'payment_gateways.errors.sessionCurrencyMismatch',
+    'Payment session currency {currencyCode} does not match the currency of order {orderId}',
+    { currencyCode: requested.currencyCode.trim().toUpperCase(), orderId: requested.orderId },
+  ))
+  if (!requested.currencyCode.trim() || !orderTotal.currencyCode?.trim()) throw currencyMismatch()
+  const amountDecimalPlaces = resolveAmountDecimalPlaces(currencyDecimalPlaces)
+  const requestedAmount = MoneyValue.of(
+    resolveExactDecimal(requested.amountExact, requested.amount) ?? 0,
+    requested.currencyCode,
+    amountDecimalPlaces,
+  )
+  const amountDue = MoneyValue.of(
+    resolveExactDecimal(orderTotal.amountDueExact, orderTotal.amountDue) ?? 0,
+    orderTotal.currencyCode,
+    amountDecimalPlaces,
+  )
+  if (!requestedAmount.isSameCurrency(amountDue)) throw currencyMismatch()
+  if (requestedAmount.minus(amountDue).amount.abs().gt(amountTolerance(orderTotal, currencyDecimalPlaces))) {
     throw conflict(translate(
       'payment_gateways.errors.sessionAmountMismatch',
       'Payment session amount {amount} does not match the amount due for order {orderId}',

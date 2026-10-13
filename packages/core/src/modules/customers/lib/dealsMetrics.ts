@@ -7,9 +7,9 @@ import {
   divideDecimals,
   parseDecimal,
   roundDecimal,
-  toDecimal,
   type DecimalValue,
 } from '@open-mercato/shared/lib/decimal'
+import { MoneyValue } from '@open-mercato/shared/lib/money'
 
 /**
  * Quarter / period helpers for the deals KPI summary. Computed in **UTC** so the
@@ -166,19 +166,19 @@ export function convertSumsToBase(
     return { total: 0, totalExact: '0', convertedAll: missing.length === 0, missingRateCurrencies: missing }
   }
 
-  let total = toDecimal(0)
+  let total = MoneyValue.zero(baseCode)
   let convertedAll = true
   const missingRateCurrencies: string[] = []
   for (const entry of perCurrency) {
     if (!entry.currency) continue
-    const amount = parseDecimal(entry.totalExact ?? entry.total) ?? toDecimal(0)
-    if (entry.currency === baseCode) {
+    const amount = MoneyValue.of(parseDecimal(entry.totalExact ?? entry.total) ?? 0, entry.currency)
+    if (amount.isSameCurrency(total)) {
       total = total.plus(amount)
       continue
     }
     const rate = extractRate(rates?.get(`${entry.currency}/${baseCode}`))
     if (rate !== null) {
-      total = total.plus(amount.times(rate))
+      total = total.plus(amount.convert(rate, baseCode))
     } else {
       convertedAll = false
       if (!missingRateCurrencies.includes(entry.currency)) {
@@ -187,8 +187,8 @@ export function convertSumsToBase(
     }
   }
   return {
-    total: decimalToNumber(roundDecimal(total, 0)),
-    totalExact: decimalToString(total),
+    total: decimalToNumber(roundDecimal(total.amount, 0)),
+    totalExact: decimalToString(total.amount),
     convertedAll,
     missingRateCurrencies,
   }
@@ -203,22 +203,22 @@ export function normalizeCurrencyCode(currency: string | null | undefined): stri
  * Entries without a currency are skipped.
  */
 export function sumsByCurrency(entries: AmountEntry[]): ExactCurrencySum[] {
-  const sums: Array<{ currency: string; total: DecimalValue }> = []
+  const sums: MoneyValue[] = []
   for (const entry of entries) {
     const currency = normalizeCurrencyCode(entry.currency)
     if (!currency) continue
-    const amount = parseDecimal(entry.amount) ?? toDecimal(0)
-    const existing = sums.find((sum) => sum.currency === currency)
-    if (existing) {
-      existing.total = existing.total.plus(amount)
+    const amount = MoneyValue.of(parseDecimal(entry.amount) ?? 0, currency)
+    const index = sums.findIndex((sum) => sum.isSameCurrency(amount))
+    if (index >= 0) {
+      sums[index] = sums[index].plus(amount)
     } else {
-      sums.push({ currency, total: amount })
+      sums.push(amount)
     }
   }
   return sums.map((sum) => ({
-    currency: sum.currency,
-    total: decimalToNumber(sum.total),
-    totalExact: decimalToString(sum.total),
+    currency: sum.currencyCode,
+    total: decimalToNumber(sum.amount),
+    totalExact: decimalToString(sum.amount),
   }))
 }
 

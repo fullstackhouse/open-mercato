@@ -133,4 +133,20 @@ describe('session amount reconciliation tolerance', () => {
     await expect(reconcileExact({ amountExact: '1.5001', total, currencyDecimalPlaces: null })).rejects.toMatchObject({ status: 409 })
     await expect(reconcileExact({ amountExact: '1.5002', total })).rejects.toMatchObject({ status: 409 })
   })
+
+  it('matches currencies case-insensitively', async () => {
+    const total = { orderId: ORDER_ID, currencyCode: 'usd', amountDue: 1.5, amountDueExact: '1.5' }
+    await expect(reconcileExact({ amountExact: '1.5', total })).resolves.toBeUndefined()
+  })
+
+  it('treats a blank order currency as a currency mismatch', async () => {
+    const total = { orderId: ORDER_ID, currencyCode: ' ', amountDue: 1.5, amountDueExact: '1.5' }
+    await expect(reconcileSessionAmountWithOrder({
+      orderId: ORDER_ID,
+      amount: 1.5,
+      currencyCode: 'USD',
+      scope,
+      resolver: makeResolver(total),
+    })).rejects.toMatchObject({ status: 409 })
+  })
 })

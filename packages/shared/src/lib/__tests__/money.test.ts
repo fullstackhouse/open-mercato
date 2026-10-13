@@ -16,12 +16,13 @@ describe('MoneyValue', () => {
     expect(MoneyValue.of('0.1', 'USD').plus(MoneyValue.of('0.2', 'USD')).amount.toString()).toBe('0.3')
   })
 
-  it('rounds division and conversion to the money precision', () => {
+  it('rounds division to the money precision and keeps conversion exact', () => {
     expect(MoneyValue.of('100', 'USD').dividedBy('3').amount.toString()).toBe('33.3333')
     expect(MoneyValue.of('100', 'USD', 2).dividedBy('3').amount.toString()).toBe('33.33')
     const converted = MoneyValue.of('10', 'USD').convert('3.987654321', 'PLN', 2)
     expect(converted.currencyCode).toBe('PLN')
-    expect(converted.amount.toString()).toBe('39.88')
+    expect(converted.amount.toString()).toBe('39.87654321')
+    expect(converted.round().amount.toString()).toBe('39.88')
     expect(MoneyValue.of('2.345', 'USD', 2).round().amount.toString()).toBe('2.35')
   })
 

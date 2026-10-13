@@ -27,9 +27,9 @@ function normalizeDecimalPlaces(decimalPlaces: number | null | undefined, curren
 }
 
 /**
- * An exact amount in one currency. `decimalPlaces` is the precision a derived
- * amount (division, conversion, `round()`) is rounded to; addition, subtraction
- * and multiplication stay exact. Arithmetic across currencies throws.
+ * An exact amount in one currency. `decimalPlaces` is the precision `dividedBy`
+ * and `round()` round to; addition, subtraction, multiplication and conversion
+ * stay exact. Arithmetic across currencies throws.
  */
 export class MoneyValue {
   readonly amount: DecimalValue
@@ -95,9 +95,9 @@ export class MoneyValue {
     return this.#with(this.amount.round(this.decimalPlaces))
   }
 
-  /** Converts with `rate` (units of `currencyCode` per unit of this currency), rounded to the target precision. */
+  /** Converts with `rate` (units of `currencyCode` per unit of this currency). Exact; `round()` before storing. */
   convert(rate: DecimalInput, currencyCode: string, decimalPlaces?: number | null): MoneyValue {
-    return MoneyValue.of(this.amount.times(rate), currencyCode, decimalPlaces).round()
+    return MoneyValue.of(this.amount.times(rate), currencyCode, decimalPlaces)
   }
 
   compare(other: MoneyValue): -1 | 0 | 1 {
