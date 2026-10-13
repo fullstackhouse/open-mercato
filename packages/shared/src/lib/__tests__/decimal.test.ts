@@ -3,6 +3,7 @@ import {
   addDecimals,
   amountComparisonTolerance,
   compareDecimals,
+  DecimalValue,
   decimalStringSchema,
   decimalToString,
   divideDecimals,
@@ -311,5 +312,59 @@ describe('withDecimalCaps', () => {
     expect(schema.parse('12.5')).toBe(12.5)
     expect(schema.parse('')).toBe(0)
     expect(schema.safeParse(-1).success).toBe(false)
+  })
+})
+
+describe('DecimalValue', () => {
+  it('does exact arithmetic through its own methods', () => {
+    const value = DecimalValue.from('0.1').plus('0.2').times(3).minus(DecimalValue.from('0.4'))
+    expect(value.toString()).toBe('0.5')
+    expect(DecimalValue.from(10).dividedBy(4).toString()).toBe('2.5')
+    expect(DecimalValue.from('-2.5').round(0).toString()).toBe('-3')
+    expect(DecimalValue.from('-2.5').abs().negate().toString()).toBe('-2.5')
+  })
+
+  it('compares against any decimal input', () => {
+    const value = DecimalValue.from('1.50')
+    expect(value.equals('1.5')).toBe(true)
+    expect(value.gt(1)).toBe(true)
+    expect(value.gte('1.5')).toBe(true)
+    expect(value.lt(DecimalValue.from(2))).toBe(true)
+    expect(value.lte('1.4')).toBe(false)
+    expect(value.compare('1.6')).toBe(-1)
+    expect(DecimalValue.zero().isZero()).toBe(true)
+    expect(DecimalValue.from('-0.1').isNegative()).toBe(true)
+    expect(DecimalValue.from('0.1').isPositive()).toBe(true)
+  })
+
+  it('converts to its canonical string everywhere a string is expected', () => {
+    const value = DecimalValue.from('0.000000100')
+    expect(value.toString()).toBe('0.0000001')
+    expect(`${value}`).toBe('0.0000001')
+    expect(JSON.stringify({ value })).toBe('{"value":"0.0000001"}')
+    expect(Number(value)).toBe(1e-7)
+    expect(value.toNumber()).toBe(1e-7)
+    expect(value.toFixed(9)).toBe('0.000000100')
+    expect(value.decimalPlaces()).toBe(7)
+    expect(DecimalValue.from('1.23456').toSignificantDigits(3).toString()).toBe('1.23')
+  })
+
+  it('creates values from nullable and unknown input', () => {
+    expect(DecimalValue.fromNullable(null)).toBeNull()
+    expect(DecimalValue.fromNullable(undefined)).toBeNull()
+    expect(DecimalValue.fromNullable('1.5')?.toString()).toBe('1.5')
+    expect(DecimalValue.parse('abc')).toBeNull()
+    expect(DecimalValue.parse('')).toBeNull()
+    expect(DecimalValue.parse('+7')?.toString()).toBe('7')
+    expect(() => DecimalValue.from('abc')).toThrow('[internal] Invalid decimal value')
+    expect(() => DecimalValue.from(Number.NaN)).toThrow('[internal] Invalid decimal value')
+  })
+
+  it('recognises values by brand, not by class identity', () => {
+    const foreign = { [Symbol.for('@open-mercato/shared/DecimalValue')]: true, toString: () => '42.5' }
+    expect(DecimalValue.isDecimalValue(foreign)).toBe(true)
+    expect(DecimalValue.from(foreign as unknown as DecimalValue).plus(1).toString()).toBe('43.5')
+    expect(DecimalValue.isDecimalValue('42.5')).toBe(false)
+    expect(isDecimalInput(DecimalValue.from(1))).toBe(true)
   })
 })

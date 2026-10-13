@@ -21,7 +21,7 @@ function toNumeric(value: unknown): number {
 }
 
 function sameAmount(leftExact: unknown, left: unknown, rightExact: unknown, right: unknown): boolean {
-  return toDecimalOrZero(resolveExactDecimal(leftExact, left)).eq(toDecimalOrZero(resolveExactDecimal(rightExact, right)))
+  return toDecimalOrZero(resolveExactDecimal(leftExact, left)).equals(toDecimalOrZero(resolveExactDecimal(rightExact, right)))
 }
 
 function toDecimalOrZero(value: string | null) {
@@ -194,7 +194,7 @@ export function resolveUpsertCalculatedAmounts(
   const discountChanged =
     (nextSnapshot.discountPercent ?? 0) !== (existingSnapshot?.discountPercent ?? 0) ||
     ((nextSnapshot.discountPercent ?? 0) === 0 &&
-      !roundDecimal(nextDiscountLineAmount, discountScale).eq(existingDiscountAmount))
+      !roundDecimal(nextDiscountLineAmount, discountScale).equals(existingDiscountAmount))
   const pricingChanged = existingSnapshot === null || discountChanged ||
     numberPricingFields.some((field) => (nextSnapshot[field] ?? 0) !== (existingSnapshot[field] ?? 0)) ||
     amountPricingFields.some((field) => !sameAmount(

@@ -285,7 +285,7 @@ const shippingProviders: ShippingProvider[] = [
         }
       }
       const selected = selectFlatRate(parsed.data, metrics)
-      const baseAdjustment = parsed.data.applyBaseRate !== false && (!baseNet.eq(0) || !baseGross.eq(0))
+      const baseAdjustment = parsed.data.applyBaseRate !== false && (!baseNet.equals(0) || !baseGross.equals(0))
       const chosenNet = selected ? exactOr(selected.amountNet, undefined, baseNet) : baseNet
       const chosenGross = selected ? exactOr(selected.amountGross, undefined, chosenNet) : baseGross
       const currency =

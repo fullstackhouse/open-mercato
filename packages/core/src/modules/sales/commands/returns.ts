@@ -691,8 +691,8 @@ const createReturnCommand: CommandHandler<ReturnCreateInput, { returnId: string 
         const unitGross = lineQuantity > 0
           ? divideDecimals(toNumericString(line.totalGrossAmount) ?? '0', lineQuantity, FX_DECIMAL_PLACES)
           : toDecimal(toNumericString(line.unitPriceGross) ?? '0')
-        const totalNet = roundDecimal(nonNegative(unitNet).times(quantity), amountDecimalPlaces).neg()
-        const totalGross = roundDecimal(nonNegative(unitGross).times(quantity), amountDecimalPlaces).neg()
+        const totalNet = roundDecimal(nonNegative(unitNet).times(quantity), amountDecimalPlaces).negate()
+        const totalGross = roundDecimal(nonNegative(unitGross).times(quantity), amountDecimalPlaces).negate()
 
         const returnLineId = randomUUID()
         const returnLine = tx.create(SalesReturnLine, {

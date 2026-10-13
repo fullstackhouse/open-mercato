@@ -445,7 +445,7 @@ export function resolveSubmittedAmount(
     if (expected == null || !link.fixedPriceCurrencyCode) {
       throw new CrudHttpError(422, { error: 'checkout.payPage.errors.submit' })
     }
-    if (input.amount != null && (!submitted || !submitted.eq(expected))) {
+    if (input.amount != null && (!submitted || !submitted.equals(expected))) {
       throw new CrudHttpError(422, { error: 'checkout.payPage.errors.submit' })
     }
     return withAmount(expected, link.fixedPriceCurrencyCode, null)
@@ -475,7 +475,7 @@ export function resolveSubmittedAmount(
     })
   }
   const itemAmount = parseDecimal(resolveExactDecimal(selectedPriceItem.amountExact, selectedPriceItem.amount))
-  if (!itemAmount || (input.amount != null && (!submitted || !submitted.eq(itemAmount)))) {
+  if (!itemAmount || (input.amount != null && (!submitted || !submitted.equals(itemAmount)))) {
     throw new CrudHttpError(422, { error: 'checkout.payPage.errors.submit' })
   }
   return withAmount(itemAmount, selectedPriceItem.currencyCode, selectedPriceItem.id)

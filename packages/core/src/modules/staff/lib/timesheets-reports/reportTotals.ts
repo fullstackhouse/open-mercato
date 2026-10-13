@@ -301,7 +301,7 @@ function distinctRate(values: readonly ExactResolvedEntryValues[]): string | nul
     }
     const same = rate === null || value.rateExact === null
       ? rate === value.rateExact
-      : parseDecimal(rate)!.eq(value.rateExact)
+      : parseDecimal(rate)!.equals(value.rateExact)
     if (!same) return null
   }
   return rate

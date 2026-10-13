@@ -169,7 +169,7 @@ export class DefaultTaxCalculationService implements TaxCalculationService {
 
 function enteredDecimalPlaces(input: CalculateTaxInput, amount: DecimalValue): number {
   const exact = input.amountExact
-  if (typeof exact !== 'string' || !isDecimalInput(exact) || !toDecimal(exact).eq(amount)) return 0
+  if (typeof exact !== 'string' || !isDecimalInput(exact) || !toDecimal(exact).equals(amount)) return 0
   return countDecimalPlaces(amount)
 }
 

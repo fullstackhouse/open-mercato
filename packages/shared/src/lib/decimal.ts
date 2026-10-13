@@ -1,20 +1,27 @@
-import BigConstructor from 'big.js'
-import type { Big, BigSource } from 'big.js'
 import { z } from 'zod'
+import {
+  engineAbs,
+  engineAdd,
+  engineCompare,
+  engineDivide,
+  engineMagnitude,
+  engineMultiply,
+  engineNegate,
+  engineRound,
+  engineRoundToSignificantDigits,
+  engineSubtract,
+  engineToFixed,
+  engineToString,
+  parseEngineDecimal,
+  type EngineDecimal,
+} from './decimalEngine'
 import { ISO_4217_MINOR_UNITS } from './isoCurrencyMinorUnits'
 
-export type DecimalValue = Big
-export type DecimalInput = string | number | Big
+export type DecimalInput = string | number | DecimalValue
 
 export const FX_DECIMAL_PLACES = 50
 export const MIN_SIGNIFICANT_DIGITS = 17
 export const DEFAULT_AMOUNT_DECIMAL_PLACES = 4
-
-const ROUND_HALF_UP = 1
-
-const Decimal = BigConstructor()
-Decimal.DP = FX_DECIMAL_PLACES
-Decimal.RM = ROUND_HALF_UP
 
 /**
  * Largest exponent accepted in a decimal string, and the lowest decimal position
@@ -62,81 +69,226 @@ function isDecimalNumber(value: number): boolean {
   return Number.isFinite(value) && isDecimalString(String(value))
 }
 
-export function isDecimalInput(value: unknown): value is DecimalInput {
-  if (typeof value === 'number') return isDecimalNumber(value)
-  if (typeof value === 'string') return isDecimalString(value.trim())
-  return value instanceof BigConstructor
-}
+const DECIMAL_VALUE_BRAND = Symbol.for('@open-mercato/shared/DecimalValue')
 
-export function toDecimal(value: DecimalInput): DecimalValue {
-  if (typeof value === 'number') {
-    if (!isDecimalNumber(value)) throw new Error(`[internal] Invalid decimal value: ${value}`)
-    return new Decimal(value)
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    if (!isDecimalString(trimmed)) throw new Error(`[internal] Invalid decimal value: ${value.slice(0, 50)}`)
-    return new Decimal(trimmed.startsWith('+') ? trimmed.slice(1) : trimmed)
-  }
-  return new Decimal(value as BigSource)
-}
-
-export function parseDecimal(value: unknown): DecimalValue | null {
-  if (value === null || value === undefined || value === '') return null
-  if (!isDecimalInput(value)) return null
-  return toDecimal(value)
-}
-
-export function decimalToString(value: DecimalInput): string {
-  return toDecimal(value).toFixed()
-}
-
-export function addDecimals(left: DecimalInput, right: DecimalInput): DecimalValue {
-  return toDecimal(left).plus(toDecimal(right))
-}
-
-export function subtractDecimals(left: DecimalInput, right: DecimalInput): DecimalValue {
-  return toDecimal(left).minus(toDecimal(right))
-}
-
-export function multiplyDecimals(left: DecimalInput, right: DecimalInput): DecimalValue {
-  return toDecimal(left).times(toDecimal(right))
-}
-
-export function sumDecimals(values: DecimalInput[]): DecimalValue {
-  return values.reduce<DecimalValue>((total, value) => total.plus(toDecimal(value)), new Decimal(0))
+function invalidDecimal(value: string | number): Error {
+  return new Error(`[internal] Invalid decimal value: ${String(value).slice(0, 50)}`)
 }
 
 /**
- * Divides with at least `decimalPlaces` decimals and never fewer than
- * MIN_SIGNIFICANT_DIGITS significant digits, so a quotient is never less
- * precise than the same division done on a JS `number`.
+ * An exact decimal number - money, FX rates, quantities, tax rates. Immutable;
+ * the decimal library stays hidden behind `./decimalEngine`. Converts to its
+ * canonical plain-notation string (`toString`, `toJSON`, `valueOf`), so
+ * `String(x)`, `Number(x)` and `JSON.stringify` see the stored representation.
  */
+export class DecimalValue {
+  readonly #value: EngineDecimal
+
+  private constructor(value: EngineDecimal) {
+    this.#value = value
+  }
+
+  static from(input: DecimalInput): DecimalValue {
+    return new DecimalValue(DecimalValue.#engineOf(input))
+  }
+
+  static fromNullable(input: DecimalInput | null | undefined): DecimalValue | null {
+    return input === null || input === undefined ? null : DecimalValue.from(input)
+  }
+
+  /** `null` for blank, missing or invalid input. */
+  static parse(input: unknown): DecimalValue | null {
+    if (input === null || input === undefined || input === '') return null
+    if (!isDecimalInput(input)) return null
+    return DecimalValue.from(input)
+  }
+
+  static zero(): DecimalValue {
+    return DecimalValue.from(0)
+  }
+
+  /** Brand check that also accepts a value created by another copy of this package. */
+  static isDecimalValue(value: unknown): value is DecimalValue {
+    return typeof value === 'object' && value !== null && (value as Record<symbol, unknown>)[DECIMAL_VALUE_BRAND] === true
+  }
+
+  static #engineOf(input: DecimalInput): EngineDecimal {
+    if (input instanceof DecimalValue) return input.#value
+    if (typeof input === 'number') {
+      if (!isDecimalNumber(input)) throw invalidDecimal(input)
+      return parseEngineDecimal(String(input))
+    }
+    if (typeof input === 'string') {
+      const trimmed = input.trim()
+      if (!isDecimalString(trimmed)) throw invalidDecimal(input)
+      return parseEngineDecimal(trimmed.startsWith('+') ? trimmed.slice(1) : trimmed)
+    }
+    if (DecimalValue.isDecimalValue(input)) return DecimalValue.#engineOf(String(input))
+    throw new Error('[internal] Invalid decimal value')
+  }
+
+  plus(other: DecimalInput): DecimalValue {
+    return new DecimalValue(engineAdd(this.#value, DecimalValue.#engineOf(other)))
+  }
+
+  minus(other: DecimalInput): DecimalValue {
+    return new DecimalValue(engineSubtract(this.#value, DecimalValue.#engineOf(other)))
+  }
+
+  times(other: DecimalInput): DecimalValue {
+    return new DecimalValue(engineMultiply(this.#value, DecimalValue.#engineOf(other)))
+  }
+
+  /**
+   * Divides with at least `decimalPlaces` decimals and never fewer than
+   * MIN_SIGNIFICANT_DIGITS significant digits, so a quotient is never less
+   * precise than the same division done on a JS `number`.
+   */
+  dividedBy(divisor: DecimalInput, decimalPlaces: number = FX_DECIMAL_PLACES): DecimalValue {
+    const right = DecimalValue.#engineOf(divisor)
+    if (engineCompare(right, ZERO) === 0) throw new Error('[internal] Division by zero')
+    if (this.isZero()) return DecimalValue.zero()
+    const significantDecimalPlaces = MIN_SIGNIFICANT_DIGITS - (engineMagnitude(this.#value) - engineMagnitude(right))
+    return new DecimalValue(engineDivide(this.#value, right, Math.max(decimalPlaces, significantDecimalPlaces, 0)))
+  }
+
+  /** Rounds half-up (away from zero) to `decimalPlaces`. */
+  round(decimalPlaces: number): DecimalValue {
+    return new DecimalValue(engineRound(this.#value, decimalPlaces))
+  }
+
+  toSignificantDigits(significantDigits: number): DecimalValue {
+    return new DecimalValue(engineRoundToSignificantDigits(this.#value, significantDigits))
+  }
+
+  abs(): DecimalValue {
+    return new DecimalValue(engineAbs(this.#value))
+  }
+
+  negate(): DecimalValue {
+    return new DecimalValue(engineNegate(this.#value))
+  }
+
+  compare(other: DecimalInput): -1 | 0 | 1 {
+    return engineCompare(this.#value, DecimalValue.#engineOf(other))
+  }
+
+  equals(other: DecimalInput): boolean {
+    return this.compare(other) === 0
+  }
+
+  lt(other: DecimalInput): boolean {
+    return this.compare(other) < 0
+  }
+
+  lte(other: DecimalInput): boolean {
+    return this.compare(other) <= 0
+  }
+
+  gt(other: DecimalInput): boolean {
+    return this.compare(other) > 0
+  }
+
+  gte(other: DecimalInput): boolean {
+    return this.compare(other) >= 0
+  }
+
+  isZero(): boolean {
+    return engineCompare(this.#value, ZERO) === 0
+  }
+
+  isNegative(): boolean {
+    return engineCompare(this.#value, ZERO) < 0
+  }
+
+  isPositive(): boolean {
+    return engineCompare(this.#value, ZERO) > 0
+  }
+
+  decimalPlaces(): number {
+    const fraction = this.toString().split('.')[1]
+    return fraction ? fraction.length : 0
+  }
+
+  /** Rounds half-up to `decimalPlaces` and pads with zeros to exactly that many decimals. */
+  toFixed(decimalPlaces: number): string {
+    return engineToFixed(this.#value, decimalPlaces)
+  }
+
+  toNumber(): number {
+    return Number(this.toString())
+  }
+
+  toString(): string {
+    return engineToString(this.#value)
+  }
+
+  toJSON(): string {
+    return this.toString()
+  }
+
+  valueOf(): string {
+    return this.toString()
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `DecimalValue(${this.toString()})`
+  }
+}
+
+Object.defineProperty(DecimalValue.prototype, DECIMAL_VALUE_BRAND, { value: true })
+
+const ZERO = parseEngineDecimal('0')
+
+export function isDecimalInput(value: unknown): value is DecimalInput {
+  if (typeof value === 'number') return isDecimalNumber(value)
+  if (typeof value === 'string') return isDecimalString(value.trim())
+  return DecimalValue.isDecimalValue(value)
+}
+
+export function toDecimal(value: DecimalInput): DecimalValue {
+  return DecimalValue.from(value)
+}
+
+export function parseDecimal(value: unknown): DecimalValue | null {
+  return DecimalValue.parse(value)
+}
+
+export function decimalToString(value: DecimalInput): string {
+  return toDecimal(value).toString()
+}
+
+export function addDecimals(left: DecimalInput, right: DecimalInput): DecimalValue {
+  return toDecimal(left).plus(right)
+}
+
+export function subtractDecimals(left: DecimalInput, right: DecimalInput): DecimalValue {
+  return toDecimal(left).minus(right)
+}
+
+export function multiplyDecimals(left: DecimalInput, right: DecimalInput): DecimalValue {
+  return toDecimal(left).times(right)
+}
+
+export function sumDecimals(values: DecimalInput[]): DecimalValue {
+  return values.reduce<DecimalValue>((total, value) => total.plus(value), DecimalValue.zero())
+}
+
+/** See `DecimalValue.dividedBy`. */
 export function divideDecimals(
   dividend: DecimalInput,
   divisor: DecimalInput,
   decimalPlaces: number = FX_DECIMAL_PLACES,
 ): DecimalValue {
-  const left = toDecimal(dividend)
-  const right = toDecimal(divisor)
-  if (right.eq(0)) throw new Error('[internal] Division by zero')
-  if (left.eq(0)) return new Decimal(0)
-  const significantDecimalPlaces = MIN_SIGNIFICANT_DIGITS - (left.e - right.e)
-  const previousDecimalPlaces = Decimal.DP
-  Decimal.DP = Math.max(decimalPlaces, significantDecimalPlaces, 0)
-  try {
-    return left.div(right)
-  } finally {
-    Decimal.DP = previousDecimalPlaces
-  }
+  return toDecimal(dividend).dividedBy(divisor, decimalPlaces)
 }
 
 export function roundDecimal(value: DecimalInput, decimalPlaces: number): DecimalValue {
-  return toDecimal(value).round(decimalPlaces, ROUND_HALF_UP)
+  return toDecimal(value).round(decimalPlaces)
 }
 
 export function compareDecimals(left: DecimalInput, right: DecimalInput): -1 | 0 | 1 {
-  return toDecimal(left).cmp(toDecimal(right)) as -1 | 0 | 1
+  return toDecimal(left).compare(right)
 }
 
 export function decimalsEqual(left: DecimalInput, right: DecimalInput): boolean {
@@ -144,11 +296,11 @@ export function decimalsEqual(left: DecimalInput, right: DecimalInput): boolean 
 }
 
 export function isZeroDecimal(value: DecimalInput): boolean {
-  return toDecimal(value).eq(0)
+  return toDecimal(value).isZero()
 }
 
 export function isNegativeDecimal(value: DecimalInput): boolean {
-  return toDecimal(value).lt(0)
+  return toDecimal(value).isNegative()
 }
 
 export function absDecimal(value: DecimalInput): DecimalValue {
@@ -156,7 +308,7 @@ export function absDecimal(value: DecimalInput): DecimalValue {
 }
 
 export function negateDecimal(value: DecimalInput): DecimalValue {
-  return toDecimal(value).neg()
+  return toDecimal(value).negate()
 }
 
 export function minDecimal(...values: DecimalInput[]): DecimalValue {
@@ -168,18 +320,17 @@ export function maxDecimal(...values: DecimalInput[]): DecimalValue {
 }
 
 export function countDecimalPlaces(value: DecimalInput): number {
-  const fraction = decimalToString(value).split('.')[1]
-  return fraction ? fraction.length : 0
+  return toDecimal(value).decimalPlaces()
 }
 
 /** Plain decimal string with at least `minDecimalPlaces` decimals (`12.5` -> `12.50`), never cut. */
 export function padDecimalPlaces(value: DecimalInput, minDecimalPlaces: number): string {
   const decimal = toDecimal(value)
-  return decimal.toFixed(Math.max(minDecimalPlaces, countDecimalPlaces(decimal)))
+  return decimal.toFixed(Math.max(minDecimalPlaces, decimal.decimalPlaces()))
 }
 
 export function decimalToNumber(value: DecimalInput): number {
-  return Number(decimalToString(value))
+  return toDecimal(value).toNumber()
 }
 
 /**
@@ -189,7 +340,7 @@ export function decimalToNumber(value: DecimalInput): number {
  */
 function matchesLegacyNumber(exact: DecimalValue, legacy: number): boolean {
   if (decimalToNumber(exact) !== legacy) return false
-  return legacy !== 0 || exact.eq(0)
+  return legacy !== 0 || exact.isZero()
 }
 
 /**
@@ -344,6 +495,6 @@ export const nonNegativeDecimalStringSchema = decimalStringSchema.refine(
 )
 
 export const positiveDecimalStringSchema = decimalStringSchema.refine(
-  (value) => toDecimal(value).gt(0),
+  (value) => toDecimal(value).isPositive(),
   { message: 'decimalMustBePositive' },
 )

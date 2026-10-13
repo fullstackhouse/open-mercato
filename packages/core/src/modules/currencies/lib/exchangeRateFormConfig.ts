@@ -246,5 +246,5 @@ export function buildExchangeRatePayload(values: Record<string, unknown>, valida
 /** Rate for list display: at most 17 significant digits; the raw value when it is not a decimal. */
 export function formatRateForDisplay(rate: string): string {
   const parsed = parseDecimal(rate)
-  return parsed ? decimalToString(parsed.prec(MIN_SIGNIFICANT_DIGITS)) : rate
+  return parsed ? decimalToString(parsed.toSignificantDigits(MIN_SIGNIFICANT_DIGITS)) : rate
 }

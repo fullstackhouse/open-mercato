@@ -16,6 +16,6 @@ export class ExactDecimalType extends DecimalType {
     const leftDecimal = parseDecimal(left)
     const rightDecimal = parseDecimal(right)
     if (!leftDecimal || !rightDecimal) return left === right
-    return leftDecimal.eq(rightDecimal)
+    return leftDecimal.equals(rightDecimal)
   }
 }

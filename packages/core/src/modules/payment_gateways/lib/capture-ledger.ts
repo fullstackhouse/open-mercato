@@ -189,7 +189,7 @@ export function settleCapturedAmount(
   const reserved = toLedgerAmount(reservedAmount)
   const reported = capturedAmount === undefined ? null : parseDecimal(capturedAmount)
   const actual = reported && reported.gte(0) ? reported : reserved
-  if (actual.eq(reserved)) return
+  if (actual.equals(reserved)) return
   const settled = toLedgerAmount(transaction.capturedAmount).minus(reserved).plus(actual)
   transaction.capturedAmount = decimalToString(nonNegative(settled))
 }

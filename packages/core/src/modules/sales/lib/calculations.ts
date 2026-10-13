@@ -159,7 +159,7 @@ function resolveLineDiscountTotal(
   }
 
   const amount = exactAmount(line.discountAmountExact, line.discountAmount)
-  if (amount === null || amount.eq(0)) return ZERO
+  if (amount === null || amount.equals(0)) return ZERO
 
   // A snapshot rebuilt from a persisted row already holds a line total, so it
   // is never multiplied out again. Anything else came from a caller and keeps
@@ -323,12 +323,12 @@ function buildBaseDocumentResult(params: {
         discountTotal = discountTotal.plus(net)
         subtotalNet = maxOf(subtotalNet.minus(net), ZERO)
         subtotalGross = maxOf(subtotalGross.minus(gross), ZERO)
-        if (!taxPortion.eq(0)) {
+        if (!taxPortion.equals(0)) {
           taxTotal = round(taxTotal.minus(taxPortion))
         }
         break
       case 'tax': {
-        const taxValue = gross.eq(0) ? net : gross
+        const taxValue = gross.equals(0) ? net : gross
         taxTotal = taxTotal.plus(taxValue)
         subtotalGross = subtotalGross.plus(taxValue)
         break
@@ -338,15 +338,15 @@ function buildBaseDocumentResult(params: {
         shippingGross = shippingGross.plus(gross)
         subtotalNet = subtotalNet.plus(net)
         subtotalGross = subtotalGross.plus(gross)
-        if (!taxPortion.eq(0)) {
+        if (!taxPortion.equals(0)) {
           taxTotal = taxTotal.plus(taxPortion)
         }
         break
       case 'surcharge':
-        surchargeTotal = surchargeTotal.plus(net.eq(0) ? gross : net)
-        subtotalNet = subtotalNet.plus(net.eq(0) ? gross : net)
-        subtotalGross = subtotalGross.plus(gross.eq(0) ? net : gross)
-        if (!taxPortion.eq(0)) {
+        surchargeTotal = surchargeTotal.plus(net.equals(0) ? gross : net)
+        subtotalNet = subtotalNet.plus(net.equals(0) ? gross : net)
+        subtotalGross = subtotalGross.plus(gross.equals(0) ? net : gross)
+        if (!taxPortion.equals(0)) {
           taxTotal = taxTotal.plus(taxPortion)
         }
         break
@@ -363,7 +363,7 @@ function buildBaseDocumentResult(params: {
         // (see enforceAdjustmentSign).
         subtotalNet = subtotalNet.plus(net)
         subtotalGross = subtotalGross.plus(gross)
-        if (!taxPortion.eq(0)) {
+        if (!taxPortion.equals(0)) {
           taxTotal = taxTotal.plus(taxPortion)
         }
         break
@@ -547,11 +547,11 @@ export function reconcileHookAmount(
   const nextExact = typeof exact === 'string' ? exactAmount(exact, undefined) : null
   if (nextExact !== null && before !== undefined) {
     const previousExact = typeof before.exact === 'string' ? exactAmount(before.exact, undefined) : null
-    if (previousExact === null || !previousExact.eq(nextExact)) return nextExact
+    if (previousExact === null || !previousExact.equals(nextExact)) return nextExact
   }
   const resolved = exactAmount(exact, value)
   if (resolved === null) return null
-  if (nextExact !== null && nextExact.eq(resolved)) return nextExact
+  if (nextExact !== null && nextExact.equals(resolved)) return nextExact
   return roundDecimal(resolved, decimalPlaces)
 }
 
