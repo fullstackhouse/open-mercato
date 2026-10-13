@@ -1,4 +1,6 @@
+import type { Opt } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 
 @Entity({ tableName: 'currencies' })
@@ -91,6 +93,14 @@ export class ExchangeRate {
   // Rate value (unconstrained precision for crypto/forex)
   @Property({ type: ExactDecimalType, columnType: 'numeric' })
   rate!: string
+
+  get rateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.rate)
+  }
+
+  set rateDecimal(value: DecimalValue) {
+    this.rate = value.toString()
+  }
 
   // Date and time when the rate applies (stored as timestamptz)
   @Property({ name: 'date', type: 'timestamptz' })

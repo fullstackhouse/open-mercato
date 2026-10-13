@@ -1,4 +1,4 @@
-import { Collection, OptionalProps } from '@mikro-orm/core'
+import { Collection, OptionalProps, type Opt } from '@mikro-orm/core'
 import {
   Entity,
   Index,
@@ -8,6 +8,7 @@ import {
   Property,
   Unique,
 } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 import type {
   WarrantyClaimChannel,
@@ -158,11 +159,35 @@ export class WarrantyClaim {
   @Property({ name: 'total_claimed_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   totalClaimedAmount?: string | null
 
+  get totalClaimedAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.totalClaimedAmount)
+  }
+
+  set totalClaimedAmountDecimal(value: DecimalValue | null) {
+    this.totalClaimedAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'total_approved_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   totalApprovedAmount?: string | null
 
+  get totalApprovedAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.totalApprovedAmount)
+  }
+
+  set totalApprovedAmountDecimal(value: DecimalValue | null) {
+    this.totalApprovedAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'total_recovered_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   totalRecoveredAmount?: string | null
+
+  get totalRecoveredAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.totalRecoveredAmount)
+  }
+
+  set totalRecoveredAmountDecimal(value: DecimalValue | null) {
+    this.totalRecoveredAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'sla_due_at', type: Date, nullable: true })
   slaDueAt?: Date | null
@@ -232,6 +257,14 @@ export class WarrantyClaimSettings {
 
   @Property({ name: 'auto_approve_max_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   autoApproveMaxAmount?: string | null
+
+  get autoApproveMaxAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.autoApproveMaxAmount)
+  }
+
+  set autoApproveMaxAmountDecimal(value: DecimalValue | null) {
+    this.autoApproveMaxAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'auto_approve_currency_code', type: 'text', nullable: true })
   autoApproveCurrencyCode?: string | null
@@ -335,11 +368,35 @@ export class WarrantyClaimLine {
   @Property({ name: 'qty_claimed', type: 'numeric', precision: 18, scale: 4, default: '1' })
   qtyClaimed: string = '1'
 
+  get qtyClaimedDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.qtyClaimed)
+  }
+
+  set qtyClaimedDecimal(value: DecimalValue) {
+    this.qtyClaimed = value.toString()
+  }
+
   @Property({ name: 'qty_approved', type: 'numeric', precision: 18, scale: 4, nullable: true })
   qtyApproved?: string | null
 
+  get qtyApprovedDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.qtyApproved)
+  }
+
+  set qtyApprovedDecimal(value: DecimalValue | null) {
+    this.qtyApproved = value?.toString() ?? null
+  }
+
   @Property({ name: 'qty_received', type: 'numeric', precision: 18, scale: 4, nullable: true })
   qtyReceived?: string | null
+
+  get qtyReceivedDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.qtyReceived)
+  }
+
+  set qtyReceivedDecimal(value: DecimalValue | null) {
+    this.qtyReceived = value?.toString() ?? null
+  }
 
   @Property({ name: 'condition_on_receipt', type: 'text', nullable: true })
   conditionOnReceipt?: string | null
@@ -365,14 +422,46 @@ export class WarrantyClaimLine {
   @Property({ name: 'credit_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   creditAmount?: string | null
 
+  get creditAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.creditAmount)
+  }
+
+  set creditAmountDecimal(value: DecimalValue | null) {
+    this.creditAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'restocking_fee', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   restockingFee?: string | null
+
+  get restockingFeeDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.restockingFee)
+  }
+
+  set restockingFeeDecimal(value: DecimalValue | null) {
+    this.restockingFee = value?.toString() ?? null
+  }
 
   @Property({ name: 'core_charge_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   coreChargeAmount?: string | null
 
+  get coreChargeAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.coreChargeAmount)
+  }
+
+  set coreChargeAmountDecimal(value: DecimalValue | null) {
+    this.coreChargeAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'core_credit_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   coreCreditAmount?: string | null
+
+  get coreCreditAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.coreCreditAmount)
+  }
+
+  set coreCreditAmountDecimal(value: DecimalValue | null) {
+    this.coreCreditAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'vendor_claim_line_id', type: 'uuid', nullable: true })
   vendorClaimLineId?: string | null
@@ -485,6 +574,14 @@ export class WarrantyVendorPolicy {
 
   @Property({ name: 'recovery_rate_pct', type: 'numeric', precision: 5, scale: 2, nullable: true })
   recoveryRatePct?: string | null
+
+  get recoveryRatePctDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.recoveryRatePct)
+  }
+
+  set recoveryRatePctDecimal(value: DecimalValue | null) {
+    this.recoveryRatePct = value?.toString() ?? null
+  }
 
   @Property({ name: 'contact_email', type: 'text', nullable: true })
   contactEmail?: string | null

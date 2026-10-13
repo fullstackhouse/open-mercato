@@ -1,5 +1,6 @@
 import { Collection, OptionalProps } from '@mikro-orm/core'
 import { Entity, Index, ManyToOne, OneToMany, OneToOne, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 import type { DictionaryEntrySortMode } from '@open-mercato/core/modules/dictionaries/lib/entrySort'
 import type { CalendarEventTypeBehavior } from '../calendar-event-types'
@@ -286,6 +287,14 @@ export class CustomerCompanyProfile {
   @Property({ name: 'annual_revenue', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   annualRevenue?: string | null
 
+  get annualRevenueDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.annualRevenue)
+  }
+
+  set annualRevenueDecimal(value: DecimalValue | null) {
+    this.annualRevenue = value?.toString() ?? null
+  }
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
@@ -338,6 +347,14 @@ export class CustomerDeal {
 
   @Property({ name: 'value_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   valueAmount?: string | null
+
+  get valueAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.valueAmount)
+  }
+
+  set valueAmountDecimal(value: DecimalValue | null) {
+    this.valueAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'value_currency', type: 'text', nullable: true })
   valueCurrency?: string | null

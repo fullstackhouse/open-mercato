@@ -1,5 +1,6 @@
 import { OptionalProps } from '@mikro-orm/core'
 import { Entity, Enum, Index, ManyToOne, PrimaryKey, Property } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 import type { TimeEntrySource } from '../lib/time-tracking/timeEntrySources'
 import type { ReportGrouping } from '../lib/timesheets-reports/reportGroupings'
@@ -447,6 +448,14 @@ export class StaffTimeEntry {
   @Property({ name: 'rate_override_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   rateOverrideAmount?: string | null
 
+  get rateOverrideAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.rateOverrideAmount)
+  }
+
+  set rateOverrideAmountDecimal(value: DecimalValue | null) {
+    this.rateOverrideAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'rate_currency_code', type: 'text', nullable: true })
   rateCurrencyCode?: string | null
 
@@ -555,6 +564,14 @@ export class StaffTimeProject {
   @Property({ name: 'hourly_rate', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   hourlyRate?: string | null
 
+  get hourlyRateDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.hourlyRate)
+  }
+
+  set hourlyRateDecimal(value: DecimalValue | null) {
+    this.hourlyRate = value?.toString() ?? null
+  }
+
   @Property({ name: 'currency_code', type: 'text', nullable: true })
   currencyCode?: string | null
 
@@ -566,6 +583,14 @@ export class StaffTimeProject {
 
   @Property({ name: 'budget_value', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   budgetValue?: string | null
+
+  get budgetValueDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.budgetValue)
+  }
+
+  set budgetValueDecimal(value: DecimalValue | null) {
+    this.budgetValue = value?.toString() ?? null
+  }
 
   @Property({ name: 'budget_warn_at_percent', type: 'integer', default: 80 })
   budgetWarnAtPercent: number = 80
@@ -931,6 +956,14 @@ export class StaffTimeReport {
   @Property({ name: 'total_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   totalAmount?: string | null
 
+  get totalAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.totalAmount)
+  }
+
+  set totalAmountDecimal(value: DecimalValue | null) {
+    this.totalAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'closed_at', type: Date, nullable: true })
   closedAt?: Date | null
 
@@ -1007,11 +1040,27 @@ export class StaffTimeReportEntry {
   @Property({ name: 'frozen_rate_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   frozenRateAmount?: string | null
 
+  get frozenRateAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.frozenRateAmount)
+  }
+
+  set frozenRateAmountDecimal(value: DecimalValue | null) {
+    this.frozenRateAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'frozen_currency_code', type: 'text' })
   frozenCurrencyCode!: string
 
   @Property({ name: 'frozen_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   frozenAmount?: string | null
+
+  get frozenAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.frozenAmount)
+  }
+
+  set frozenAmountDecimal(value: DecimalValue | null) {
+    this.frozenAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'frozen_is_billable', type: 'boolean', default: true })
   frozenIsBillable: boolean = true

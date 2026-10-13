@@ -1,5 +1,6 @@
-import { Collection, OptionalProps } from '@mikro-orm/core'
+import { Collection, OptionalProps, type Opt } from '@mikro-orm/core'
 import { Entity, Index, ManyToOne, OneToMany, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 import type {
   CatalogExciseCategory,
@@ -110,6 +111,14 @@ export class CatalogProduct {
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, nullable: true })
   taxRate?: string | null
 
+  get taxRateDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue | null) {
+    this.taxRate = value?.toString() ?? null
+  }
+
   @Property({ name: 'product_type', type: 'text', default: 'simple' })
   productType: CatalogProductType = 'simple'
 
@@ -128,6 +137,14 @@ export class CatalogProduct {
   @Property({ name: 'default_sales_unit_quantity', type: 'numeric', precision: 18, scale: 6, default: '1' })
   defaultSalesUnitQuantity: string = '1'
 
+  get defaultSalesUnitQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.defaultSalesUnitQuantity)
+  }
+
+  set defaultSalesUnitQuantityDecimal(value: DecimalValue) {
+    this.defaultSalesUnitQuantity = value.toString()
+  }
+
   @Property({ name: 'uom_rounding_scale', type: 'smallint', default: 4 })
   uomRoundingScale: number = 4
 
@@ -143,6 +160,14 @@ export class CatalogProduct {
   @Property({ name: 'unit_price_base_quantity', type: 'numeric', precision: 18, scale: 6, nullable: true })
   unitPriceBaseQuantity?: string | null
 
+  get unitPriceBaseQuantityDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.unitPriceBaseQuantity)
+  }
+
+  set unitPriceBaseQuantityDecimal(value: DecimalValue | null) {
+    this.unitPriceBaseQuantity = value?.toString() ?? null
+  }
+
   @Property({ name: 'default_media_id', type: 'uuid', nullable: true })
   defaultMediaId?: string | null
 
@@ -151,6 +176,14 @@ export class CatalogProduct {
 
   @Property({ name: 'weight_value', type: 'numeric', precision: 16, scale: 4, nullable: true })
   weightValue?: string | null
+
+  get weightValueDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.weightValue)
+  }
+
+  set weightValueDecimal(value: DecimalValue | null) {
+    this.weightValue = value?.toString() ?? null
+  }
 
   @Property({ name: 'weight_unit', type: 'text', nullable: true })
   weightUnit?: string | null
@@ -314,6 +347,14 @@ export class CatalogProductUnitConversion {
 
   @Property({ name: 'to_base_factor', type: 'numeric', precision: 24, scale: 12 })
   toBaseFactor!: string
+
+  get toBaseFactorDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.toBaseFactor)
+  }
+
+  set toBaseFactorDecimal(value: DecimalValue) {
+    this.toBaseFactor = value.toString()
+  }
 
   @Property({ name: 'sort_order', type: 'integer', default: 0 })
   sortOrder: number = 0
@@ -602,6 +643,14 @@ export class CatalogProductVariant {
   @Property({ name: 'weight_value', type: 'numeric', precision: 16, scale: 4, nullable: true })
   weightValue?: string | null
 
+  get weightValueDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.weightValue)
+  }
+
+  set weightValueDecimal(value: DecimalValue | null) {
+    this.weightValue = value?.toString() ?? null
+  }
+
   @Property({ name: 'weight_unit', type: 'text', nullable: true })
   weightUnit?: string | null
 
@@ -621,6 +670,14 @@ export class CatalogProductVariant {
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, nullable: true })
   taxRate?: string | null
+
+  get taxRateDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue | null) {
+    this.taxRate = value?.toString() ?? null
+  }
 
   @Property({ name: 'option_values', type: 'jsonb', nullable: true })
   optionValues?: Record<string, string> | null
@@ -825,14 +882,46 @@ export class CatalogProductPrice {
   @Property({ name: 'unit_price_net', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   unitPriceNet?: string | null
 
+  get unitPriceNetDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.unitPriceNet)
+  }
+
+  set unitPriceNetDecimal(value: DecimalValue | null) {
+    this.unitPriceNet = value?.toString() ?? null
+  }
+
   @Property({ name: 'unit_price_gross', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   unitPriceGross?: string | null
+
+  get unitPriceGrossDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.unitPriceGross)
+  }
+
+  set unitPriceGrossDecimal(value: DecimalValue | null) {
+    this.unitPriceGross = value?.toString() ?? null
+  }
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, nullable: true })
   taxRate?: string | null
 
+  get taxRateDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue | null) {
+    this.taxRate = value?.toString() ?? null
+  }
+
   @Property({ name: 'tax_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   taxAmount?: string | null
+
+  get taxAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.taxAmount)
+  }
+
+  set taxAmountDecimal(value: DecimalValue | null) {
+    this.taxAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'channel_id', type: 'uuid', nullable: true })
   channelId?: string | null

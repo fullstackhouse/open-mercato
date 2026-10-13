@@ -1,5 +1,6 @@
 import { OptionalProps } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 
 export type CustomerGroupKind = 'b2c' | 'b2b' | 'internal' | 'partner'
@@ -222,14 +223,38 @@ export class CustomerGroupTerms {
   @Property({ name: 'default_credit_limit', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   defaultCreditLimit?: string | null
 
+  get defaultCreditLimitDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.defaultCreditLimit)
+  }
+
+  set defaultCreditLimitDecimal(value: DecimalValue | null) {
+    this.defaultCreditLimit = value?.toString() ?? null
+  }
+
   @Property({ name: 'credit_currency_code', type: 'text', nullable: true })
   creditCurrencyCode?: string | null
 
   @Property({ name: 'approval_required_above', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   approvalRequiredAbove?: string | null
 
+  get approvalRequiredAboveDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.approvalRequiredAbove)
+  }
+
+  set approvalRequiredAboveDecimal(value: DecimalValue | null) {
+    this.approvalRequiredAbove = value?.toString() ?? null
+  }
+
   @Property({ name: 'min_order_value', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   minOrderValue?: string | null
+
+  get minOrderValueDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.minOrderValue)
+  }
+
+  set minOrderValueDecimal(value: DecimalValue | null) {
+    this.minOrderValue = value?.toString() ?? null
+  }
 
   @Property({ type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null

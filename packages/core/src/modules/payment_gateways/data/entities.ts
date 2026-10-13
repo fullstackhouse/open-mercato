@@ -1,5 +1,6 @@
-import { OptionalProps } from '@mikro-orm/core'
+import { OptionalProps, type Opt } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 
 @Entity({ tableName: 'gateway_transactions' })
@@ -42,8 +43,24 @@ export class GatewayTransaction {
   @Property({ name: 'amount', type: ExactDecimalType, columnType: 'numeric' })
   amount!: string
 
+  get amountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amount)
+  }
+
+  set amountDecimal(value: DecimalValue) {
+    this.amount = value.toString()
+  }
+
   @Property({ name: 'captured_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   capturedAmount: string = '0'
+
+  get capturedAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.capturedAmount)
+  }
+
+  set capturedAmountDecimal(value: DecimalValue) {
+    this.capturedAmount = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string
@@ -124,6 +141,14 @@ export class GatewayPaymentOperation {
 
   @Property({ name: 'reserved_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   reservedAmount?: string | null
+
+  get reservedAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.reservedAmount)
+  }
+
+  set reservedAmountDecimal(value: DecimalValue | null) {
+    this.reservedAmount = value?.toString() ?? null
+  }
 
   @Property({ name: 'lease_expires_at', type: Date, nullable: true })
   leaseExpiresAt?: Date | null

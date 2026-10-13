@@ -1,4 +1,4 @@
-import { Collection, OptionalProps } from '@mikro-orm/core'
+import { Collection, OptionalProps, type Opt } from '@mikro-orm/core'
 import {
   Entity,
   Index,
@@ -7,6 +7,7 @@ import {
   PrimaryKey,
   Property,
 } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import type { JsonValue } from '@open-mercato/shared/lib/json'
 
 export type WarehouseLocationType = 'zone' | 'aisle' | 'rack' | 'bin' | 'slot' | 'dock' | 'staging'
@@ -156,8 +157,24 @@ export class WarehouseLocation extends WmsScopedEntity {
   @Property({ name: 'capacity_units', type: 'numeric', precision: 16, scale: 4, nullable: true })
   capacityUnits?: string | null
 
+  get capacityUnitsDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.capacityUnits)
+  }
+
+  set capacityUnitsDecimal(value: DecimalValue | null) {
+    this.capacityUnits = value?.toString() ?? null
+  }
+
   @Property({ name: 'capacity_weight', type: 'numeric', precision: 16, scale: 4, nullable: true })
   capacityWeight?: string | null
+
+  get capacityWeightDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.capacityWeight)
+  }
+
+  set capacityWeightDecimal(value: DecimalValue | null) {
+    this.capacityWeight = value?.toString() ?? null
+  }
 
   @Property({ type: 'jsonb', nullable: true })
   constraints?: JsonValue | null
@@ -202,8 +219,24 @@ export class ProductInventoryProfile extends WmsScopedEntity {
   @Property({ name: 'reorder_point', type: 'numeric', precision: 16, scale: 4, default: '0' })
   reorderPoint: string = '0'
 
+  get reorderPointDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.reorderPoint)
+  }
+
+  set reorderPointDecimal(value: DecimalValue) {
+    this.reorderPoint = value.toString()
+  }
+
   @Property({ name: 'safety_stock', type: 'numeric', precision: 16, scale: 4, default: '0' })
   safetyStock: string = '0'
+
+  get safetyStockDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.safetyStock)
+  }
+
+  set safetyStockDecimal(value: DecimalValue) {
+    this.safetyStock = value.toString()
+  }
 }
 
 @Entity({ tableName: 'wms_inventory_lots' })
@@ -277,11 +310,35 @@ export class InventoryBalance extends WmsScopedEntity {
   @Property({ name: 'quantity_on_hand', type: 'numeric', precision: 16, scale: 4, default: '0' })
   quantityOnHand: string = '0'
 
+  get quantityOnHandDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantityOnHand)
+  }
+
+  set quantityOnHandDecimal(value: DecimalValue) {
+    this.quantityOnHand = value.toString()
+  }
+
   @Property({ name: 'quantity_reserved', type: 'numeric', precision: 16, scale: 4, default: '0' })
   quantityReserved: string = '0'
 
+  get quantityReservedDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantityReserved)
+  }
+
+  set quantityReservedDecimal(value: DecimalValue) {
+    this.quantityReserved = value.toString()
+  }
+
   @Property({ name: 'quantity_allocated', type: 'numeric', precision: 16, scale: 4, default: '0' })
   quantityAllocated: string = '0'
+
+  get quantityAllocatedDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantityAllocated)
+  }
+
+  set quantityAllocatedDecimal(value: DecimalValue) {
+    this.quantityAllocated = value.toString()
+  }
 
   @Property({
     name: 'quantity_available',
@@ -292,6 +349,10 @@ export class InventoryBalance extends WmsScopedEntity {
     hidden: true,
   })
   quantityAvailable!: string
+
+  get quantityAvailableDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantityAvailable)
+  }
 }
 
 @Entity({ tableName: 'wms_inventory_reservations' })
@@ -320,6 +381,14 @@ export class InventoryReservation extends WmsScopedEntity {
 
   @Property({ type: 'numeric', precision: 16, scale: 4 })
   quantity!: string
+
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
 
   @Property({ name: 'source_type', type: 'text' })
   sourceType!: InventoryReservationSourceType
@@ -406,6 +475,14 @@ export class InventoryMovement extends WmsScopedEntity {
 
   @Property({ type: 'numeric', precision: 16, scale: 4 })
   quantity!: string
+
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
 
   @Property({ type: 'text' })
   type!: InventoryMovementType

@@ -1,5 +1,6 @@
-import { OptionalProps } from '@mikro-orm/core'
+import { OptionalProps, type Opt } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 
 @Entity({ tableName: 'checkout_link_templates' })
@@ -98,6 +99,14 @@ export class CheckoutLinkTemplate {
   @Property({ name: 'fixed_price_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   fixedPriceAmount?: string | null
 
+  get fixedPriceAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.fixedPriceAmount)
+  }
+
+  set fixedPriceAmountDecimal(value: DecimalValue | null) {
+    this.fixedPriceAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'fixed_price_currency_code', type: 'text', nullable: true })
   fixedPriceCurrencyCode?: string | null
 
@@ -107,11 +116,35 @@ export class CheckoutLinkTemplate {
   @Property({ name: 'fixed_price_original_amount', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   fixedPriceOriginalAmount?: string | null
 
+  get fixedPriceOriginalAmountDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.fixedPriceOriginalAmount)
+  }
+
+  set fixedPriceOriginalAmountDecimal(value: DecimalValue | null) {
+    this.fixedPriceOriginalAmount = value?.toString() ?? null
+  }
+
   @Property({ name: 'custom_amount_min', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   customAmountMin?: string | null
 
+  get customAmountMinDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.customAmountMin)
+  }
+
+  set customAmountMinDecimal(value: DecimalValue | null) {
+    this.customAmountMin = value?.toString() ?? null
+  }
+
   @Property({ name: 'custom_amount_max', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   customAmountMax?: string | null
+
+  get customAmountMaxDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.customAmountMax)
+  }
+
+  set customAmountMaxDecimal(value: DecimalValue | null) {
+    this.customAmountMax = value?.toString() ?? null
+  }
 
   @Property({ name: 'custom_amount_currency_code', type: 'text', nullable: true })
   customAmountCurrencyCode?: string | null
@@ -269,6 +302,14 @@ export class CheckoutTransaction {
 
   @Property({ type: ExactDecimalType, columnType: 'numeric' })
   amount!: string
+
+  get amountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amount)
+  }
+
+  set amountDecimal(value: DecimalValue) {
+    this.amount = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string

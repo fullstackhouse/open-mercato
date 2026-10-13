@@ -1,5 +1,6 @@
-import { Collection, OptionalProps } from '@mikro-orm/core'
+import { Collection, OptionalProps, type Opt } from '@mikro-orm/core'
 import { Entity, Index, ManyToOne, OneToMany, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 import { ExactDecimalType } from '@open-mercato/shared/lib/db/exactDecimalType'
 import { DEFAULT_ORDER_NUMBER_FORMAT, DEFAULT_QUOTE_NUMBER_FORMAT, type SalesDocumentNumberKind } from '../lib/documentNumberTokens'
 import type { ShipmentItemSnapshot } from '../lib/shipments/types'
@@ -69,8 +70,24 @@ export class SalesChannel {
   @Property({ name: 'latitude', type: 'numeric', precision: 10, scale: 6, nullable: true })
   latitude?: string | null
 
+  get latitudeDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.latitude)
+  }
+
+  set latitudeDecimal(value: DecimalValue | null) {
+    this.latitude = value?.toString() ?? null
+  }
+
   @Property({ name: 'longitude', type: 'numeric', precision: 10, scale: 6, nullable: true })
   longitude?: string | null
+
+  get longitudeDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.longitude)
+  }
+
+  set longitudeDecimal(value: DecimalValue | null) {
+    this.longitude = value?.toString() ?? null
+  }
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -128,8 +145,24 @@ export class SalesShippingMethod {
   @Property({ name: 'base_rate_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   baseRateNet: string = '0'
 
+  get baseRateNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.baseRateNet)
+  }
+
+  set baseRateNetDecimal(value: DecimalValue) {
+    this.baseRateNet = value.toString()
+  }
+
   @Property({ name: 'base_rate_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   baseRateGross: string = '0'
+
+  get baseRateGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.baseRateGross)
+  }
+
+  set baseRateGrossDecimal(value: DecimalValue) {
+    this.baseRateGross = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text', nullable: true })
   currencyCode?: string | null
@@ -275,6 +308,14 @@ export class SalesTaxRate {
   @Property({ name: 'rate', type: 'numeric', precision: 7, scale: 4 })
   rate!: string
 
+  get rateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.rate)
+  }
+
+  set rateDecimal(value: DecimalValue) {
+    this.rate = value.toString()
+  }
+
   @Property({ name: 'country_code', type: 'text', nullable: true })
   countryCode?: string | null
 
@@ -377,6 +418,14 @@ export class SalesOrder {
   @Property({ name: 'exchange_rate', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   exchangeRate?: string | null
 
+  get exchangeRateDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.exchangeRate)
+  }
+
+  set exchangeRateDecimal(value: DecimalValue | null) {
+    this.exchangeRate = value?.toString() ?? null
+  }
+
   @Property({ name: 'status_entry_id', type: 'uuid', nullable: true })
   statusEntryId?: string | null
 
@@ -431,29 +480,101 @@ export class SalesOrder {
   @Property({ name: 'subtotal_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalNetAmount: string = '0'
 
+  get subtotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalNetAmount)
+  }
+
+  set subtotalNetAmountDecimal(value: DecimalValue) {
+    this.subtotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'subtotal_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalGrossAmount: string = '0'
+
+  get subtotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalGrossAmount)
+  }
+
+  set subtotalGrossAmountDecimal(value: DecimalValue) {
+    this.subtotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'discount_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   discountTotalAmount: string = '0'
 
+  get discountTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountTotalAmount)
+  }
+
+  set discountTotalAmountDecimal(value: DecimalValue) {
+    this.discountTotalAmount = value.toString()
+  }
+
   @Property({ name: 'tax_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxTotalAmount: string = '0'
+
+  get taxTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxTotalAmount)
+  }
+
+  set taxTotalAmountDecimal(value: DecimalValue) {
+    this.taxTotalAmount = value.toString()
+  }
 
   @Property({ name: 'shipping_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   shippingNetAmount: string = '0'
 
+  get shippingNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.shippingNetAmount)
+  }
+
+  set shippingNetAmountDecimal(value: DecimalValue) {
+    this.shippingNetAmount = value.toString()
+  }
+
   @Property({ name: 'shipping_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   shippingGrossAmount: string = '0'
+
+  get shippingGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.shippingGrossAmount)
+  }
+
+  set shippingGrossAmountDecimal(value: DecimalValue) {
+    this.shippingGrossAmount = value.toString()
+  }
 
   @Property({ name: 'surcharge_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   surchargeTotalAmount: string = '0'
 
+  get surchargeTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.surchargeTotalAmount)
+  }
+
+  set surchargeTotalAmountDecimal(value: DecimalValue) {
+    this.surchargeTotalAmount = value.toString()
+  }
+
   @Property({ name: 'grand_total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalNetAmount: string = '0'
 
+  get grandTotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalNetAmount)
+  }
+
+  set grandTotalNetAmountDecimal(value: DecimalValue) {
+    this.grandTotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'grand_total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalGrossAmount: string = '0'
+
+  get grandTotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalGrossAmount)
+  }
+
+  set grandTotalGrossAmountDecimal(value: DecimalValue) {
+    this.grandTotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'totals_snapshot', type: 'jsonb', nullable: true })
   totalsSnapshot?: Record<string, unknown> | null
@@ -461,11 +582,35 @@ export class SalesOrder {
   @Property({ name: 'paid_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   paidTotalAmount: string = '0'
 
+  get paidTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.paidTotalAmount)
+  }
+
+  set paidTotalAmountDecimal(value: DecimalValue) {
+    this.paidTotalAmount = value.toString()
+  }
+
   @Property({ name: 'refunded_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   refundedTotalAmount: string = '0'
 
+  get refundedTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.refundedTotalAmount)
+  }
+
+  set refundedTotalAmountDecimal(value: DecimalValue) {
+    this.refundedTotalAmount = value.toString()
+  }
+
   @Property({ name: 'outstanding_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   outstandingAmount: string = '0'
+
+  get outstandingAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.outstandingAmount)
+  }
+
+  set outstandingAmountDecimal(value: DecimalValue) {
+    this.outstandingAmount = value.toString()
+  }
 
   @Property({ name: 'line_item_count', type: 'integer', default: 0 })
   lineItemCount: number = 0
@@ -599,11 +744,27 @@ export class SalesOrderLine {
   @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   quantity: string = '0'
 
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
+
   @Property({ name: 'quantity_unit', type: 'text', nullable: true })
   quantityUnit?: string | null
 
   @Property({ name: 'normalized_quantity', type: 'numeric', precision: 18, scale: 6, default: '0' })
   normalizedQuantity: string = '0'
+
+  get normalizedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.normalizedQuantity)
+  }
+
+  set normalizedQuantityDecimal(value: DecimalValue) {
+    this.normalizedQuantity = value.toString()
+  }
 
   @Property({ name: 'normalized_unit', type: 'text', nullable: true })
   normalizedUnit?: string | null
@@ -614,14 +775,46 @@ export class SalesOrderLine {
   @Property({ name: 'reserved_quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   reservedQuantity: string = '0'
 
+  get reservedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.reservedQuantity)
+  }
+
+  set reservedQuantityDecimal(value: DecimalValue) {
+    this.reservedQuantity = value.toString()
+  }
+
   @Property({ name: 'fulfilled_quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   fulfilledQuantity: string = '0'
+
+  get fulfilledQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.fulfilledQuantity)
+  }
+
+  set fulfilledQuantityDecimal(value: DecimalValue) {
+    this.fulfilledQuantity = value.toString()
+  }
 
   @Property({ name: 'invoiced_quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   invoicedQuantity: string = '0'
 
+  get invoicedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.invoicedQuantity)
+  }
+
+  set invoicedQuantityDecimal(value: DecimalValue) {
+    this.invoicedQuantity = value.toString()
+  }
+
   @Property({ name: 'returned_quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   returnedQuantity: string = '0'
+
+  get returnedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.returnedQuantity)
+  }
+
+  set returnedQuantityDecimal(value: DecimalValue) {
+    this.returnedQuantity = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string
@@ -629,26 +822,90 @@ export class SalesOrderLine {
   @Property({ name: 'unit_price_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceNet: string = '0'
 
+  get unitPriceNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceNet)
+  }
+
+  set unitPriceNetDecimal(value: DecimalValue) {
+    this.unitPriceNet = value.toString()
+  }
+
   @Property({ name: 'unit_price_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceGross: string = '0'
+
+  get unitPriceGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceGross)
+  }
+
+  set unitPriceGrossDecimal(value: DecimalValue) {
+    this.unitPriceGross = value.toString()
+  }
 
   @Property({ name: 'discount_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   discountAmount: string = '0'
 
+  get discountAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountAmount)
+  }
+
+  set discountAmountDecimal(value: DecimalValue) {
+    this.discountAmount = value.toString()
+  }
+
   @Property({ name: 'discount_percent', type: 'numeric', precision: 7, scale: 4, default: '0' })
   discountPercent: string = '0'
+
+  get discountPercentDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountPercent)
+  }
+
+  set discountPercentDecimal(value: DecimalValue) {
+    this.discountPercent = value.toString()
+  }
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, default: '0' })
   taxRate: string = '0'
 
+  get taxRateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue) {
+    this.taxRate = value.toString()
+  }
+
   @Property({ name: 'tax_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxAmount: string = '0'
+
+  get taxAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxAmount)
+  }
+
+  set taxAmountDecimal(value: DecimalValue) {
+    this.taxAmount = value.toString()
+  }
 
   @Property({ name: 'total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalNetAmount: string = '0'
 
+  get totalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalNetAmount)
+  }
+
+  set totalNetAmountDecimal(value: DecimalValue) {
+    this.totalNetAmount = value.toString()
+  }
+
   @Property({ name: 'total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalGrossAmount: string = '0'
+
+  get totalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalGrossAmount)
+  }
+
+  set totalGrossAmountDecimal(value: DecimalValue) {
+    this.totalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'configuration', type: 'jsonb', nullable: true })
   configuration?: Record<string, unknown> | null
@@ -726,11 +983,35 @@ export class SalesOrderAdjustment {
   @Property({ name: 'rate', type: 'numeric', precision: 7, scale: 4, default: '0' })
   rate: string = '0'
 
+  get rateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.rate)
+  }
+
+  set rateDecimal(value: DecimalValue) {
+    this.rate = value.toString()
+  }
+
   @Property({ name: 'amount_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   amountNet: string = '0'
 
+  get amountNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amountNet)
+  }
+
+  set amountNetDecimal(value: DecimalValue) {
+    this.amountNet = value.toString()
+  }
+
   @Property({ name: 'amount_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   amountGross: string = '0'
+
+  get amountGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amountGross)
+  }
+
+  set amountGrossDecimal(value: DecimalValue) {
+    this.amountGross = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text', nullable: true })
   currencyCode?: string | null
@@ -942,20 +1223,68 @@ export class SalesQuote {
   @Property({ name: 'subtotal_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalNetAmount: string = '0'
 
+  get subtotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalNetAmount)
+  }
+
+  set subtotalNetAmountDecimal(value: DecimalValue) {
+    this.subtotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'subtotal_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalGrossAmount: string = '0'
+
+  get subtotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalGrossAmount)
+  }
+
+  set subtotalGrossAmountDecimal(value: DecimalValue) {
+    this.subtotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'discount_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   discountTotalAmount: string = '0'
 
+  get discountTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountTotalAmount)
+  }
+
+  set discountTotalAmountDecimal(value: DecimalValue) {
+    this.discountTotalAmount = value.toString()
+  }
+
   @Property({ name: 'tax_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxTotalAmount: string = '0'
+
+  get taxTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxTotalAmount)
+  }
+
+  set taxTotalAmountDecimal(value: DecimalValue) {
+    this.taxTotalAmount = value.toString()
+  }
 
   @Property({ name: 'grand_total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalNetAmount: string = '0'
 
+  get grandTotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalNetAmount)
+  }
+
+  set grandTotalNetAmountDecimal(value: DecimalValue) {
+    this.grandTotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'grand_total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalGrossAmount: string = '0'
+
+  get grandTotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalGrossAmount)
+  }
+
+  set grandTotalGrossAmountDecimal(value: DecimalValue) {
+    this.grandTotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'totals_snapshot', type: 'jsonb', nullable: true })
   totalsSnapshot?: Record<string, unknown> | null
@@ -1056,11 +1385,27 @@ export class SalesQuoteLine {
   @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   quantity: string = '0'
 
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
+
   @Property({ name: 'quantity_unit', type: 'text', nullable: true })
   quantityUnit?: string | null
 
   @Property({ name: 'normalized_quantity', type: 'numeric', precision: 18, scale: 6, default: '0' })
   normalizedQuantity: string = '0'
+
+  get normalizedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.normalizedQuantity)
+  }
+
+  set normalizedQuantityDecimal(value: DecimalValue) {
+    this.normalizedQuantity = value.toString()
+  }
 
   @Property({ name: 'normalized_unit', type: 'text', nullable: true })
   normalizedUnit?: string | null
@@ -1074,26 +1419,90 @@ export class SalesQuoteLine {
   @Property({ name: 'unit_price_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceNet: string = '0'
 
+  get unitPriceNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceNet)
+  }
+
+  set unitPriceNetDecimal(value: DecimalValue) {
+    this.unitPriceNet = value.toString()
+  }
+
   @Property({ name: 'unit_price_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceGross: string = '0'
+
+  get unitPriceGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceGross)
+  }
+
+  set unitPriceGrossDecimal(value: DecimalValue) {
+    this.unitPriceGross = value.toString()
+  }
 
   @Property({ name: 'discount_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   discountAmount: string = '0'
 
+  get discountAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountAmount)
+  }
+
+  set discountAmountDecimal(value: DecimalValue) {
+    this.discountAmount = value.toString()
+  }
+
   @Property({ name: 'discount_percent', type: 'numeric', precision: 7, scale: 4, default: '0' })
   discountPercent: string = '0'
+
+  get discountPercentDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountPercent)
+  }
+
+  set discountPercentDecimal(value: DecimalValue) {
+    this.discountPercent = value.toString()
+  }
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, default: '0' })
   taxRate: string = '0'
 
+  get taxRateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue) {
+    this.taxRate = value.toString()
+  }
+
   @Property({ name: 'tax_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxAmount: string = '0'
+
+  get taxAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxAmount)
+  }
+
+  set taxAmountDecimal(value: DecimalValue) {
+    this.taxAmount = value.toString()
+  }
 
   @Property({ name: 'total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalNetAmount: string = '0'
 
+  get totalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalNetAmount)
+  }
+
+  set totalNetAmountDecimal(value: DecimalValue) {
+    this.totalNetAmount = value.toString()
+  }
+
   @Property({ name: 'total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalGrossAmount: string = '0'
+
+  get totalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalGrossAmount)
+  }
+
+  set totalGrossAmountDecimal(value: DecimalValue) {
+    this.totalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'configuration', type: 'jsonb', nullable: true })
   configuration?: Record<string, unknown> | null
@@ -1162,11 +1571,35 @@ export class SalesQuoteAdjustment {
   @Property({ name: 'rate', type: 'numeric', precision: 7, scale: 4, default: '0' })
   rate: string = '0'
 
+  get rateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.rate)
+  }
+
+  set rateDecimal(value: DecimalValue) {
+    this.rate = value.toString()
+  }
+
   @Property({ name: 'amount_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   amountNet: string = '0'
 
+  get amountNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amountNet)
+  }
+
+  set amountNetDecimal(value: DecimalValue) {
+    this.amountNet = value.toString()
+  }
+
   @Property({ name: 'amount_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   amountGross: string = '0'
+
+  get amountGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amountGross)
+  }
+
+  set amountGrossDecimal(value: DecimalValue) {
+    this.amountGross = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text', nullable: true })
   currencyCode?: string | null
@@ -1230,14 +1663,38 @@ export class SalesShipment {
   @Property({ name: 'weight_value', type: 'numeric', precision: 16, scale: 4, nullable: true })
   weightValue?: string | null
 
+  get weightValueDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.weightValue)
+  }
+
+  set weightValueDecimal(value: DecimalValue | null) {
+    this.weightValue = value?.toString() ?? null
+  }
+
   @Property({ name: 'weight_unit', type: 'text', nullable: true })
   weightUnit?: string | null
 
   @Property({ name: 'declared_value_net', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   declaredValueNet?: string | null
 
+  get declaredValueNetDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.declaredValueNet)
+  }
+
+  set declaredValueNetDecimal(value: DecimalValue | null) {
+    this.declaredValueNet = value?.toString() ?? null
+  }
+
   @Property({ name: 'declared_value_gross', type: ExactDecimalType, columnType: 'numeric', nullable: true })
   declaredValueGross?: string | null
+
+  get declaredValueGrossDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.declaredValueGross)
+  }
+
+  set declaredValueGrossDecimal(value: DecimalValue | null) {
+    this.declaredValueGross = value?.toString() ?? null
+  }
 
   @Property({ name: 'currency_code', type: 'text', nullable: true })
   currencyCode?: string | null
@@ -1284,6 +1741,14 @@ export class SalesShipmentItem {
 
   @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   quantity: string = '0'
+
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
 
   @Property({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null
@@ -1363,17 +1828,57 @@ export class SalesReturnLine {
   @Property({ name: 'quantity_returned', type: 'numeric', precision: 18, scale: 4, default: '0' })
   quantityReturned: string = '0'
 
+  get quantityReturnedDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantityReturned)
+  }
+
+  set quantityReturnedDecimal(value: DecimalValue) {
+    this.quantityReturned = value.toString()
+  }
+
   @Property({ name: 'unit_price_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceNet: string = '0'
+
+  get unitPriceNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceNet)
+  }
+
+  set unitPriceNetDecimal(value: DecimalValue) {
+    this.unitPriceNet = value.toString()
+  }
 
   @Property({ name: 'unit_price_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceGross: string = '0'
 
+  get unitPriceGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceGross)
+  }
+
+  set unitPriceGrossDecimal(value: DecimalValue) {
+    this.unitPriceGross = value.toString()
+  }
+
   @Property({ name: 'total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalNetAmount: string = '0'
 
+  get totalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalNetAmount)
+  }
+
+  set totalNetAmountDecimal(value: DecimalValue) {
+    this.totalNetAmount = value.toString()
+  }
+
   @Property({ name: 'total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalGrossAmount: string = '0'
+
+  get totalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalGrossAmount)
+  }
+
+  set totalGrossAmountDecimal(value: DecimalValue) {
+    this.totalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
@@ -1423,26 +1928,90 @@ export class SalesInvoice {
   @Property({ name: 'subtotal_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalNetAmount: string = '0'
 
+  get subtotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalNetAmount)
+  }
+
+  set subtotalNetAmountDecimal(value: DecimalValue) {
+    this.subtotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'subtotal_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalGrossAmount: string = '0'
+
+  get subtotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalGrossAmount)
+  }
+
+  set subtotalGrossAmountDecimal(value: DecimalValue) {
+    this.subtotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'discount_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   discountTotalAmount: string = '0'
 
+  get discountTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountTotalAmount)
+  }
+
+  set discountTotalAmountDecimal(value: DecimalValue) {
+    this.discountTotalAmount = value.toString()
+  }
+
   @Property({ name: 'tax_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxTotalAmount: string = '0'
+
+  get taxTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxTotalAmount)
+  }
+
+  set taxTotalAmountDecimal(value: DecimalValue) {
+    this.taxTotalAmount = value.toString()
+  }
 
   @Property({ name: 'grand_total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalNetAmount: string = '0'
 
+  get grandTotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalNetAmount)
+  }
+
+  set grandTotalNetAmountDecimal(value: DecimalValue) {
+    this.grandTotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'grand_total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalGrossAmount: string = '0'
+
+  get grandTotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalGrossAmount)
+  }
+
+  set grandTotalGrossAmountDecimal(value: DecimalValue) {
+    this.grandTotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'paid_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   paidTotalAmount: string = '0'
 
+  get paidTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.paidTotalAmount)
+  }
+
+  set paidTotalAmountDecimal(value: DecimalValue) {
+    this.paidTotalAmount = value.toString()
+  }
+
   @Property({ name: 'outstanding_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   outstandingAmount: string = '0'
+
+  get outstandingAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.outstandingAmount)
+  }
+
+  set outstandingAmountDecimal(value: DecimalValue) {
+    this.outstandingAmount = value.toString()
+  }
 
   @Property({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null
@@ -1506,11 +2075,27 @@ export class SalesInvoiceLine {
   @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   quantity: string = '0'
 
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
+
   @Property({ name: 'quantity_unit', type: 'text', nullable: true })
   quantityUnit?: string | null
 
   @Property({ name: 'normalized_quantity', type: 'numeric', precision: 18, scale: 6, default: '0' })
   normalizedQuantity: string = '0'
+
+  get normalizedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.normalizedQuantity)
+  }
+
+  set normalizedQuantityDecimal(value: DecimalValue) {
+    this.normalizedQuantity = value.toString()
+  }
 
   @Property({ name: 'normalized_unit', type: 'text', nullable: true })
   normalizedUnit?: string | null
@@ -1524,26 +2109,90 @@ export class SalesInvoiceLine {
   @Property({ name: 'unit_price_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceNet: string = '0'
 
+  get unitPriceNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceNet)
+  }
+
+  set unitPriceNetDecimal(value: DecimalValue) {
+    this.unitPriceNet = value.toString()
+  }
+
   @Property({ name: 'unit_price_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceGross: string = '0'
+
+  get unitPriceGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceGross)
+  }
+
+  set unitPriceGrossDecimal(value: DecimalValue) {
+    this.unitPriceGross = value.toString()
+  }
 
   @Property({ name: 'discount_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   discountAmount: string = '0'
 
+  get discountAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountAmount)
+  }
+
+  set discountAmountDecimal(value: DecimalValue) {
+    this.discountAmount = value.toString()
+  }
+
   @Property({ name: 'discount_percent', type: 'numeric', precision: 7, scale: 4, default: '0' })
   discountPercent: string = '0'
+
+  get discountPercentDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.discountPercent)
+  }
+
+  set discountPercentDecimal(value: DecimalValue) {
+    this.discountPercent = value.toString()
+  }
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, default: '0' })
   taxRate: string = '0'
 
+  get taxRateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue) {
+    this.taxRate = value.toString()
+  }
+
   @Property({ name: 'tax_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxAmount: string = '0'
+
+  get taxAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxAmount)
+  }
+
+  set taxAmountDecimal(value: DecimalValue) {
+    this.taxAmount = value.toString()
+  }
 
   @Property({ name: 'total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalNetAmount: string = '0'
 
+  get totalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalNetAmount)
+  }
+
+  set totalNetAmountDecimal(value: DecimalValue) {
+    this.totalNetAmount = value.toString()
+  }
+
   @Property({ name: 'total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalGrossAmount: string = '0'
+
+  get totalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalGrossAmount)
+  }
+
+  set totalGrossAmountDecimal(value: DecimalValue) {
+    this.totalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null
@@ -1593,17 +2242,57 @@ export class SalesCreditMemo {
   @Property({ name: 'subtotal_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalNetAmount: string = '0'
 
+  get subtotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalNetAmount)
+  }
+
+  set subtotalNetAmountDecimal(value: DecimalValue) {
+    this.subtotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'subtotal_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   subtotalGrossAmount: string = '0'
+
+  get subtotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.subtotalGrossAmount)
+  }
+
+  set subtotalGrossAmountDecimal(value: DecimalValue) {
+    this.subtotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'tax_total_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxTotalAmount: string = '0'
 
+  get taxTotalAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxTotalAmount)
+  }
+
+  set taxTotalAmountDecimal(value: DecimalValue) {
+    this.taxTotalAmount = value.toString()
+  }
+
   @Property({ name: 'grand_total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalNetAmount: string = '0'
 
+  get grandTotalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalNetAmount)
+  }
+
+  set grandTotalNetAmountDecimal(value: DecimalValue) {
+    this.grandTotalNetAmount = value.toString()
+  }
+
   @Property({ name: 'grand_total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   grandTotalGrossAmount: string = '0'
+
+  get grandTotalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.grandTotalGrossAmount)
+  }
+
+  set grandTotalGrossAmountDecimal(value: DecimalValue) {
+    this.grandTotalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null
@@ -1664,11 +2353,27 @@ export class SalesCreditMemoLine {
   @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
   quantity: string = '0'
 
+  get quantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.quantity)
+  }
+
+  set quantityDecimal(value: DecimalValue) {
+    this.quantity = value.toString()
+  }
+
   @Property({ name: 'quantity_unit', type: 'text', nullable: true })
   quantityUnit?: string | null
 
   @Property({ name: 'normalized_quantity', type: 'numeric', precision: 18, scale: 6, default: '0' })
   normalizedQuantity: string = '0'
+
+  get normalizedQuantityDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.normalizedQuantity)
+  }
+
+  set normalizedQuantityDecimal(value: DecimalValue) {
+    this.normalizedQuantity = value.toString()
+  }
 
   @Property({ name: 'normalized_unit', type: 'text', nullable: true })
   normalizedUnit?: string | null
@@ -1682,20 +2387,68 @@ export class SalesCreditMemoLine {
   @Property({ name: 'unit_price_net', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceNet: string = '0'
 
+  get unitPriceNetDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceNet)
+  }
+
+  set unitPriceNetDecimal(value: DecimalValue) {
+    this.unitPriceNet = value.toString()
+  }
+
   @Property({ name: 'unit_price_gross', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   unitPriceGross: string = '0'
+
+  get unitPriceGrossDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.unitPriceGross)
+  }
+
+  set unitPriceGrossDecimal(value: DecimalValue) {
+    this.unitPriceGross = value.toString()
+  }
 
   @Property({ name: 'tax_rate', type: 'numeric', precision: 7, scale: 4, default: '0' })
   taxRate: string = '0'
 
+  get taxRateDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxRate)
+  }
+
+  set taxRateDecimal(value: DecimalValue) {
+    this.taxRate = value.toString()
+  }
+
   @Property({ name: 'tax_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   taxAmount: string = '0'
+
+  get taxAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.taxAmount)
+  }
+
+  set taxAmountDecimal(value: DecimalValue) {
+    this.taxAmount = value.toString()
+  }
 
   @Property({ name: 'total_net_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalNetAmount: string = '0'
 
+  get totalNetAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalNetAmount)
+  }
+
+  set totalNetAmountDecimal(value: DecimalValue) {
+    this.totalNetAmount = value.toString()
+  }
+
   @Property({ name: 'total_gross_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   totalGrossAmount: string = '0'
+
+  get totalGrossAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.totalGrossAmount)
+  }
+
+  set totalGrossAmountDecimal(value: DecimalValue) {
+    this.totalGrossAmount = value.toString()
+  }
 
   @Property({ name: 'metadata', type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null
@@ -1732,14 +2485,38 @@ export class SalesPayment {
   @Property({ name: 'amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   amount: string = '0'
 
+  get amountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amount)
+  }
+
+  set amountDecimal(value: DecimalValue) {
+    this.amount = value.toString()
+  }
+
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string
 
   @Property({ name: 'captured_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   capturedAmount: string = '0'
 
+  get capturedAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.capturedAmount)
+  }
+
+  set capturedAmountDecimal(value: DecimalValue) {
+    this.capturedAmount = value.toString()
+  }
+
   @Property({ name: 'refunded_amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   refundedAmount: string = '0'
+
+  get refundedAmountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.refundedAmount)
+  }
+
+  set refundedAmountDecimal(value: DecimalValue) {
+    this.refundedAmount = value.toString()
+  }
 
   @Property({ name: 'received_at', type: Date, nullable: true })
   receivedAt?: Date | null
@@ -1791,6 +2568,14 @@ export class SalesPaymentAllocation {
 
   @Property({ name: 'amount', type: ExactDecimalType, columnType: 'numeric', default: '0' })
   amount: string = '0'
+
+  get amountDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.amount)
+  }
+
+  set amountDecimal(value: DecimalValue) {
+    this.amount = value.toString()
+  }
 
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string

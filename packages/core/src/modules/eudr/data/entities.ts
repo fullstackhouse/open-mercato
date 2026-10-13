@@ -1,5 +1,6 @@
 import { OptionalProps } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 
 @Entity({ tableName: 'eudr_product_mappings' })
 @Index({
@@ -93,6 +94,14 @@ export class EudrPlot {
   @Property({ name: 'area_ha', type: 'numeric', precision: 12, scale: 4, nullable: true })
   areaHa?: string | null
 
+  get areaHaDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.areaHa)
+  }
+
+  set areaHaDecimal(value: DecimalValue | null) {
+    this.areaHa = value?.toString() ?? null
+  }
+
   @Property({ name: 'validation_warnings', type: 'json', default: [] })
   validationWarnings: string[] = []
 
@@ -150,6 +159,14 @@ export class EudrEvidenceSubmission {
 
   @Property({ name: 'quantity_kg', type: 'numeric', precision: 14, scale: 3, nullable: true })
   quantityKg?: string | null
+
+  get quantityKgDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.quantityKg)
+  }
+
+  set quantityKgDecimal(value: DecimalValue | null) {
+    this.quantityKg = value?.toString() ?? null
+  }
 
   @Property({ name: 'batch_number', type: 'text', nullable: true })
   batchNumber?: string | null
@@ -235,11 +252,27 @@ export class EudrDueDiligenceStatement {
   @Property({ name: 'quantity_kg', type: 'numeric', precision: 14, scale: 3, nullable: true })
   quantityKg?: string | null
 
+  get quantityKgDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.quantityKg)
+  }
+
+  set quantityKgDecimal(value: DecimalValue | null) {
+    this.quantityKg = value?.toString() ?? null
+  }
+
   @Property({ name: 'supplementary_unit', type: 'text', nullable: true })
   supplementaryUnit?: string | null
 
   @Property({ name: 'supplementary_quantity', type: 'numeric', precision: 14, scale: 3, nullable: true })
   supplementaryQuantity?: string | null
+
+  get supplementaryQuantityDecimal(): DecimalValue | null {
+    return DecimalValue.fromNullable(this.supplementaryQuantity)
+  }
+
+  set supplementaryQuantityDecimal(value: DecimalValue | null) {
+    this.supplementaryQuantity = value?.toString() ?? null
+  }
 
   @Property({ name: 'order_id', type: 'uuid', nullable: true })
   orderId?: string | null

@@ -1,5 +1,6 @@
-import { OptionalProps } from '@mikro-orm/core'
+import { OptionalProps, type Opt } from '@mikro-orm/core'
 import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+import { DecimalValue } from '@open-mercato/shared/lib/decimal'
 
 // ---------------------------------------------------------------------------
 // Shared Types
@@ -236,6 +237,14 @@ export class InboxProposal {
   @Property({ name: 'confidence', type: 'numeric', precision: 3, scale: 2 })
   confidence!: string
 
+  get confidenceDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.confidence)
+  }
+
+  set confidenceDecimal(value: DecimalValue) {
+    this.confidence = value.toString()
+  }
+
   @Property({ name: 'detected_language', type: 'text', nullable: true })
   detectedLanguage?: string | null
 
@@ -321,6 +330,14 @@ export class InboxProposalAction {
 
   @Property({ name: 'confidence', type: 'numeric', precision: 3, scale: 2 })
   confidence!: string
+
+  get confidenceDecimal(): Opt<DecimalValue> {
+    return DecimalValue.from(this.confidence)
+  }
+
+  set confidenceDecimal(value: DecimalValue) {
+    this.confidence = value.toString()
+  }
 
   @Property({ name: 'required_feature', type: 'text', nullable: true })
   requiredFeature?: string | null
