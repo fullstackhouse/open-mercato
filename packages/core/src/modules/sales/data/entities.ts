@@ -688,6 +688,7 @@ export class SalesOrderLine {
 
 @Entity({ tableName: 'sales_order_adjustments' })
 @Index({ name: 'sales_order_adjustments_scope_idx', properties: ['order', 'organizationId', 'tenantId'] })
+@Index({ name: 'sales_order_adjustments_order_line_idx', properties: ['orderLine'] })
 export class SalesOrderAdjustment {
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1124,6 +1125,7 @@ export class SalesQuoteLine {
 
 @Entity({ tableName: 'sales_quote_adjustments' })
 @Index({ name: 'sales_quote_adjustments_scope_idx', properties: ['quote', 'organizationId', 'tenantId'] })
+@Index({ name: 'sales_quote_adjustments_quote_line_idx', properties: ['quoteLine'] })
 export class SalesQuoteAdjustment {
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1265,6 +1267,7 @@ export class SalesShipment {
 
 @Entity({ tableName: 'sales_shipment_items' })
 @Index({ name: 'sales_shipment_items_scope_idx', properties: ['shipment', 'organizationId', 'tenantId'] })
+@Index({ name: 'sales_shipment_items_order_line_idx', properties: ['orderLine'] })
 export class SalesShipmentItem {
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1467,6 +1470,7 @@ export class SalesInvoice {
 
 @Entity({ tableName: 'sales_invoice_lines' })
 @Index({ name: 'sales_invoice_lines_scope_idx', properties: ['invoice', 'organizationId', 'tenantId'] })
+@Index({ name: 'sales_invoice_lines_order_line_idx', properties: ['orderLine'] })
 @Index({
   name: 'sales_invoice_lines_normalized_idx',
   properties: ['organizationId', 'tenantId', 'normalizedUnit', 'normalizedQuantity'],
@@ -1628,6 +1632,7 @@ export class SalesCreditMemo {
   name: 'sales_credit_memo_lines_scope_idx',
   properties: ['creditMemo', 'organizationId', 'tenantId'],
 })
+@Index({ name: 'sales_credit_memo_lines_order_line_idx', properties: ['orderLine'] })
 @Index({
   name: 'sales_credit_memo_lines_normalized_idx',
   properties: ['organizationId', 'tenantId', 'normalizedUnit', 'normalizedQuantity'],
@@ -1964,6 +1969,8 @@ export class SalesDocumentTag {
 @Entity({ tableName: 'sales_document_tag_assignments' })
 @Index({ name: 'sales_document_tag_assignments_scope_idx', properties: ['organizationId', 'tenantId'] })
 @Index({ name: 'sales_document_tag_assignments_document_idx', properties: ['documentId'] })
+@Index({ name: 'sales_document_tag_assignments_order_idx', properties: ['order'] })
+@Index({ name: 'sales_document_tag_assignments_quote_idx', properties: ['quote'] })
 @Unique({
   name: 'sales_document_tag_assignments_unique',
   properties: ['tag', 'documentId', 'documentKind'],
