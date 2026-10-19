@@ -38,6 +38,7 @@ import {
   resolveOrganizationScopeForRequest,
 } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import { getTelemetryRuntime } from '@open-mercato/shared/lib/telemetry/runtime'
 
 const logger = createLogger('auth').child({ component: 'users' })
 
@@ -585,6 +586,7 @@ async function resolvePlaintextUserSearchColumns(
     logger.warn('Users search: encryption map unavailable; email and name match through search tokens only', {
       error: err instanceof Error ? err.message : String(err),
     })
+    getTelemetryRuntime()?.reportError(err, { module: 'auth', code: 'auth.users_search_encryption_map_failed' })
     return []
   }
 }

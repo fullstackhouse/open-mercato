@@ -10,6 +10,7 @@ const mockFindWithDecryption = jest.fn()
 const mockFindOneWithDecryption = jest.fn()
 const mockLoadCustomFieldValues = jest.fn()
 const mockLogCrudAccess = jest.fn()
+const mockReportError = jest.fn()
 const mockResolveOrganizationScopeForRequest = jest.fn()
 
 const mockSearchTokenExecute = jest.fn()
@@ -54,6 +55,10 @@ jest.mock('@open-mercato/shared/lib/auth/server', () => ({
 
 jest.mock('@open-mercato/shared/lib/di/container', () => ({
   createRequestContainer: jest.fn(async () => mockContainer),
+}))
+
+jest.mock('@open-mercato/shared/lib/telemetry/runtime', () => ({
+  getTelemetryRuntime: () => ({ reportError: mockReportError }),
 }))
 
 type MockCrudAction = {
@@ -180,6 +185,7 @@ describe('GET /api/auth/users', () => {
     mockSearchTokenExecute.mockResolvedValue([])
     mockGetEncryptedFieldNames.mockReset()
     mockTenantEncryptionService = null
+    mockReportError.mockReset()
     mockGetAuthFromRequest.mockResolvedValue({
       sub: 'user-1',
       tenantId,
@@ -614,7 +620,8 @@ describe('GET /api/auth/users', () => {
       process.env.OM_SEARCH_ENABLED = 'false'
       process.env.TENANT_DATA_ENCRYPTION = 'yes'
       mockTenantEncryptionService = { getEncryptedFieldNames: mockGetEncryptedFieldNames }
-      mockGetEncryptedFieldNames.mockRejectedValueOnce(new Error('map read failed'))
+      const mapError = new Error('map read failed')
+      mockGetEncryptedFieldNames.mockRejectedValueOnce(mapError)
 
       const response = await GET(makeRequest('/api/auth/users?search=kowalski'))
       const body = await response.json()
@@ -622,6 +629,10 @@ describe('GET /api/auth/users', () => {
       expect(response.status).toBe(200)
       expect(body).toEqual({ items: [], total: 0, totalPages: 1, isSuperAdmin: false })
       expect(mockEm.findAndCount).not.toHaveBeenCalled()
+      expect(mockReportError).toHaveBeenCalledWith(mapError, {
+        module: 'auth',
+        code: 'auth.users_search_encryption_map_failed',
+      })
     })
 
     test('runs no ILIKE for a superadmin search across tenants while encryption is on', async () => {
