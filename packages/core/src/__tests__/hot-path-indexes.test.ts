@@ -143,6 +143,37 @@ describe('hot-path indexes (#2966)', () => {
     })
   })
 
+  /**
+   * The child side of the foreign keys a sales.orders.delete / sales.quotes.delete
+   * probes on every deleted line and document. No existing index leads with these
+   * columns, so each constraint check scanned the whole child table.
+   */
+  describe('sales order and quote delete-path FK indexes', () => {
+    const indexes = [
+      { table: 'sales_shipment_items', column: 'order_line_id', property: 'orderLine', name: 'sales_shipment_items_order_line_idx' },
+      { table: 'sales_order_adjustments', column: 'order_line_id', property: 'orderLine', name: 'sales_order_adjustments_order_line_idx' },
+      { table: 'sales_invoice_lines', column: 'order_line_id', property: 'orderLine', name: 'sales_invoice_lines_order_line_idx' },
+      { table: 'sales_credit_memo_lines', column: 'order_line_id', property: 'orderLine', name: 'sales_credit_memo_lines_order_line_idx' },
+      { table: 'sales_document_tag_assignments', column: 'order_id', property: 'order', name: 'sales_document_tag_assignments_order_idx' },
+      { table: 'sales_document_tag_assignments', column: 'quote_id', property: 'quote', name: 'sales_document_tag_assignments_quote_idx' },
+      { table: 'sales_quote_adjustments', column: 'quote_line_id', property: 'quoteLine', name: 'sales_quote_adjustments_quote_line_idx' },
+    ]
+
+    it.each(indexes)('declares $name on the entity', ({ property, name }) => {
+      expect(readEntities('sales')).toContain(`@Index({ name: '${name}', properties: ['${property}'] })`)
+    })
+
+    it.each(indexes)('creates $name concurrently in a sales migration', ({ table, column, name }) => {
+      expect(readAllMigrationSql('sales')).toContain(
+        `create index concurrently "${name}" on "${table}" ("${column}")`,
+      )
+    })
+
+    it.each(indexes)('records $name in the sales schema snapshot', ({ table, name }) => {
+      expect(readSnapshotIndexNames('sales', table)).toContain(name)
+    })
+  })
+
   describe('catalog_product_variant_prices row narrowing (pricing-engine Phase 2b)', () => {
     const indexNames = [
       'catalog_product_variant_prices_customer_idx',

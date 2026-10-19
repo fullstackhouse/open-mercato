@@ -836,6 +836,16 @@
           "keyName": "sales_credit_memo_lines_scope_idx",
           "primary": false,
           "unique": false
+        },
+        {
+          "columnNames": [
+            "order_line_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_credit_memo_lines_order_line_idx",
+          "primary": false,
+          "unique": false
         }
       ],
       "checks": [],
@@ -2383,6 +2393,26 @@
         },
         {
           "columnNames": [
+            "order_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_document_tag_assignments_order_idx",
+          "primary": false,
+          "unique": false
+        },
+        {
+          "columnNames": [
+            "quote_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_document_tag_assignments_quote_idx",
+          "primary": false,
+          "unique": false
+        },
+        {
+          "columnNames": [
             "tag_id",
             "document_id",
             "document_kind"
@@ -3060,6 +3090,16 @@
           "composite": true,
           "constraint": false,
           "keyName": "sales_invoice_lines_scope_idx",
+          "primary": false,
+          "unique": false
+        },
+        {
+          "columnNames": [
+            "order_line_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_invoice_lines_order_line_idx",
           "primary": false,
           "unique": false
         }
@@ -4186,6 +4226,16 @@
           "composite": true,
           "constraint": false,
           "keyName": "sales_order_adjustments_scope_idx",
+          "primary": false,
+          "unique": false
+        },
+        {
+          "columnNames": [
+            "order_line_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_order_adjustments_order_line_idx",
           "primary": false,
           "unique": false
         }
@@ -7267,6 +7317,16 @@
           "keyName": "sales_quote_adjustments_scope_idx",
           "primary": false,
           "unique": false
+        },
+        {
+          "columnNames": [
+            "quote_line_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_quote_adjustments_quote_line_idx",
+          "primary": false,
+          "unique": false
         }
       ],
       "checks": [],
@@ -9756,6 +9816,16 @@
           "composite": true,
           "constraint": false,
           "keyName": "sales_shipment_items_scope_idx",
+          "primary": false,
+          "unique": false
+        },
+        {
+          "columnNames": [
+            "order_line_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "sales_shipment_items_order_line_idx",
           "primary": false,
           "unique": false
         }
