@@ -28,6 +28,10 @@ import { escapeLikePattern } from '@open-mercato/shared/lib/db/escapeLikePattern
 import { parseBooleanFlag } from '@open-mercato/shared/lib/boolean'
 import { MAX_USER_LOOKUP_IDS, resolveUserIdFilter } from '@open-mercato/core/modules/auth/lib/userIdFilter'
 import { findEntityIdsBySearchTokensCompat, type SearchTokenDatabase } from '@open-mercato/shared/lib/search/tokenLookup'
+import { resolveSearchConfig } from '@open-mercato/shared/lib/search/config'
+import { buildContainmentPatterns } from '@open-mercato/shared/lib/search/containment'
+import { isTenantDataEncryptionEnabled } from '@open-mercato/shared/lib/encryption/toggles'
+import type { TenantDataEncryptionService } from '@open-mercato/shared/lib/encryption/tenantDataEncryptionService'
 import { normalizeDisplayNameInput } from '@open-mercato/core/modules/auth/lib/displayName'
 import {
   getSelectedTenantFromRequest,
@@ -333,7 +337,8 @@ export async function GET(req: Request) {
   }
   const trimmedSearch = typeof search === 'string' ? search.trim() : ''
   if (trimmedSearch) {
-    // Email is encrypted at rest, so plaintext search must go through search_tokens.
+    // An encrypted column matches only through search_tokens. With the token index off, a plaintext
+    // column matches by ILIKE instead — otherwise no user could be found by email or name at all.
     const tenantScope: string | null | undefined = isSuperAdmin ? (effectiveTenantId ?? undefined) : auth.tenantId ?? null
     const searchFilters: any[] = []
 
@@ -343,6 +348,13 @@ export async function GET(req: Request) {
     }
 
     const searchPattern = `%${escapeLikePattern(trimmedSearch)}%`
+    if (!resolveSearchConfig().enabled) {
+      const wordPatterns = buildContainmentPatterns(searchPattern)
+      for (const column of await resolvePlaintextUserSearchColumns(container, tenantScope)) {
+        const wordFilters = wordPatterns.map((pattern) => ({ [column]: { $ilike: pattern } }))
+        searchFilters.push(wordFilters.length > 1 ? { $and: wordFilters } : wordFilters[0])
+      }
+    }
     const organizationSearchFilters: any[] = [
       { deletedAt: null },
       { name: { $ilike: searchPattern } },
@@ -544,6 +556,37 @@ export const DELETE = async (req: Request) => {
     }
   }
   return crud.DELETE(req)
+}
+
+const USER_SEARCH_COLUMNS = ['email', 'name'] as const
+
+/**
+ * The user columns the search box may match with a plain ILIKE: those the `auth:user` encryption
+ * map leaves as plaintext. An ILIKE against ciphertext is worse than empty — a short term can match
+ * the stored base64 by chance and list unrelated users — so any doubt about the map returns no
+ * column: a superadmin search with no tenant selected (maps are per tenant), a missing service, or
+ * a failed lookup.
+ * `ignoreRuntimeHealth` asks what is on disk, so a KMS outage does not read as "plaintext".
+ */
+async function resolvePlaintextUserSearchColumns(
+  container: { resolve: (name: string) => unknown },
+  tenantScope: string | null | undefined,
+): Promise<string[]> {
+  if (!isTenantDataEncryptionEnabled()) return [...USER_SEARCH_COLUMNS]
+  if (tenantScope === undefined) return []
+  try {
+    const service = container.resolve('tenantEncryptionService') as TenantDataEncryptionService | null
+    if (!service || typeof service.getEncryptedFieldNames !== 'function') return []
+    const encrypted = new Set(
+      await service.getEncryptedFieldNames(E.auth.user, tenantScope, null, { ignoreRuntimeHealth: true }),
+    )
+    return USER_SEARCH_COLUMNS.filter((column) => !encrypted.has(column))
+  } catch (err) {
+    logger.warn('Users search: encryption map unavailable; email and name match through search tokens only', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return []
+  }
 }
 
 async function findUserIdsBySearchTokens(
