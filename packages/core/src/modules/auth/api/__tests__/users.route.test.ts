@@ -3,6 +3,7 @@
 import { DELETE, GET, POST, PUT } from '@open-mercato/core/modules/auth/api/users/route'
 import { Role, RoleAcl, User, UserAcl, UserRole } from '@open-mercato/core/modules/auth/data/entities'
 import { Organization } from '@open-mercato/core/modules/directory/data/entities'
+import { buildAccentInsensitiveSearchExpression } from '@open-mercato/shared/lib/db/accentInsensitiveSearch'
 
 const mockGetAuthFromRequest = jest.fn()
 const mockLoadAcl = jest.fn()
@@ -10,6 +11,7 @@ const mockFindWithDecryption = jest.fn()
 const mockFindOneWithDecryption = jest.fn()
 const mockLoadCustomFieldValues = jest.fn()
 const mockLogCrudAccess = jest.fn()
+const mockReportError = jest.fn()
 const mockResolveOrganizationScopeForRequest = jest.fn()
 
 const mockSearchTokenExecute = jest.fn()
@@ -29,18 +31,24 @@ const mockSelectFrom = jest.fn((table: string) => {
   throw new Error(`Unexpected selectFrom ${table}`)
 })
 const mockKysely = { selectFrom: mockSelectFrom }
+const mockGetEncryptedFieldNames = jest.fn()
+let mockTenantEncryptionService: { getEncryptedFieldNames: typeof mockGetEncryptedFieldNames } | null = null
+
+const mockConnectionExecute = jest.fn()
 
 const mockEm = {
   find: jest.fn(),
   findOne: jest.fn(),
   findAndCount: jest.fn(),
   getKysely: jest.fn(() => mockKysely),
+  getConnection: jest.fn(() => ({ execute: mockConnectionExecute })),
 }
 
 const mockContainer = {
   resolve: jest.fn((token: string) => {
     if (token === 'em') return mockEm
     if (token === 'rbacService') return { loadAcl: mockLoadAcl }
+    if (token === 'tenantEncryptionService') return mockTenantEncryptionService
     return null
   }),
 }
@@ -51,6 +59,10 @@ jest.mock('@open-mercato/shared/lib/auth/server', () => ({
 
 jest.mock('@open-mercato/shared/lib/di/container', () => ({
   createRequestContainer: jest.fn(async () => mockContainer),
+}))
+
+jest.mock('@open-mercato/shared/lib/telemetry/runtime', () => ({
+  getTelemetryRuntime: () => ({ reportError: mockReportError }),
 }))
 
 type MockCrudAction = {
@@ -175,6 +187,11 @@ describe('GET /api/auth/users', () => {
     mockSearchTokenHaving.mockClear()
     mockSearchTokenExecute.mockReset()
     mockSearchTokenExecute.mockResolvedValue([])
+    mockGetEncryptedFieldNames.mockReset()
+    mockTenantEncryptionService = null
+    mockReportError.mockReset()
+    mockConnectionExecute.mockReset()
+    mockConnectionExecute.mockResolvedValue([{ present: true }])
     mockGetAuthFromRequest.mockResolvedValue({
       sub: 'user-1',
       tenantId,
@@ -539,6 +556,179 @@ describe('GET /api/auth/users', () => {
     expect(tenantScopeCalled).toBe(false)
     expect(body.isSuperAdmin).toBe(true)
     expect(body.items).toHaveLength(1)
+  })
+
+  describe('plaintext email and name fallback', () => {
+    const envKeys = ['OM_SEARCH_ENABLED', 'TENANT_DATA_ENCRYPTION'] as const
+    const savedEnv: Partial<Record<(typeof envKeys)[number], string | undefined>> = {}
+
+    beforeEach(() => {
+      for (const key of envKeys) savedEnv[key] = process.env[key]
+    })
+
+    afterEach(() => {
+      for (const key of envKeys) {
+        if (savedEnv[key] === undefined) delete process.env[key]
+        else process.env[key] = savedEnv[key]
+      }
+    })
+
+    type Filter = Record<string | symbol, unknown>
+
+    // A raw() key surfaces as a symbol whose description carries the SQL, and its `$ilike` value as
+    // a fragment holding the bound term; spell both out so the clause compares as plain data.
+    function describeFilter(filter: Filter): unknown {
+      if (Array.isArray(filter.$and)) return { $and: (filter.$and as Filter[]).map(describeFilter) }
+      const [key] = Object.getOwnPropertySymbols(filter)
+      if (!key) return filter
+      const condition = filter[key] as { $ilike: { params: unknown[] } }
+      return { expression: key.description, terms: condition.$ilike.params }
+    }
+
+    function searchClause(where = mockEm.findAndCount.mock.calls[0][1] as { $and: Filter[] }): unknown[] {
+      const clause = where.$and.find((entry) =>
+        '$or' in entry || '$and' in entry || 'email' in entry || 'name' in entry
+        || Object.getOwnPropertySymbols(entry).length > 0)
+      if (!clause) return []
+      return ((clause.$or as Filter[] | undefined) ?? [clause]).map(describeFilter)
+    }
+
+    const columnExpression = (column: string) => `raw('${buildAccentInsensitiveSearchExpression([column])}')`
+    const unaccented = (column: string, ...terms: string[]) =>
+      terms.length > 1
+        ? { $and: terms.map((term) => ({ expression: columnExpression(column), terms: [term] })) }
+        : { expression: columnExpression(column), terms }
+
+    test('matches email and name accent-insensitively when search tokens are off and encryption is disabled', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'no'
+      mockEm.findAndCount.mockResolvedValueOnce([[], 0])
+
+      const response = await GET(makeRequest('/api/auth/users?search=polskie'))
+
+      expect(response.status).toBe(200)
+      expect(mockSelectFrom).not.toHaveBeenCalled()
+      expect(searchClause()).toEqual([unaccented('email', 'polskie'), unaccented('name', 'polskie')])
+    })
+
+    test('binds the raw term, so the fold escapes LIKE metacharacters after unaccent', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'no'
+      mockEm.findAndCount.mockResolvedValueOnce([[], 0])
+
+      await GET(makeRequest('/api/auth/users?search=jan%25kowalski'))
+
+      expect(searchClause()).toEqual([unaccented('email', 'jan%kowalski'), unaccented('name', 'jan%kowalski')])
+    })
+
+    test('requires every word of a multi-word term, in any order, within one column', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'no'
+      mockEm.findAndCount.mockResolvedValueOnce([[], 0])
+
+      await GET(makeRequest('/api/auth/users?search=kowalski%20jan'))
+
+      expect(searchClause()).toEqual([
+        unaccented('email', 'kowalski', 'jan'),
+        unaccented('name', 'kowalski', 'jan'),
+      ])
+    })
+
+    test('falls back to a plain ILIKE when the unaccent wrapper is not installed', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'no'
+      mockConnectionExecute.mockResolvedValue([{ present: false }])
+      mockEm.findAndCount.mockResolvedValueOnce([[], 0])
+
+      await jest.isolateModulesAsync(async () => {
+        const { GET: isolatedGet } = await import('@open-mercato/core/modules/auth/api/users/route')
+        await isolatedGet(makeRequest('/api/auth/users?search=kowalski%20jan'))
+      })
+
+      expect(searchClause()).toEqual([
+        { $and: [{ email: { $ilike: '%kowalski%' } }, { email: { $ilike: '%jan%' } }] },
+        { $and: [{ name: { $ilike: '%kowalski%' } }, { name: { $ilike: '%jan%' } }] },
+      ])
+    })
+
+    test('reports a failed unaccent probe and still answers with a plain ILIKE', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'no'
+      const probeError = new Error('probe failed')
+      mockConnectionExecute.mockRejectedValue(probeError)
+      mockEm.findAndCount.mockResolvedValueOnce([[], 0])
+
+      await jest.isolateModulesAsync(async () => {
+        const { GET: isolatedGet } = await import('@open-mercato/core/modules/auth/api/users/route')
+        await isolatedGet(makeRequest('/api/auth/users?search=kowalski'))
+      })
+
+      expect(mockReportError).toHaveBeenCalledWith(probeError, {
+        module: 'auth',
+        code: 'auth.users_search_unaccent_probe_failed',
+      })
+      expect(searchClause()).toEqual([{ email: { $ilike: '%kowalski%' } }, { name: { $ilike: '%kowalski%' } }])
+    })
+
+    test('keeps ILIKE off the columns the tenant encryption map covers', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'yes'
+      mockTenantEncryptionService = { getEncryptedFieldNames: mockGetEncryptedFieldNames }
+      mockGetEncryptedFieldNames.mockResolvedValueOnce(['email'])
+      mockEm.findAndCount.mockResolvedValueOnce([[], 0])
+
+      const response = await GET(makeRequest('/api/auth/users?search=kowalski'))
+
+      expect(response.status).toBe(200)
+      expect(mockGetEncryptedFieldNames).toHaveBeenCalledWith('auth:user', tenantId, null, { ignoreRuntimeHealth: true })
+      expect(searchClause()).toEqual([unaccented('name', 'kowalski')])
+    })
+
+    test('runs no ILIKE when encryption is on and the map cannot be read', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'yes'
+      mockTenantEncryptionService = { getEncryptedFieldNames: mockGetEncryptedFieldNames }
+      const mapError = new Error('map read failed')
+      mockGetEncryptedFieldNames.mockRejectedValueOnce(mapError)
+
+      const response = await GET(makeRequest('/api/auth/users?search=kowalski'))
+      const body = await response.json()
+
+      expect(response.status).toBe(200)
+      expect(body).toEqual({ items: [], total: 0, totalPages: 1, isSuperAdmin: false })
+      expect(mockEm.findAndCount).not.toHaveBeenCalled()
+      expect(mockReportError).toHaveBeenCalledWith(mapError, {
+        module: 'auth',
+        code: 'auth.users_search_encryption_map_failed',
+      })
+    })
+
+    test('runs no ILIKE for a superadmin search across tenants while encryption is on', async () => {
+      process.env.OM_SEARCH_ENABLED = 'false'
+      process.env.TENANT_DATA_ENCRYPTION = 'yes'
+      mockTenantEncryptionService = { getEncryptedFieldNames: mockGetEncryptedFieldNames }
+      mockGetAuthFromRequest.mockResolvedValueOnce({ sub: 'user-1', tenantId: null, orgId: organizationId, roles: ['admin'] })
+      mockLoadAcl.mockResolvedValueOnce({ isSuperAdmin: true })
+
+      const response = await GET(makeRequest('/api/auth/users?search=kowalski'))
+      const body = await response.json()
+
+      expect(response.status).toBe(200)
+      expect(mockGetEncryptedFieldNames).not.toHaveBeenCalled()
+      expect(body.items).toEqual([])
+      expect(mockEm.findAndCount).not.toHaveBeenCalled()
+    })
+
+    test('leaves search on the token index alone while search tokens are on', async () => {
+      process.env.OM_SEARCH_ENABLED = 'true'
+      process.env.TENANT_DATA_ENCRYPTION = 'no'
+
+      const response = await GET(makeRequest('/api/auth/users?search=kowalski'))
+
+      expect(response.status).toBe(200)
+      expect(mockSelectFrom).toHaveBeenCalledWith('search_tokens')
+      expect(mockEm.findAndCount).not.toHaveBeenCalled()
+    })
   })
 
   test('superadmin selected tenant scopes the users list by tenant', async () => {
