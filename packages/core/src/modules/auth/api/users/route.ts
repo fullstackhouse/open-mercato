@@ -11,7 +11,7 @@ import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacS
 import { Organization, Tenant } from '@open-mercato/core/modules/directory/data/entities'
 import { E } from '#generated/entities.ids.generated'
 import { loadCustomFieldValues } from '@open-mercato/shared/lib/crud/custom-fields'
-import type { EntityManager } from '@mikro-orm/postgresql'
+import { raw as sqlFragment, type EntityManager } from '@mikro-orm/postgresql'
 import { userCrudEvents, userCrudIndexer } from '@open-mercato/core/modules/auth/commands/users'
 import {
   assertActorCanAccessUserTarget,
@@ -29,7 +29,12 @@ import { parseBooleanFlag } from '@open-mercato/shared/lib/boolean'
 import { MAX_USER_LOOKUP_IDS, resolveUserIdFilter } from '@open-mercato/core/modules/auth/lib/userIdFilter'
 import { findEntityIdsBySearchTokensCompat, type SearchTokenDatabase } from '@open-mercato/shared/lib/search/tokenLookup'
 import { resolveSearchConfig } from '@open-mercato/shared/lib/search/config'
-import { buildContainmentPatterns } from '@open-mercato/shared/lib/search/containment'
+import { buildContainmentPatterns, MAX_CONTAINMENT_WORDS } from '@open-mercato/shared/lib/search/containment'
+import {
+  buildAccentInsensitiveContainsPatternSql,
+  buildAccentInsensitiveSearchExpression,
+  IMMUTABLE_UNACCENT_FUNCTION,
+} from '@open-mercato/shared/lib/db/accentInsensitiveSearch'
 import { isTenantDataEncryptionEnabled } from '@open-mercato/shared/lib/encryption/toggles'
 import type { TenantDataEncryptionService } from '@open-mercato/shared/lib/encryption/tenantDataEncryptionService'
 import { normalizeDisplayNameInput } from '@open-mercato/core/modules/auth/lib/displayName'
@@ -339,7 +344,8 @@ export async function GET(req: Request) {
   const trimmedSearch = typeof search === 'string' ? search.trim() : ''
   if (trimmedSearch) {
     // An encrypted column matches only through search_tokens. With the token index off, a plaintext
-    // column matches by ILIKE instead — otherwise no user could be found by email or name at all.
+    // column matches by an accent-insensitive ILIKE instead — otherwise no user could be found by
+    // email or name at all. Accents fold as the tokens did, so `polskie` finds `Pólskie`.
     const tenantScope: string | null | undefined = isSuperAdmin ? (effectiveTenantId ?? undefined) : auth.tenantId ?? null
     const searchFilters: any[] = []
 
@@ -350,9 +356,16 @@ export async function GET(req: Request) {
 
     const searchPattern = `%${escapeLikePattern(trimmedSearch)}%`
     if (!resolveSearchConfig().enabled) {
-      const wordPatterns = buildContainmentPatterns(searchPattern)
-      for (const column of await resolvePlaintextUserSearchColumns(container, tenantScope)) {
-        const wordFilters = wordPatterns.map((pattern) => ({ [column]: { $ilike: pattern } }))
+      const columns = await resolvePlaintextUserSearchColumns(container, tenantScope)
+      const accentInsensitive = columns.length > 0 && await isImmutableUnaccentInstalled(em)
+      for (const column of columns) {
+        const wordFilters = accentInsensitive
+          ? splitSearchWords(trimmedSearch).map((word) => ({
+            [sqlFragment(buildAccentInsensitiveSearchExpression([column]))]: {
+              $ilike: sqlFragment(buildAccentInsensitiveContainsPatternSql(), [word]),
+            },
+          }))
+          : buildContainmentPatterns(searchPattern).map((pattern) => ({ [column]: { $ilike: pattern } }))
         searchFilters.push(wordFilters.length > 1 ? { $and: wordFilters } : wordFilters[0])
       }
     }
@@ -589,6 +602,34 @@ async function resolvePlaintextUserSearchColumns(
     getTelemetryRuntime()?.reportError(err, { module: 'auth', code: 'auth.users_search_encryption_map_failed' })
     return []
   }
+}
+
+/** Each word must appear in the column, in any order — the token path's semantics, capped like the engine's split. */
+function splitSearchWords(term: string): string[] {
+  const words = term.split(/\s+/).filter((word) => word.length > 0)
+  return words.length > MAX_CONTAINMENT_WORDS ? [term] : words
+}
+
+let immutableUnaccentInstalled: boolean | null = null
+
+/**
+ * Whether the accent-insensitive wrapper exists. It is created by a catalog migration, so an install
+ * without that module has none, and calling it would fail the whole list query — the search then
+ * matches by plain ILIKE instead. A positive answer is cached for the process; a negative one is
+ * re-checked, so the wrapper appearing after a migration is picked up without a restart.
+ */
+async function isImmutableUnaccentInstalled(em: EntityManager): Promise<boolean> {
+  if (immutableUnaccentInstalled) return true
+  try {
+    const rows = await em.getConnection().execute<Array<{ present: boolean }>>(
+      `select to_regprocedure('${IMMUTABLE_UNACCENT_FUNCTION}(text)') is not null as present`,
+    )
+    immutableUnaccentInstalled = rows[0]?.present === true
+  } catch (err) {
+    getTelemetryRuntime()?.reportError(err, { module: 'auth', code: 'auth.users_search_unaccent_probe_failed' })
+    immutableUnaccentInstalled = false
+  }
+  return immutableUnaccentInstalled
 }
 
 async function findUserIdsBySearchTokens(
